@@ -24,23 +24,20 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
-          cache: true
-          cache-dependency-path: |
-            **/*.csproj
-            **/packages.lock.json
-            global.json
-            NuGet.config
 
-      - name: Set up .NET 6
-        uses: actions/setup-dotnet@v4
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
         with:
-          dotnet-version: 6.0.x
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-ios-${{ hashFiles('**/*.csproj', '**/*.props', '**/*.targets', '**/packages.lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-ios-
 
       - name: Verify .NET SDK
-        run: dotnet --info
+        run: dotnet --version
 
       - name: Install .NET iOS workload
-        run: dotnet workload install maui-ios --version 10.0.401
+        run: dotnet workload install maui-ios --version 10.0.401 --skip-manifest-update
 
       - name: Select Xcode 26.6
         run: sudo xcode-select --switch /Applications/Xcode_26.6.app
@@ -48,61 +45,26 @@ jobs:
       - name: Verify Apple toolchain
         run: xcodebuild -version
 
-      - name: Clean generated NuGet assets
+      - name: Restore iOS app
+        run: dotnet restore AssetStudio.Mobile/AssetStudioMobile.csproj --runtime ios-arm64 -p:TargetFramework=net10.0-ios
+
+      - name: Restore referenced projects in parallel
         shell: bash
         run: |
           set -euo pipefail
 
-          for project in \
-            AssetStudio \
-            AssetStudio.PInvoke \
-            Texture2DDecoderWrapper \
-            AssetStudio.Mobile
-          do
-            if [ -d "$project/obj" ]; then
-              rm -rf "$project/obj"
-            fi
-          done
+          dotnet restore AssetStudio/AssetStudio.csproj &
+          p1=$!
 
-      - name: Restore AssetStudio dependencies (.NET 6)
-        run: |
-          dotnet restore AssetStudio/AssetStudio.csproj \
-            -p:TargetFramework=net6.0
+          dotnet restore AssetStudio.PInvoke/AssetStudio.PInvoke.csproj &
+          p2=$!
 
-          dotnet restore AssetStudio.PInvoke/AssetStudio.PInvoke.csproj \
-            -p:TargetFramework=net6.0
+          dotnet restore Texture2DDecoderWrapper/Texture2DDecoderWrapper.csproj &
+          p3=$!
 
-          dotnet restore Texture2DDecoderWrapper/Texture2DDecoderWrapper.csproj \
-            -p:TargetFramework=net6.0
-
-      - name: Restore iOS app and referenced projects
-        run: |
-          dotnet restore AssetStudio.Mobile/AssetStudioMobile.csproj \
-            --runtime ios-arm64 \
-            -p:TargetFramework=net10.0-ios
-
-      - name: Verify restored targets
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          for project in \
-            AssetStudio \
-            AssetStudio.PInvoke \
-            Texture2DDecoderWrapper
-          do
-            assets="$project/obj/project.assets.json"
-
-            if [ ! -f "$assets" ]; then
-              echo "::error::Missing $assets"
-              exit 1
-            fi
-
-            if ! grep -q '"net6.0"' "$assets"; then
-              echo "::error::$assets does not contain net6.0"
-              exit 1
-            fi
-          done
+          wait "$p1"
+          wait "$p2"
+          wait "$p3"
 
       - name: Publish unsigned Release app for ARM64
         run: |
@@ -111,10 +73,11 @@ jobs:
             --framework net10.0-ios \
             --runtime ios-arm64 \
             --no-restore \
+            --verbosity minimal \
+            -m \
             -p:EnableCodeSigning=false \
             -p:ArchiveOnBuild=false \
-            -p:BuildIpa=false \
-            --verbosity minimal
+            -p:BuildIpa=false
 
       - name: Package unsigned app as IPA
         shell: bash
@@ -122,7 +85,6 @@ jobs:
           set -euo pipefail
 
           app_root="AssetStudio.Mobile/bin/Release/net10.0-ios/ios-arm64"
-
           app_path="$(find "$app_root" -type d -name '*.app' -prune -print -quit)"
 
           if [[ -z "$app_path" ]]; then
@@ -136,9 +98,7 @@ jobs:
           mkdir -p "$staging_root/Payload" "$(dirname "$ipa_path")"
 
           ditto "$app_path" "$staging_root/Payload/$(basename "$app_path")"
-
-          ditto -c -k --sequesterRsrc --keepParent \
-            "$staging_root/Payload" "$ipa_path"
+          ditto -c -k --sequesterRsrc --keepParent "$staging_root/Payload" "$ipa_path"
 
           unzip -tq "$ipa_path"
 
