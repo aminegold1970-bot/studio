@@ -72,7 +72,7 @@
                         </DataTemplate>
                     </CollectionView.ItemTemplate>
                 </CollectionView>
-                <CollectionView x:Name="HierarchyCollection" IsVisible="False" SelectionMode="None" BackgroundColor="#FFFFFF">
+                <CollectionView x:Name="HierarchyCollection" IsVisible="False" SelectionMode="Single" SelectionChanged="OnHierarchySelectionChanged" BackgroundColor="#FFFFFF">
                     <CollectionView.EmptyView><Label Text="No scene hierarchy loaded" TextColor="#555555" HorizontalTextAlignment="Center" VerticalTextAlignment="Center"/></CollectionView.EmptyView>
                     <CollectionView.ItemTemplate>
                         <DataTemplate>

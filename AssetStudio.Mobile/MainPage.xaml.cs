@@ -63,7 +63,12 @@ public partial class MainPage : ContentPage
     public MainPage()
     {
         InitializeComponent();
-        _assetLoader.MainPageHost = SetAssets;
+        _assetLoader.MainPageHost = (assets, hierarchy, classes) =>
+        {
+            SetAssets(assets);
+            SetHierarchy(hierarchy);
+            SetClasses(classes);
+        };
         AssetFilesSelected += _assetLoader.LoadFilesAsync;
         BindableLayout.SetItemsSource(MetadataHost, _metadataRows);
         BindableLayout.SetItemTemplate(MetadataHost, new DataTemplate(() =>
@@ -272,11 +277,12 @@ public partial class MainPage : ContentPage
     public void SetHierarchy(IEnumerable<HierarchyRow> nodes)
     {
         var incoming = nodes?.ToList() ?? new List<HierarchyRow>();
-        MainThread.BeginInvokeOnMainThread(() =>
+        void Apply()
         {
             _hierarchy.Clear();
             _hierarchyRoots.Clear();
             _hierarchyById.Clear();
+            HierarchyCollection.SelectedItem = null;
 
             foreach (var node in incoming)
             {
@@ -291,7 +297,8 @@ public partial class MainPage : ContentPage
             {
                 if (!string.IsNullOrEmpty(node.ParentId) &&
                     _hierarchyById.TryGetValue(node.ParentId, out var parent) &&
-                    !ReferenceEquals(parent, node))
+                    !ReferenceEquals(parent, node) &&
+                    !WouldCreateHierarchyCycle(node, parent, _hierarchyById))
                 {
                     node.Parent = parent;
                     parent.Children.Add(node);
@@ -305,16 +312,46 @@ public partial class MainPage : ContentPage
             foreach (var root in _hierarchyRoots) AddVisibleHierarchyNode(root, 0);
             _hierarchySearchResults.Clear();
             _nextHierarchySearchResult = 0;
-            StatusLabel.Text = $"Scene Hierarchy · {incoming.Count} objects";
-        });
+            if (_browserTab == "Scene Hierarchy")
+                StatusLabel.Text = $"Scene Hierarchy · {incoming.Count} objects";
+        }
+
+        if (MainThread.IsMainThread) Apply();
+        else MainThread.BeginInvokeOnMainThread(Apply);
+    }
+
+    private static bool WouldCreateHierarchyCycle(
+        HierarchyRow node,
+        HierarchyRow proposedParent,
+        IReadOnlyDictionary<string, HierarchyRow> nodesById)
+    {
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        for (HierarchyRow? current = proposedParent; current != null;)
+        {
+            if (ReferenceEquals(current, node) || !visited.Add(current.Id))
+                return true;
+            current = !string.IsNullOrEmpty(current.ParentId) &&
+                      nodesById.TryGetValue(current.ParentId, out var parent)
+                ? parent
+                : null;
+        }
+
+        return false;
     }
 
     private void AddVisibleHierarchyNode(HierarchyRow node, int depth)
     {
+        AddVisibleHierarchyNode(node, depth, new HashSet<HierarchyRow>());
+    }
+
+    private void AddVisibleHierarchyNode(HierarchyRow node, int depth, HashSet<HierarchyRow> visited)
+    {
+        if (!visited.Add(node))
+            return;
         node.Depth = depth;
         _hierarchy.Add(node);
         if (node.IsExpanded)
-            foreach (var child in node.Children) AddVisibleHierarchyNode(child, depth + 1);
+            foreach (var child in node.Children) AddVisibleHierarchyNode(child, depth + 1, visited);
     }
 
     private void RebuildVisibleHierarchy()
@@ -356,13 +393,18 @@ public partial class MainPage : ContentPage
 
     public void SetClasses(IEnumerable<ClassRow> classes)
     {
-        MainThread.BeginInvokeOnMainThread(() =>
+        var incoming = classes?.ToList() ?? new List<ClassRow>();
+        void Apply()
         {
             _classes.Clear();
-            foreach (var item in classes ?? Enumerable.Empty<ClassRow>()) _classes.Add(item);
+            foreach (var item in incoming) _classes.Add(item);
             ApplyClassFilter();
-            StatusLabel.Text = $"Asset Classes · {_classes.Count} classes";
-        });
+            if (_browserTab == "Asset Classes")
+                StatusLabel.Text = $"Asset Classes · {_classes.Count} classes";
+        }
+
+        if (MainThread.IsMainThread) Apply();
+        else MainThread.BeginInvokeOnMainThread(Apply);
     }
 
     // Structured key/value metadata mirrors the original assetInfoLabel while
@@ -909,6 +951,7 @@ public partial class MainPage : ContentPage
         {
             case "Display all assets":
                 _showAllAssets = !_showAllAssets;
+                ApplyAssetFilter();
                 StatusLabel.Text = $"Display all assets: {(_showAllAssets ? "On" : "Off")}";
                 break;
             case "Enable preview":
@@ -1183,6 +1226,7 @@ public partial class MainPage : ContentPage
     {
         var query = AssetSearch?.Text?.Trim() ?? "";
         IEnumerable<AssetRow> filtered = _allAssets.Where(asset =>
+            (_showAllAssets || asset.IsExportable) &&
             (_selectedTypes == null || _selectedTypes.Contains(asset.Type)) &&
             (query.Length == 0 ||
              Contains(asset.Name, query) || Contains(asset.Container, query) ||
@@ -1279,6 +1323,8 @@ public partial class MainPage : ContentPage
         var match = _hierarchySearchResults[_nextHierarchySearchResult++];
         for (var parent = match.Parent; parent != null; parent = parent.Parent) parent.IsExpanded = true;
         RebuildVisibleHierarchy();
+        HierarchyCollection.SelectedItem = match;
+        HierarchyCollection.ScrollTo(match, ScrollToPosition.MakeVisible, animate: true);
         StatusLabel.Text = $"Scene object {_nextHierarchySearchResult} / {_hierarchySearchResults.Count}: {match.DisplayName}";
     }
 
@@ -1357,6 +1403,26 @@ public partial class MainPage : ContentPage
             return;
         }
 
+        if (action == "Go to Scene Hierarchy")
+        {
+            NavigateToHierarchyNode(row);
+            return;
+        }
+
+        if (action == "Show original file")
+        {
+            if (File.Exists(row.SourceFile))
+            {
+                await Share.Default.RequestAsync(new ShareFileRequest(
+                    "AssetStudio source file", new ShareFile(row.SourceFile)));
+            }
+            else
+            {
+                StatusLabel.Text = $"Original source file is unavailable: {row.SourceFile}";
+            }
+            return;
+        }
+
         if (action == "Export selected assets")
         {
             AssetContextActionRequested?.Invoke("Export selected assets", targets);
@@ -1366,6 +1432,25 @@ public partial class MainPage : ContentPage
 
         AssetContextActionRequested?.Invoke(action, targets);
         StatusLabel.Text = $"{action}: requires host AssetStudio integration";
+    }
+
+    private void NavigateToHierarchyNode(AssetRow row)
+    {
+        if (string.IsNullOrEmpty(row.HierarchyNodeId)
+            || !_hierarchyById.TryGetValue(row.HierarchyNodeId, out var node))
+        {
+            StatusLabel.Text = $"{row.Name} is not associated with a scene object";
+            return;
+        }
+
+        for (var parent = node.Parent; parent != null; parent = parent.Parent)
+            parent.IsExpanded = true;
+        _browserTab = "Scene Hierarchy";
+        RefreshBrowserTab();
+        RebuildVisibleHierarchy();
+        HierarchyCollection.SelectedItem = node;
+        HierarchyCollection.ScrollTo(node, ScrollToPosition.MakeVisible, animate: true);
+        StatusLabel.Text = $"Scene object: {node.DisplayName}";
     }
 
     private void OnAssetSelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -1644,6 +1729,8 @@ public partial class MainPage : ContentPage
         public string Name { get; init; } = "";
         public string Container { get; init; } = "";
         public string Type { get; init; } = "";
+        public bool IsExportable { get; init; }
+        public string? HierarchyNodeId { get; set; }
         // Numeric ClassIDType value for the original XML Type/@id attribute.
         public int TypeId { get; init; }
         public string PathId { get; init; } = "";
@@ -1689,7 +1776,8 @@ public partial class MainPage : ContentPage
         long pathId,
         long byteSize,
         int typeId = 0,
-        string sourceFile = "")
+        string sourceFile = "",
+        bool isExportable = true)
     {
         ArgumentNullException.ThrowIfNull(sourceAsset);
         return new AssetRow
@@ -1699,6 +1787,7 @@ public partial class MainPage : ContentPage
             Container = container ?? string.Empty,
             Type = type ?? string.Empty,
             TypeId = typeId,
+            IsExportable = isExportable,
             PathId = pathId.ToString(System.Globalization.CultureInfo.InvariantCulture),
             Size = byteSize.ToString(System.Globalization.CultureInfo.InvariantCulture),
             SourceFile = sourceFile ?? string.Empty,
