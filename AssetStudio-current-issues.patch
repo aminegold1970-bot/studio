@@ -1,0 +1,40 @@
+--- a/studio-main/AssetStudio.Mobile/MainPage.xaml.cs
++++ b/studio-main/AssetStudio.Mobile/MainPage.xaml.cs
+@@ -170,12 +170,9 @@
+ 
+     private async Task LoadPersistentFilesAsync(IReadOnlyList<FileResult> selected, string sourceLabel)
+     {
+-        if (AssetFilesSelected == null)
+-        {
+-            StatusLabel.Text = "Files are safely saved, but the AssetStudio Unity loader is not connected";
+-            await DisplayAlert("Loader not connected", "The files are now stored in this app's Documents library. The host still needs to connect AssetFilesSelected to the AssetStudio parser before they can be displayed as Unity assets.", "OK");
+-            return;
+-        }
++        // The page owns the concrete loader. Do not gate saved-library loading
++        // on the optional host event: that event may be replaced or unsubscribed
++        // by a host integration, while _assetLoader remains available.
+         ResetLoadedWorkspace();
+         using var cancellation = new CancellationTokenSource();
+         _loadCancellation = cancellation;
+@@ -183,7 +180,7 @@
+         var progress = new Progress<AssetLoadProgress>(update => SetLoadingProgress(Math.Clamp(update.Percent, 0, 100), update.Message));
+         try
+         {
+-            await AssetFilesSelected.Invoke(selected, progress, cancellation.Token);
++            await _assetLoader.LoadFilesAsync(selected, progress, cancellation.Token);
+             SetBusy(false, $"{sourceLabel} loaded · {_allAssets.Count} assets");
+         }
+         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+--- a/studio-main/AssetStudio.Mobile/AssetStudioMobileLoader.cs
++++ b/studio-main/AssetStudio.Mobile/AssetStudioMobileLoader.cs
+@@ -45,7 +45,9 @@
+         }, cancellationToken);
+ 
+         cancellationToken.ThrowIfCancellationRequested();
+-        MainThread.BeginInvokeOnMainThread(() => MainPageHost?.Invoke(rows));
++        // Do not report completion until the page has actually received the rows.
++        await MainThread.InvokeOnMainThreadAsync(() => MainPageHost?.Invoke(rows));
++        cancellationToken.ThrowIfCancellationRequested();
+         progress?.Report(new MainPage.AssetLoadProgress(100, $"Loaded {rows.Count} Unity asset(s)"));
+     }
+ 
