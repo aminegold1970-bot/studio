@@ -69,6 +69,10 @@ internal static class MobileAssetExporter
         try
         {
             var report = new List<MobileArchiveReportEntry>(sourceItems.Count);
+            var entryNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "AssetStudio_Export_Report.json"
+            };
             using (var archive = new ZipArchive(File.Create(archivePath), ZipArchiveMode.Create))
             {
                 for (var index = 0; index < sourceItems.Count; index++)
@@ -79,7 +83,10 @@ internal static class MobileAssetExporter
                     var asset = item.Asset
                         ?? throw new InvalidDataException($"Asset {index + 1} has no parsed object.");
                     var payload = CreateExportPayload(asset, kind, item.Container, cancellationToken);
-                    var entryName = $"{index + 1:D5}_{GetArchiveAssetName(asset)}{payload.Extension}";
+                    var entryName = GetUniqueArchiveEntryName(
+                        entryNames,
+                        GetArchiveAssetName(asset, payload.Extension),
+                        payload.Extension);
                     var entry = archive.CreateEntry(entryName, CompressionLevel.Fastest);
                     using (var output = entry.Open())
                     {
@@ -211,7 +218,7 @@ internal static class MobileAssetExporter
         string extension,
         CancellationToken cancellationToken = default)
     {
-        return WriteOutputFile($"{GetAssetName(asset)}_{asset.m_PathID}", data, extension, cancellationToken);
+        return WriteOutputFile(GetAssetFileName(asset, extension), data, extension, cancellationToken);
     }
 
     private static string WriteOutputFile(
@@ -221,9 +228,9 @@ internal static class MobileAssetExporter
         CancellationToken cancellationToken = default)
     {
         var safeName = SanitizeFileName(name);
-        Directory.CreateDirectory(FileSystem.CacheDirectory);
-        var path = Path.Combine(FileSystem.CacheDirectory,
-            $"{safeName}_{Guid.NewGuid():N}{extension}");
+        var outputDirectory = Path.Combine(FileSystem.CacheDirectory, $"AssetStudio_Export_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outputDirectory);
+        var path = Path.Combine(outputDirectory, $"{safeName}{extension}");
         try
         {
             using var output = File.Create(path);
@@ -240,6 +247,11 @@ internal static class MobileAssetExporter
         {
             if (File.Exists(path))
                 File.Delete(path);
+            if (Directory.Exists(outputDirectory)
+                && !Directory.EnumerateFileSystemEntries(outputDirectory).Any())
+            {
+                Directory.Delete(outputDirectory);
+            }
             throw;
         }
     }
@@ -249,8 +261,27 @@ internal static class MobileAssetExporter
             ? named.m_Name
             : asset.type.ToString();
 
-    private static string GetArchiveAssetName(AssetStudio.Object asset) =>
-        SanitizeFileName($"{GetAssetName(asset)}_{asset.m_PathID}");
+    private static string GetAssetFileName(AssetStudio.Object asset, string extension)
+    {
+        var name = GetAssetName(asset);
+        if (name.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+            name = name[..^extension.Length];
+        return SanitizeFileName(name);
+    }
+
+    private static string GetArchiveAssetName(AssetStudio.Object asset, string extension) =>
+        GetAssetFileName(asset, extension);
+
+    private static string GetUniqueArchiveEntryName(
+        HashSet<string> entryNames,
+        string assetName,
+        string extension)
+    {
+        var candidate = $"{assetName}{extension}";
+        for (var duplicateIndex = 2; !entryNames.Add(candidate); duplicateIndex++)
+            candidate = $"{assetName}_{duplicateIndex}{extension}";
+        return candidate;
+    }
 
     private static string SanitizeFileName(string name)
     {
