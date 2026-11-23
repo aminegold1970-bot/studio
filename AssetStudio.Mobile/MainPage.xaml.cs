@@ -935,6 +935,11 @@ public partial class MainPage : ContentPage
 #endif
             SetBusy(true, allowMultiple ? "Choose Unity files…" : "Choose a Unity file…");
             List<FileResult> selected;
+#if IOS
+            // Use Apple's document picker directly. This avoids the MAUI FilePicker
+            // callback getting stuck on iOS after a document is tapped.
+            selected = await AssetStudioNativeFilePicker.PickAsync(allowMultiple);
+#else
             if (allowMultiple)
             {
                 var files = await FilePicker.Default.PickMultipleAsync(
@@ -947,6 +952,7 @@ public partial class MainPage : ContentPage
                     new PickOptions { PickerTitle = "Select a Unity asset file" });
                 selected = file == null ? new List<FileResult>() : new List<FileResult> { file };
             }
+#endif
 
             if (selected.Count == 0)
             {
