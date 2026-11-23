@@ -54,16 +54,17 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
 
-      # 5. Install iOS workload
+      # 5. Install .NET iOS workload
       - name: Install .NET iOS workload
         run: |
           START=$SECONDS
+
           dotnet workload install maui-ios \
-            --version 10.0.401 \
-            --skip-manifest-update
+            --version 10.0.401
+
           echo "Workload installation took $((SECONDS - START)) seconds"
 
-      # 6. Restore all project dependencies
+      # 6. Restore project dependencies
       - name: Restore project dependencies
         run: |
           START=$SECONDS
@@ -129,7 +130,7 @@ jobs:
           echo "IPA size: $(du -h "$ipa_path" | cut -f1)"
           echo "Packaging took $((SECONDS - START)) seconds"
 
-      # 9. Upload artifact
+      # 9. Upload IPA
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
