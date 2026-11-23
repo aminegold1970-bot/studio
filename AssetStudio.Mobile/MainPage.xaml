@@ -1,9 +1,6 @@
-<?xml version="1.0" encoding="utf-8" ?>
-<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
-             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
-             x:Class="AssetStudioMobile.MainPage"
-             Title="AssetStudio" BackgroundColor="#17191D">
-    <Grid RowDefinitions="Auto,Auto,Auto,*,Auto" RowSpacing="0">
+<?xml version='1.0' encoding='utf-8'?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui" xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml" x:Class="AssetStudioMobile.MainPage" Title="AssetStudio" BackgroundColor="#17191D">
+    <Grid RowDefinitions="Auto,*,Auto" RowSpacing="0" ColumnDefinitions="*">
         <ScrollView Grid.Row="0" Orientation="Horizontal" BackgroundColor="#22252B">
             <HorizontalStackLayout Padding="5,4" Spacing="3">
                 <Button Text="File" Clicked="OnFileMenuClicked" Style="{StaticResource MenuButton}"/>
@@ -16,23 +13,17 @@
             </HorizontalStackLayout>
         </ScrollView>
 
-        <Grid Grid.Row="1" ColumnDefinitions="*,*,*" Padding="6,5" ColumnSpacing="4" BackgroundColor="#1D2025">
+        <Grid Grid.Row="1" ColumnDefinitions="38*,62*" ColumnSpacing="1" BackgroundColor="#3B414B"><Grid Grid.Column="0" RowDefinitions="Auto,Auto,*" RowSpacing="0" BackgroundColor="#1D2025"><Grid Grid.Row="0" ColumnDefinitions="*,*,*" Padding="6,5" ColumnSpacing="4" BackgroundColor="#1D2025">
             <Button x:Name="HierarchyTab" Grid.Column="0" Text="Scene Hierarchy" Clicked="OnBrowserTabClicked" Style="{StaticResource TabButton}"/>
             <Button x:Name="AssetListTab" Grid.Column="1" Text="Asset List" Clicked="OnBrowserTabClicked" Style="{StaticResource TabButton}"/>
             <Button x:Name="ClassesTab" Grid.Column="2" Text="Asset Classes" Clicked="OnBrowserTabClicked" Style="{StaticResource TabButton}"/>
         </Grid>
 
-        <Grid Grid.Row="2" RowDefinitions="Auto,Auto,Auto,Auto" Padding="7,3" BackgroundColor="#1D2025">
-            <SearchBar x:Name="AssetSearch" Placeholder="Filter assets" PlaceholderColor="#9298A2"
-                       TextColor="#F1F3F5" BackgroundColor="#292D34" HeightRequest="42"
-                       TextChanged="OnAssetSearchTextChanged"/>
-            <SearchBar x:Name="ClassSearch" Grid.Row="0" IsVisible="False" Placeholder="Filter asset classes"
-                       PlaceholderColor="#9298A2" TextColor="#F1F3F5" BackgroundColor="#292D34"
-                       HeightRequest="42" TextChanged="OnClassSearchTextChanged"/>
+        <Grid Grid.Row="1" RowDefinitions="Auto,Auto,Auto,Auto" Padding="7,3" BackgroundColor="#1D2025">
+            <SearchBar x:Name="AssetSearch" Placeholder="Filter assets" PlaceholderColor="#9298A2" TextColor="#F1F3F5" BackgroundColor="#292D34" HeightRequest="42" TextChanged="OnAssetSearchTextChanged"/>
+            <SearchBar x:Name="ClassSearch" Grid.Row="0" IsVisible="False" Placeholder="Filter asset classes" PlaceholderColor="#9298A2" TextColor="#F1F3F5" BackgroundColor="#292D34" HeightRequest="42" TextChanged="OnClassSearchTextChanged"/>
             <Grid x:Name="HierarchySearchPanel" Grid.Row="0" IsVisible="False" ColumnDefinitions="*,Auto" ColumnSpacing="5">
-                <SearchBar x:Name="HierarchySearch" Placeholder="Find scene object" PlaceholderColor="#9298A2"
-                           TextColor="#F1F3F5" BackgroundColor="#292D34" HeightRequest="42"
-                           SearchButtonPressed="OnHierarchySearchButtonPressed" TextChanged="OnHierarchySearchTextChanged"/>
+                <SearchBar x:Name="HierarchySearch" Placeholder="Find scene object" PlaceholderColor="#9298A2" TextColor="#F1F3F5" BackgroundColor="#292D34" HeightRequest="42" SearchButtonPressed="OnHierarchySearchButtonPressed" TextChanged="OnHierarchySearchTextChanged"/>
                 <Button Grid.Column="1" Text="Next" Clicked="OnHierarchySearchNextClicked" Style="{StaticResource TabButton}"/>
             </Grid>
             <HorizontalStackLayout x:Name="HierarchyActions" Grid.Row="1" IsVisible="False" Spacing="5" Padding="0,3">
@@ -48,48 +39,37 @@
             </Grid>
         </Grid>
 
-        <Grid x:Name="WorkspaceGrid" Grid.Row="3" ColumnDefinitions="38*,Auto,62*" BackgroundColor="#17191D" ColumnSpacing="0" SizeChanged="OnWorkspaceSizeChanged">
-            <Grid x:Name="BrowserPane" Grid.Column="0">
-                <CollectionView x:Name="AssetCollection" SelectionMode="Multiple"
-                                SelectionChanged="OnAssetSelectionChanged" BackgroundColor="#17191D">
+        <Grid Grid.Row="2">
+                <CollectionView x:Name="AssetCollection" SelectionMode="Multiple" SelectionChanged="OnAssetSelectionChanged" BackgroundColor="#17191D">
                     <CollectionView.EmptyView>
-                        <Label Text="Drop Unity files here, or use File → Load file" TextColor="#AEB6C2" HorizontalTextAlignment="Center"
-                               VerticalTextAlignment="Center"/>
+                        <Label Text="Drop Unity files here, or use File → Load file" TextColor="#AEB6C2" HorizontalTextAlignment="Center" VerticalTextAlignment="Center"/>
                     </CollectionView.EmptyView>
                     <CollectionView.ItemTemplate>
                         <DataTemplate>
-                            <Grid ColumnDefinitions="2*,1.25*,1.1*,1.1*,.7*,34" Padding="7,9" ColumnSpacing="5">
-                                <Label Text="{Binding Name}" TextColor="#E7EAF0" FontSize="12" LineBreakMode="TailTruncation"/>
-                                <Label Grid.Column="1" Text="{Binding Container}" TextColor="#AEB6C2" FontSize="11" LineBreakMode="TailTruncation"/>
-                                <Label Grid.Column="2" Text="{Binding Type}" TextColor="#AEB6C2" FontSize="11" LineBreakMode="TailTruncation"/>
-                                <Label Grid.Column="3" Text="{Binding PathId}" TextColor="#AEB6C2" FontSize="11"/>
-                                <Label Grid.Column="4" Text="{Binding Size}" TextColor="#AEB6C2" FontSize="11"/>
-                                <Button Grid.Column="5" Text="⋯" Clicked="OnAssetContextClicked"
-                                        CommandParameter="{Binding .}" Padding="0" WidthRequest="30" HeightRequest="30"
-                                        BackgroundColor="Transparent" TextColor="#B9C0CA" FontSize="18"/>
-                            </Grid>
+                            <Grid ColumnDefinitions="2*,1.25*,1.1*,1.1*,.7*,34" Padding="7,9" ColumnSpacing="5" MinimumHeightRequest="42" RowDefinitions="Auto,1">
+                                <Label Text="{Binding Name}" TextColor="#E7EAF0" FontSize="12" LineBreakMode="TailTruncation" Grid.Row="0"/>
+                                <Label Grid.Column="1" Text="{Binding Container}" TextColor="#AEB6C2" FontSize="11" LineBreakMode="TailTruncation" Grid.Row="0"/>
+                                <Label Grid.Column="2" Text="{Binding Type}" TextColor="#AEB6C2" FontSize="11" LineBreakMode="TailTruncation" Grid.Row="0"/>
+                                <Label Grid.Column="3" Text="{Binding PathId}" TextColor="#AEB6C2" FontSize="11" Grid.Row="0"/>
+                                <Label Grid.Column="4" Text="{Binding Size}" TextColor="#AEB6C2" FontSize="11" Grid.Row="0"/>
+                                <Button Grid.Column="5" Text="⋯" Clicked="OnAssetContextClicked" CommandParameter="{Binding .}" Padding="0" WidthRequest="30" HeightRequest="30" BackgroundColor="Transparent" TextColor="#B9C0CA" FontSize="18" Grid.Row="0"/>
+                            <BoxView Grid.Row="1" Grid.ColumnSpan="6" HeightRequest="1" BackgroundColor="#2B3038"/></Grid>
                         </DataTemplate>
                     </CollectionView.ItemTemplate>
                 </CollectionView>
-                <CollectionView x:Name="HierarchyCollection" IsVisible="False" SelectionMode="None"
-                                BackgroundColor="#17191D">
+                <CollectionView x:Name="HierarchyCollection" IsVisible="False" SelectionMode="None" BackgroundColor="#17191D">
                     <CollectionView.EmptyView><Label Text="No scene hierarchy loaded" TextColor="#AEB6C2" HorizontalTextAlignment="Center" VerticalTextAlignment="Center"/></CollectionView.EmptyView>
                     <CollectionView.ItemTemplate>
                         <DataTemplate>
                             <Grid ColumnDefinitions="24,Auto,*" Padding="{Binding IndentPadding}" ColumnSpacing="5" MinimumHeightRequest="38">
-                                <Button Text="{Binding ExpandGlyph}" Clicked="OnHierarchyExpandClicked"
-                                        IsVisible="{Binding HasChildren}" Padding="0" WidthRequest="24" HeightRequest="30"
-                                        BackgroundColor="Transparent" TextColor="#B9C0CA" FontSize="13"/>
-                                <CheckBox Grid.Column="1" IsChecked="{Binding IsChecked, Mode=TwoWay}"
-                                          CheckedChanged="OnHierarchyCheckChanged" Color="#8B78D6"/>
-                                <Label Grid.Column="2" Text="{Binding DisplayName}" TextColor="#E7EAF0"
-                                       VerticalTextAlignment="Center" FontSize="13" LineBreakMode="TailTruncation"/>
+                                <Button Text="{Binding ExpandGlyph}" Clicked="OnHierarchyExpandClicked" IsVisible="{Binding HasChildren}" Padding="0" WidthRequest="24" HeightRequest="30" BackgroundColor="Transparent" TextColor="#B9C0CA" FontSize="13"/>
+                                <CheckBox Grid.Column="1" IsChecked="{Binding IsChecked, Mode=TwoWay}" CheckedChanged="OnHierarchyCheckChanged" Color="#8B78D6"/>
+                                <Label Grid.Column="2" Text="{Binding DisplayName}" TextColor="#E7EAF0" VerticalTextAlignment="Center" FontSize="13" LineBreakMode="TailTruncation"/>
                             </Grid>
                         </DataTemplate>
                     </CollectionView.ItemTemplate>
                 </CollectionView>
-                <CollectionView x:Name="ClassesCollection" IsVisible="False" SelectionMode="Single"
-                                SelectionChanged="OnClassSelectionChanged" BackgroundColor="#17191D">
+                <CollectionView x:Name="ClassesCollection" IsVisible="False" SelectionMode="Single" SelectionChanged="OnClassSelectionChanged" BackgroundColor="#17191D">
                     <CollectionView.EmptyView><Label Text="No asset classes loaded" TextColor="#AEB6C2" HorizontalTextAlignment="Center" VerticalTextAlignment="Center"/></CollectionView.EmptyView>
                     <CollectionView.ItemTemplate>
                         <DataTemplate>
@@ -104,8 +84,7 @@
                     </CollectionView.ItemTemplate>
                 </CollectionView>
             </Grid>
-            <BoxView x:Name="WorkspaceDivider" Grid.Column="1" WidthRequest="1" Color="#3B414B"/>
-            <Grid x:Name="PreviewPane" Grid.Column="2" RowDefinitions="Auto,*" BackgroundColor="#1D2025">
+            </Grid><Grid Grid.Column="1" RowDefinitions="*" RowSpacing="0" BackgroundColor="#1D2025"><Grid RowDefinitions="Auto,*" BackgroundColor="#1D2025" Grid.Row="0">
                 <Grid ColumnDefinitions="*,*" Padding="6" ColumnSpacing="5">
                     <Button x:Name="PreviewTab" Text="Preview" Clicked="OnPreviewTabClicked" Style="{StaticResource TabButton}"/>
                     <Button x:Name="DumpTab" Grid.Column="1" Text="Dump" Clicked="OnDumpTabClicked" Style="{StaticResource TabButton}"/>
@@ -182,12 +161,9 @@
                     <Label x:Name="DumpText" Text="Select an asset to view its dump." TextColor="#D5DAE2" FontFamily="monospace" FontSize="11"/>
                 </ScrollView>
             </Grid>
-        </Grid>
-
-        <Grid Grid.Row="4" ColumnDefinitions="*,Auto,Auto" Padding="9,6" ColumnSpacing="8" BackgroundColor="#22252B">
+        </Grid></Grid><Grid Grid.Row="2" ColumnDefinitions="*,Auto,Auto" Padding="9,6" ColumnSpacing="8" BackgroundColor="#22252B">
             <Label x:Name="StatusLabel" Text="Ready to go" TextColor="#B9C0CA" FontSize="12" VerticalTextAlignment="Center"/>
-            <Button x:Name="CancelLoadButton" Grid.Column="1" Text="Cancel load" IsVisible="False" Clicked="OnCancelLoadClicked"
-                    Padding="8,3" HeightRequest="30" FontSize="11" BackgroundColor="#7B3438" TextColor="White"/>
+            <Button x:Name="CancelLoadButton" Grid.Column="1" Text="Cancel load" IsVisible="False" Clicked="OnCancelLoadClicked" Padding="8,3" HeightRequest="30" FontSize="11" BackgroundColor="#7B3438" TextColor="White"/>
             <ActivityIndicator x:Name="BusyIndicator" Grid.Column="2" IsRunning="False" IsVisible="False" HeightRequest="20"/>
         </Grid>
     </Grid>
