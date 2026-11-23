@@ -5,14 +5,20 @@ namespace AssetStudioMobile;
 public partial class MainPage : ContentPage
 {
     private readonly List<AssetListItem> _assets = new();
+    private readonly List<HierarchyListItem> _hierarchy = new();
+    private readonly List<ClassListItem> _classes = new();
     private readonly List<string> _extractablePaths = new();
     private AssetListItem? _selectedAsset;
     private bool _isLoading;
+    private string _searchText = string.Empty;
+    private string _selectedType = "All";
 
     public MainPage()
     {
         InitializeComponent();
         AssetList.ItemsSource = _assets;
+        HierarchyList.ItemsSource = _hierarchy;
+        ClassList.ItemsSource = _classes;
     }
 
     private async void OnImportClicked(object? sender, EventArgs e)
@@ -83,17 +89,21 @@ public partial class MainPage : ContentPage
                 .Select(asset => new AssetListItem(asset))
                 .ToList();
 
+            _assets.Clear();
+            _assets.AddRange(items);
+            BuildHierarchy(manager, items);
+            BuildClassList(manager);
+            TypeFilter.ItemsSource = new[] { "All" }
+                .Concat(_assets.Select(asset => asset.Type).Distinct().OrderBy(type => type))
+                .ToList();
+            TypeFilter.SelectedIndex = 0;
+
             _extractablePaths.Clear();
             _extractablePaths.AddRange(paths.Where(IsExtractableArchive));
             _selectedAsset = null;
-            ExportButton.IsEnabled = false;
-            PreviewButton.IsEnabled = false;
-            SelectionLabel.Text = "Select an asset to share its raw data.";
             SearchBar.Text = string.Empty;
-            _assets.Clear();
-            _assets.AddRange(items);
-            AssetList.ItemsSource = null;
-            AssetList.ItemsSource = _assets;
+            UpdateSelection();
+            ApplyFilters();
 
             StatusLabel.Text = items.Count > 0
                 ? $"Loaded {items.Count:N0} assets from {manager.assetsFileList.Count:N0} serialized file(s)."
@@ -112,24 +122,119 @@ public partial class MainPage : ContentPage
 
     private void OnSearchTextChanged(object? sender, TextChangedEventArgs e)
     {
-        var query = e.NewTextValue?.Trim() ?? string.Empty;
-        var filtered = string.IsNullOrEmpty(query)
-            ? _assets
-            : _assets.Where(asset =>
-                asset.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
-                || asset.Type.Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
+        _searchText = e.NewTextValue?.Trim() ?? string.Empty;
+        ApplyFilters();
+    }
 
-        AssetList.ItemsSource = filtered;
+    private void OnTypeFilterChanged(object? sender, EventArgs e)
+    {
+        _selectedType = TypeFilter.SelectedItem as string ?? "All";
+        ApplyFilters();
+    }
+
+    private async void OnSectionClicked(object? sender, EventArgs e)
+    {
+        if (sender is not Button button || button.CommandParameter is not string section)
+        {
+            return;
+        }
+
+        SetActiveSection(section);
+        if (section == "Dump" && _selectedAsset is { } selected)
+        {
+            DumpText.Text = "Building asset dump…";
+            try
+            {
+                var dump = await Task.Run(() => selected.Asset.Dump());
+                if (ReferenceEquals(_selectedAsset, selected))
+                {
+                    DumpText.Text = dump ?? "No serialized dump is available for this asset.";
+                }
+            }
+            catch (Exception exception)
+            {
+                DumpText.Text = $"Unable to build asset dump: {exception.Message}";
+            }
+        }
+    }
+
+    private void SetActiveSection(string section)
+    {
+        AssetList.IsVisible = section == "Assets";
+        HierarchyList.IsVisible = section == "Scene";
+        ClassList.IsVisible = section == "Classes";
+        PreviewPanel.IsVisible = section == "Preview";
+        DumpPanel.IsVisible = section == "Dump";
+        TypeFilter.IsVisible = section == "Assets";
+        SearchBar.Placeholder = section switch
+        {
+            "Scene" => "Search GameObjects",
+            "Classes" => "Search class structures",
+            _ => "Search assets"
+        };
+        ApplyFilters();
+    }
+
+    private void ApplyFilters()
+    {
+        var query = _searchText;
+        var visibleAssets = _assets.Where(asset =>
+            (_selectedType == "All" || asset.Type == _selectedType)
+            && (string.IsNullOrEmpty(query)
+                || asset.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
+                || asset.Type.Contains(query, StringComparison.OrdinalIgnoreCase)
+                || asset.SourceFile.Contains(query, StringComparison.OrdinalIgnoreCase))).ToList();
+        AssetList.ItemsSource = visibleAssets;
+
+        HierarchyList.ItemsSource = _hierarchy.Where(item =>
+            string.IsNullOrEmpty(query)
+            || item.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
+            || item.Type.Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
+        ClassList.ItemsSource = _classes.Where(item =>
+            string.IsNullOrEmpty(query)
+            || item.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
+            || item.Metadata.Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
     }
 
     private void OnAssetSelected(object? sender, SelectionChangedEventArgs e)
     {
         _selectedAsset = e.CurrentSelection.FirstOrDefault() as AssetListItem;
+        UpdateSelection();
+    }
+
+    private void OnHierarchySelected(object? sender, SelectionChangedEventArgs e)
+    {
+        if (e.CurrentSelection.FirstOrDefault() is HierarchyListItem { Asset: { } asset })
+        {
+            _selectedAsset = asset;
+            UpdateSelection();
+        }
+    }
+
+    private void OnClassSelected(object? sender, SelectionChangedEventArgs e)
+    {
+        if (e.CurrentSelection.FirstOrDefault() is ClassListItem selected)
+        {
+            DumpText.Text = selected.Definition;
+            SelectionLabel.Text = $"{selected.Name} • {selected.Metadata}";
+        }
+    }
+
+    private void UpdateSelection()
+    {
         ExportButton.IsEnabled = _selectedAsset is not null && !_isLoading;
-        PreviewButton.IsEnabled = _selectedAsset?.Asset is Mesh or Texture2D && !_isLoading;
+        PreviewButton.IsEnabled = _selectedAsset is not null && !_isLoading;
+        PreviewPanelButton.IsEnabled = !_isLoading && (_selectedAsset?.Asset is Mesh or Texture2D);
         SelectionLabel.Text = _selectedAsset is null
-            ? "Select an asset to share its raw data."
-            : $"{_selectedAsset.Type} • path ID {_selectedAsset.PathId}";
+            ? "No asset selected."
+            : $"{_selectedAsset.Name} • {_selectedAsset.Type} • path ID {_selectedAsset.PathId}";
+        PreviewSummary.Text = _selectedAsset is null
+            ? "Select an asset to inspect or preview it."
+            : $"{_selectedAsset.Name}\n{_selectedAsset.Type} • {_selectedAsset.Metadata}";
+        PreviewText.IsVisible = false;
+        DumpText.Text = _selectedAsset is null
+            ? "Select an asset to view its serialized dump."
+            : "Open the Dump tab to inspect this asset.";
     }
 
     private async void OnPreviewClicked(object? sender, EventArgs e)
@@ -144,13 +249,27 @@ public partial class MainPage : ContentPage
         {
             if (selected.Asset is Mesh mesh)
             {
+                SetActiveSection("Preview");
                 await Navigation.PushModalAsync(new NavigationPage(new MeshPreviewPage(mesh)));
             }
             else if (selected.Asset is Texture2D texture)
             {
+                SetActiveSection("Preview");
                 SetLoading(true, "Preparing texture preview…");
                 var imagePath = await Task.Run(() => MobileAssetExporter.Export(texture));
                 await Navigation.PushModalAsync(new NavigationPage(new TexturePreviewPage(texture.m_Name, imagePath)));
+            }
+            else
+            {
+                SetActiveSection("Preview");
+                PreviewText.Text = selected.Asset switch
+                {
+                    TextAsset textAsset => textAsset.m_Script,
+                    AudioClip => "Audio playback is not available in this build. Use Export to share the stored audio data.",
+                    VideoClip => "Video playback is not available in this build. Use Export to share the stored video data.",
+                    _ => selected.Asset.Dump() ?? "No preview is available for this asset."
+                };
+                PreviewText.IsVisible = true;
             }
         }
         catch (Exception exception)
@@ -221,11 +340,111 @@ public partial class MainPage : ContentPage
         ImportButton.IsEnabled = !isLoading;
         ExportButton.IsEnabled = !isLoading && _selectedAsset is not null;
         ExtractButton.IsEnabled = !isLoading && _extractablePaths.Count > 0;
-        PreviewButton.IsEnabled = !isLoading && _selectedAsset?.Asset is Mesh or Texture2D;
+        PreviewButton.IsEnabled = !isLoading && _selectedAsset is not null;
+        PreviewPanelButton.IsEnabled = !isLoading && (_selectedAsset?.Asset is Mesh or Texture2D);
         if (status is not null)
         {
             StatusLabel.Text = status;
         }
+    }
+
+    private void BuildHierarchy(AssetsManager manager, List<AssetListItem> items)
+    {
+        _hierarchy.Clear();
+        foreach (var file in manager.assetsFileList)
+        {
+            var fileItems = items
+                .Where(item => ReferenceEquals(item.Asset.assetsFile, file) && item.Asset is GameObject)
+                .ToList();
+            if (fileItems.Count == 0)
+            {
+                continue;
+            }
+
+            var nodes = fileItems.ToDictionary(item => (GameObject)item.Asset);
+            var children = new Dictionary<GameObject, List<GameObject>>();
+            var roots = new List<GameObject>();
+            foreach (var gameObject in nodes.Keys)
+            {
+                if (gameObject.m_Transform is not null
+                    && gameObject.m_Transform.m_Father.TryGet(out var parentTransform)
+                    && parentTransform.m_GameObject.TryGet(out var parent)
+                    && nodes.ContainsKey(parent))
+                {
+                    if (!children.TryGetValue(parent, out var childList))
+                    {
+                        childList = new List<GameObject>();
+                        children.Add(parent, childList);
+                    }
+                    childList.Add(gameObject);
+                }
+                else
+                {
+                    roots.Add(gameObject);
+                }
+            }
+
+            _hierarchy.Add(HierarchyListItem.File(file.fileName));
+            var visited = new HashSet<GameObject>();
+            void AddTree(GameObject gameObject, int depth)
+            {
+                if (!visited.Add(gameObject) || !nodes.TryGetValue(gameObject, out var asset))
+                {
+                    return;
+                }
+
+                _hierarchy.Add(new HierarchyListItem(asset, depth));
+                if (children.TryGetValue(gameObject, out var childList))
+                {
+                    foreach (var child in childList)
+                    {
+                        AddTree(child, depth + 1);
+                    }
+                }
+            }
+
+            foreach (var root in roots)
+            {
+                AddTree(root, 1);
+            }
+            foreach (var gameObject in nodes.Keys)
+            {
+                AddTree(gameObject, 1);
+            }
+        }
+        HierarchyList.ItemsSource = _hierarchy.ToList();
+    }
+
+    private void BuildClassList(AssetsManager manager)
+    {
+        var classItems = new Dictionary<(string Version, int TypeId), ClassListItem>();
+        foreach (var file in manager.assetsFileList)
+        {
+            foreach (var type in file.m_Types.Where(type => type.m_Type is not null))
+            {
+                var typeId = type.m_ScriptTypeIndex >= 0
+                    ? -1 - type.m_ScriptTypeIndex
+                    : type.classID;
+                var nodes = type.m_Type!.m_Nodes;
+                var root = nodes.FirstOrDefault();
+                var name = root is null ? $"Class {typeId}" : $"{root.m_Type} {root.m_Name}";
+                var definition = string.Join(
+                    Environment.NewLine,
+                    nodes.Select(node =>
+                        $"{new string('\t', node.m_Level)}{node.m_Type} {node.m_Name} {node.m_ByteSize} {(node.m_MetaFlag & 0x4000) != 0}"));
+                classItems[(file.unityVersion, typeId)] = new ClassListItem(
+                    file.unityVersion,
+                    typeId,
+                    name,
+                    definition);
+            }
+        }
+
+        _classes.Clear();
+        _classes.AddRange(classItems.Values
+            .OrderBy(item => item.Version, StringComparer.Ordinal)
+            .ThenBy(item => item.TypeId));
+        ClassList.ItemsSource = _classes.ToList();
     }
 
     private static string GetLoadFailureMessage(MobileLogger logger)
@@ -249,15 +468,76 @@ public partial class MainPage : ContentPage
             Asset = asset;
             Type = asset.type.ToString();
             PathId = asset.m_PathID.ToString();
-            Name = asset is NamedObject namedObject && !string.IsNullOrWhiteSpace(namedObject.m_Name)
-                ? namedObject.m_Name
-                : $"{Type} #{PathId}";
+            SourceFile = asset.assetsFile.fileName;
+            Size = asset.byteSize;
+            Name = GetAssetName(asset, Type, PathId);
         }
 
         public AssetStudio.Object Asset { get; }
         public string Name { get; }
         public string Type { get; }
         public string PathId { get; }
+        public string SourceFile { get; }
+        public long Size { get; }
+        public string Metadata => $"{SourceFile} • ID {PathId} • {Size:N0} bytes";
+
+        private static string GetAssetName(AssetStudio.Object asset, string type, string pathId)
+        {
+            var name = asset switch
+            {
+                GameObject gameObject => gameObject.m_Name,
+                Texture2D texture => texture.m_Name,
+                AudioClip audio => audio.m_Name,
+                VideoClip video => video.m_Name,
+                Shader shader => shader.m_ParsedForm?.m_Name ?? shader.m_Name,
+                NamedObject namedObject => namedObject.m_Name,
+                _ => string.Empty
+            };
+            return string.IsNullOrWhiteSpace(name) ? $"{type} #{pathId}" : name;
+        }
+    }
+
+    private sealed class HierarchyListItem
+    {
+        public HierarchyListItem(AssetListItem asset, int depth)
+        {
+            Asset = asset;
+            Name = asset.Name;
+            Type = asset.Type;
+            Indent = new Thickness(depth * 16, 0, 0, 0);
+        }
+
+        private HierarchyListItem(string name)
+        {
+            Name = name;
+            Type = "File";
+            Indent = new Thickness(0);
+        }
+
+        public AssetListItem? Asset { get; }
+        public string Name { get; }
+        public string Type { get; }
+        public Thickness Indent { get; }
+
+        public static HierarchyListItem File(string name) => new(name);
+    }
+
+    private sealed class ClassListItem
+    {
+        public ClassListItem(string version, int typeId, string name, string definition)
+        {
+            Version = version;
+            TypeId = typeId;
+            Name = name;
+            Definition = definition;
+            Metadata = $"{version} • class ID {typeId}";
+        }
+
+        public string Version { get; }
+        public int TypeId { get; }
+        public string Name { get; }
+        public string Metadata { get; }
+        public string Definition { get; }
     }
 
     private sealed class MobileLogger : ILogger
