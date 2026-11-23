@@ -84,24 +84,24 @@
                     </CollectionView.ItemTemplate>
                 </CollectionView>
             </Grid>
-            </Grid><BoxView x:Name="WorkspaceDivider" Grid.Column="1" WidthRequest="1" BackgroundColor="#3B414B"/><Grid x:Name="PreviewPane" Grid.Column="2" RowDefinitions="*" RowSpacing="0" BackgroundColor="#1D2025"><Grid RowDefinitions="Auto,*" BackgroundColor="#1D2025" Grid.Row="0">
-                <Grid ColumnDefinitions="*,*" Padding="6" ColumnSpacing="5">
+            </Grid><BoxView x:Name="WorkspaceDivider" Grid.Column="1" WidthRequest="1" BackgroundColor="#3B414B"/><Grid x:Name="PreviewPane" Grid.Column="2" RowDefinitions="*" RowSpacing="0" BackgroundColor="#F0F0F0"><Grid RowDefinitions="Auto,*" BackgroundColor="#F0F0F0" Grid.Row="0">
+                <Grid ColumnDefinitions="*,*" Padding="4,3" ColumnSpacing="2" BackgroundColor="#E6E6E6">
                     <Button x:Name="PreviewTab" Text="Preview" Clicked="OnPreviewTabClicked" Style="{StaticResource TabButton}"/>
                     <Button x:Name="DumpTab" Grid.Column="1" Text="Dump" Clicked="OnDumpTabClicked" Style="{StaticResource TabButton}"/>
                 </Grid>
-                <ScrollView x:Name="PreviewScroll" Grid.Row="1" Padding="12">
+                <ScrollView x:Name="PreviewScroll" Grid.Row="1" Padding="8">
                     <VerticalStackLayout Spacing="9">
-                        <Label x:Name="PreviewTitle" Text="Preview" TextColor="#E7EAF0" FontSize="16" FontAttributes="Bold"/>
-                        <Label x:Name="PreviewKind" Text="Select an asset" TextColor="#8F98A5" FontSize="11"/>
-                        <Border x:Name="ImagePreviewFrame" IsVisible="False" BackgroundColor="#111317" Stroke="#3B414B" StrokeThickness="1" Padding="6">
+                        <Label x:Name="PreviewTitle" Text="Preview" TextColor="#202020" FontSize="16" FontAttributes="Bold"/>
+                        <Label x:Name="PreviewKind" Text="Select an asset" TextColor="#666666" FontSize="11"/>
+                        <Border x:Name="ImagePreviewFrame" IsVisible="False" BackgroundColor="#FFFFFF" Stroke="#C8C8C8" StrokeThickness="1" Padding="6">
                             <Image x:Name="AssetImagePreview" Aspect="AspectFit" HeightRequest="230"/>
                         </Border>
-                        <Border x:Name="TextPreviewFrame" IsVisible="False" BackgroundColor="#111317" Stroke="#3B414B" StrokeThickness="1" Padding="8">
+                        <Border x:Name="TextPreviewFrame" IsVisible="False" BackgroundColor="#FFFFFF" Stroke="#C8C8C8" StrokeThickness="1" Padding="8">
                             <ScrollView Orientation="Both" HeightRequest="210">
-                                <Label x:Name="AssetTextPreview" TextColor="#D5DAE2" FontFamily="monospace" FontSize="11" LineBreakMode="NoWrap"/>
+                                <Label x:Name="AssetTextPreview" TextColor="#202020" FontFamily="monospace" FontSize="11" LineBreakMode="NoWrap"/>
                             </ScrollView>
                         </Border>
-                        <Border x:Name="FontPreviewFrame" IsVisible="False" BackgroundColor="#F4F4F4" Stroke="#3B414B" StrokeThickness="1" Padding="10">
+                        <Border x:Name="FontPreviewFrame" IsVisible="False" BackgroundColor="#F4F4F4" Stroke="#C8C8C8" StrokeThickness="1" Padding="10">
                             <VerticalStackLayout Spacing="7">
                                 <Label Text="Font specimen" TextColor="#333333" FontSize="11"/>
                                 <Label Text="The quick brown fox jumps over the lazy dog." TextColor="#111111" FontSize="12"/>
@@ -110,18 +110,18 @@
                                 <Label Text="0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ" TextColor="#111111" FontSize="15"/>
                             </VerticalStackLayout>
                         </Border>
-                        <Border x:Name="AudioPreviewFrame" IsVisible="False" BackgroundColor="#252A32" Stroke="#3B414B" StrokeThickness="1" Padding="12">
+                        <Border x:Name="AudioPreviewFrame" IsVisible="False" BackgroundColor="#F7F7F7" Stroke="#C8C8C8" StrokeThickness="1" Padding="8">
                             <VerticalStackLayout Spacing="10">
-                                <Label Text="Audio clip" TextColor="#E7EAF0" FontAttributes="Bold"/>
-                                <Label x:Name="AudioPreviewInfo" TextColor="#B9C0CA" FontSize="12"/>
+                                <Label Text="Audio clip" TextColor="#202020" FontAttributes="Bold"/>
+                                <Label x:Name="AudioPreviewInfo" TextColor="#444444" FontSize="12"/>
                                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                                    <Label x:Name="AudioPlaybackStatus" Text="Stopped" TextColor="#D5DAE2" FontSize="11" VerticalTextAlignment="Center"/>
-                                    <Label x:Name="AudioFrequency" Grid.Column="1" Text="— Hz" TextColor="#AEB6C2" FontSize="11" VerticalTextAlignment="Center"/>
+                                    <Label x:Name="AudioPlaybackStatus" Text="Stopped" TextColor="#202020" FontSize="11" VerticalTextAlignment="Center"/>
+                                    <Label x:Name="AudioFrequency" Grid.Column="1" Text="— Hz" TextColor="#444444" FontSize="11" VerticalTextAlignment="Center"/>
                                 </Grid>
                                 <Slider x:Name="AudioSeekSlider" Minimum="0" Maximum="1" Value="0" ValueChanged="OnAudioSeekChanged"/>
                                 <Grid ColumnDefinitions="*,Auto">
-                                    <Label x:Name="AudioCurrentTime" Text="0:00" TextColor="#AEB6C2" FontSize="10"/>
-                                    <Label x:Name="AudioDuration" Grid.Column="1" Text="0:00" TextColor="#AEB6C2" FontSize="10"/>
+                                    <Label x:Name="AudioCurrentTime" Text="0:00" TextColor="#444444" FontSize="10"/>
+                                    <Label x:Name="AudioDuration" Grid.Column="1" Text="0:00" TextColor="#444444" FontSize="10"/>
                                 </Grid>
                                 <Grid ColumnDefinitions="*,*,*,*" ColumnSpacing="6">
                                     <Button Text="▶ Play" Clicked="OnAudioPlayClicked" Style="{StaticResource TabButton}"/>
@@ -130,35 +130,35 @@
                                     <Button x:Name="AudioLoopButton" Grid.Column="3" Text="Loop: Off" Clicked="OnAudioLoopClicked" Style="{StaticResource TabButton}"/>
                                 </Grid>
                                 <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
-                                    <Label Text="Volume" TextColor="#AEB6C2" FontSize="11" VerticalTextAlignment="Center"/>
+                                    <Label Text="Volume" TextColor="#444444" FontSize="11" VerticalTextAlignment="Center"/>
                                     <Slider x:Name="AudioVolumeSlider" Grid.Column="1" Minimum="0" Maximum="1" Value="1" ValueChanged="OnAudioVolumeChanged"/>
                                 </Grid>
-                                <Label Text="Playback controls require the host app's audio backend." TextColor="#8F98A5" FontSize="10"/>
+                                <Label Text="Playback controls require the host app's audio backend." TextColor="#666666" FontSize="10"/>
                             </VerticalStackLayout>
                         </Border>
-                        <Border x:Name="ModelPreviewFrame" IsVisible="False" BackgroundColor="#111317" Stroke="#3B414B" StrokeThickness="1" Padding="12">
+                        <Border x:Name="ModelPreviewFrame" IsVisible="False" BackgroundColor="#FFFFFF" Stroke="#C8C8C8" StrokeThickness="1" Padding="8">
                             <VerticalStackLayout Spacing="6">
-                                <Label Text="3D model preview" TextColor="#E7EAF0" FontAttributes="Bold"/>
-                                <Label x:Name="ModelPreviewInfo" Text="A native iOS 3D renderer must be connected." TextColor="#AEB6C2" FontSize="12"/>
+                                <Label Text="3D model preview" TextColor="#202020" FontAttributes="Bold"/>
+                                <Label x:Name="ModelPreviewInfo" Text="A native iOS 3D renderer must be connected." TextColor="#444444" FontSize="12"/>
                             </VerticalStackLayout>
                         </Border>
-                        <Border x:Name="MetadataFrame" IsVisible="False" BackgroundColor="#20242B" Stroke="#3B414B" StrokeThickness="1" Padding="9">
+                        <Border x:Name="MetadataFrame" IsVisible="False" BackgroundColor="#FFFFFF" Stroke="#C8C8C8" StrokeThickness="1" Padding="0">
                             <VerticalStackLayout x:Name="MetadataHost" Spacing="0">
                                 <BindableLayout.ItemTemplate>
                                     <DataTemplate>
-                                        <Grid ColumnDefinitions="*,1.2*" Padding="2,5" ColumnSpacing="8">
-                                            <Label Text="{Binding Key}" TextColor="#929BA8" FontSize="11"/>
+                                        <Grid ColumnDefinitions="*,1.2*" Padding="4,4" ColumnSpacing="8">
+                                            <Label Text="{Binding Key}" TextColor="#555555" FontSize="11"/>
                                             <Label Grid.Column="1" Text="{Binding Value}" TextColor="#E2E6EC" FontSize="11" HorizontalTextAlignment="End"/>
                                         </Grid>
                                     </DataTemplate>
                                 </BindableLayout.ItemTemplate>
                             </VerticalStackLayout>
                         </Border>
-                        <Label x:Name="PreviewDetails" Text="Select an asset to inspect it." TextColor="#AEB6C2" FontSize="12"/>
+                        <Label x:Name="PreviewDetails" Text="Select an asset to inspect it." TextColor="#444444" FontSize="12"/>
                     </VerticalStackLayout>
                 </ScrollView>
-                <ScrollView x:Name="DumpScroll" Grid.Row="1" Padding="12" IsVisible="False">
-                    <Label x:Name="DumpText" Text="Select an asset to view its dump." TextColor="#D5DAE2" FontFamily="monospace" FontSize="11"/>
+                <ScrollView x:Name="DumpScroll" Grid.Row="1" Padding="8" IsVisible="False">
+                    <Label x:Name="DumpText" Text="Select an asset to view its dump." TextColor="#202020" FontFamily="monospace" FontSize="11"/>
                 </ScrollView>
             </Grid>
         </Grid></Grid><Grid Grid.Row="2" ColumnDefinitions="*,Auto,Auto" Padding="9,6" ColumnSpacing="8" BackgroundColor="#22252B">
