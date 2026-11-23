@@ -1,8 +1,8 @@
 <?xml version='1.0' encoding='utf-8'?>
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui" xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml" x:Class="AssetStudioMobile.MainPage" Shell.NavBarIsVisible="False" BackgroundColor="#FFFFFF">
     <Grid RowDefinitions="Auto,Auto,*,Auto" RowSpacing="0" ColumnDefinitions="*">
-        <ScrollView x:Name="MenuScroll" Grid.Row="0" Orientation="Horizontal" BackgroundColor="#F0F0F0">
-            <HorizontalStackLayout Padding="5,1" Spacing="0">
+        <ScrollView x:Name="MenuScroll" Grid.Row="0" HeightRequest="25" Orientation="Horizontal" BackgroundColor="#F0F0F0">
+            <HorizontalStackLayout Padding="4,0" Spacing="0">
                 <Button Text="File" Clicked="OnFileMenuClicked" Style="{StaticResource MenuButton}"/>
                 <Button Text="Options" Clicked="OnOptionsMenuClicked" Style="{StaticResource MenuButton}"/>
                 <Button Text="Model" Clicked="OnModelMenuClicked" Style="{StaticResource MenuButton}"/>
@@ -12,7 +12,7 @@
             </HorizontalStackLayout>
         </ScrollView>
 
-        <Grid x:Name="WorkspaceViewTabs" Grid.Row="1" ColumnDefinitions="*,*" Padding="2,1" ColumnSpacing="1"
+        <Grid x:Name="WorkspaceViewTabs" Grid.Row="1" ColumnDefinitions="*,*" Padding="2,0" ColumnSpacing="1"
               BackgroundColor="#F0F0F0" IsVisible="False">
             <Button x:Name="AssetsWorkspaceTab" Grid.Column="0" Text="Assets" CommandParameter="Assets"
                     Clicked="OnWorkspaceTabClicked" Style="{StaticResource TabButton}"/>
@@ -21,24 +21,24 @@
         </Grid>
 
         <Grid x:Name="WorkspaceGrid" Grid.Row="2" ColumnDefinitions="38*,10,62*" RowDefinitions="*" ColumnSpacing="0" BackgroundColor="#B7B7B7" SizeChanged="OnWorkspaceSizeChanged">
-            <Grid x:Name="BrowserPane" Grid.Row="0" Grid.Column="0" RowDefinitions="Auto,Auto,*" RowSpacing="0" BackgroundColor="#FFFFFF"><Grid x:Name="BrowserTabsGrid" Grid.Row="0" ColumnDefinitions="*,*,*" Padding="2,1" ColumnSpacing="1" BackgroundColor="#F0F0F0">
+            <Grid x:Name="BrowserPane" Grid.Row="0" Grid.Column="0" RowDefinitions="Auto,Auto,*" RowSpacing="0" BackgroundColor="#FFFFFF">                        <Grid x:Name="BrowserTabsGrid" Grid.Row="0" ColumnDefinitions="Auto,Auto,Auto,*" Padding="2,0" ColumnSpacing="1" BackgroundColor="#F0F0F0">
             <Button x:Name="HierarchyTab" Grid.Column="0" Text="Scene Hierarchy" CommandParameter="Scene Hierarchy" Clicked="OnBrowserTabClicked" Style="{StaticResource TabButton}"/>
             <Button x:Name="AssetListTab" Grid.Column="1" Text="Asset List" CommandParameter="Asset List" Clicked="OnBrowserTabClicked" Style="{StaticResource TabButton}"/>
             <Button x:Name="ClassesTab" Grid.Column="2" Text="Asset Classes" CommandParameter="Asset Classes" Clicked="OnBrowserTabClicked" Style="{StaticResource TabButton}"/>
         </Grid>
 
-        <Grid Grid.Row="1" RowDefinitions="34,Auto,Auto,Auto" Padding="3,1" BackgroundColor="#F0F0F0">
-            <Border x:Name="AssetSearchFrame" Stroke="#B7B7B7" StrokeThickness="1" Padding="5,0" BackgroundColor="#FFFFFF" HeightRequest="32">
-                <Entry x:Name="AssetSearch" Placeholder="Search" PlaceholderColor="#777777" TextColor="#202020" BackgroundColor="Transparent" MinimumHeightRequest="0" FontSize="12" Margin="0" TextChanged="OnAssetSearchTextChanged"/>
+        <Grid x:Name="BrowserToolbarGrid" Grid.Row="1" RowDefinitions="21,Auto,Auto,Auto" Padding="2,0" BackgroundColor="#F0F0F0">
+            <Border x:Name="AssetSearchFrame" Stroke="#B7B7B7" StrokeThickness="1" Padding="5,0" BackgroundColor="#FFFFFF" HeightRequest="21">
+                <Entry x:Name="AssetSearch" Placeholder="Search" PlaceholderColor="#777777" TextColor="#202020" BackgroundColor="Transparent" MinimumHeightRequest="0" FontSize="10" Margin="0" TextChanged="OnAssetSearchTextChanged"/>
             </Border>
-            <Border x:Name="ClassSearchFrame" Grid.Row="0" IsVisible="False" Stroke="#B7B7B7" StrokeThickness="1" Padding="5,0" BackgroundColor="#FFFFFF" HeightRequest="32">
-                <Entry x:Name="ClassSearch" Placeholder="Search" PlaceholderColor="#777777" TextColor="#202020" BackgroundColor="Transparent" MinimumHeightRequest="0" FontSize="12" Margin="0" TextChanged="OnClassSearchTextChanged"/>
+            <Border x:Name="ClassSearchFrame" Grid.Row="0" IsVisible="False" Stroke="#B7B7B7" StrokeThickness="1" Padding="5,0" BackgroundColor="#FFFFFF" HeightRequest="21">
+                <Entry x:Name="ClassSearch" Placeholder="Search" PlaceholderColor="#777777" TextColor="#202020" BackgroundColor="Transparent" MinimumHeightRequest="0" FontSize="10" Margin="0" TextChanged="OnClassSearchTextChanged"/>
             </Border>
             <Grid x:Name="HierarchySearchPanel" Grid.Row="0" IsVisible="False" ColumnDefinitions="*,Auto" ColumnSpacing="5">
-                <Border x:Name="HierarchySearchFrame" Stroke="#B7B7B7" StrokeThickness="1" Padding="5,0" BackgroundColor="#FFFFFF" HeightRequest="32">
-                    <Entry x:Name="HierarchySearch" Placeholder="Search" PlaceholderColor="#777777" TextColor="#202020" BackgroundColor="Transparent" MinimumHeightRequest="0" FontSize="12" Margin="0" ReturnType="Search" Completed="OnHierarchySearchButtonPressed" TextChanged="OnHierarchySearchTextChanged"/>
+                <Border x:Name="HierarchySearchFrame" Stroke="#B7B7B7" StrokeThickness="1" Padding="5,0" BackgroundColor="#FFFFFF" HeightRequest="21">
+                    <Entry x:Name="HierarchySearch" Placeholder="Search" PlaceholderColor="#777777" TextColor="#202020" BackgroundColor="Transparent" MinimumHeightRequest="0" FontSize="10" Margin="0" ReturnType="Search" Completed="OnHierarchySearchButtonPressed" TextChanged="OnHierarchySearchTextChanged"/>
                 </Border>
-                <Button Grid.Column="1" Text="Next" Clicked="OnHierarchySearchNextClicked" Style="{StaticResource TabButton}"/>
+                <Button x:Name="HierarchySearchNextButton" Grid.Column="1" Text="Next" IsVisible="False" Clicked="OnHierarchySearchNextClicked" Style="{StaticResource TabButton}"/>
             </Grid>
             <HorizontalStackLayout x:Name="HierarchyActions" Grid.Row="1" IsVisible="False" Spacing="5" Padding="0,3">
                 <Button Text="Expand all" Clicked="OnHierarchyExpandAllClicked" Style="{StaticResource TabButton}"/>
@@ -60,7 +60,7 @@
                     </CollectionView.EmptyView>
                     <CollectionView.ItemTemplate>
                         <DataTemplate>
-                            <Grid ColumnDefinitions="*" Padding="3,2" RowDefinitions="Auto,1" MinimumHeightRequest="34">
+                            <Grid ColumnDefinitions="*" Padding="3,1" RowDefinitions="Auto,1" MinimumHeightRequest="26">
                                 <Grid Grid.RowSpan="2" ColumnDefinitions="2*,1.25*,1.1*,1.1*,.7*,34"
                                       ColumnSpacing="5" IsVisible="{Binding IsDesktopLayout}">
                                     <Label Text="{Binding Name}" TextColor="#202020" FontSize="12" LineBreakMode="TailTruncation"/>
@@ -68,12 +68,12 @@
                                     <Label Grid.Column="2" Text="{Binding Type}" TextColor="#555555" FontSize="11" LineBreakMode="TailTruncation"/>
                                     <Label Grid.Column="3" Text="{Binding PathId}" TextColor="#555555" FontSize="11"/>
                                     <Label Grid.Column="4" Text="{Binding DisplaySize}" TextColor="#555555" FontSize="11"/>
-                                    <Button Grid.Column="5" Text="⋯" Clicked="OnAssetContextClicked" CommandParameter="{Binding .}" Padding="0" WidthRequest="30" HeightRequest="30" BackgroundColor="Transparent" TextColor="#555555" FontSize="18"/>
+                                    <Button Grid.Column="5" Text="⋯" Clicked="OnAssetContextClicked" CommandParameter="{Binding .}" Padding="0" WidthRequest="24" HeightRequest="24" MinimumWidthRequest="0" MinimumHeightRequest="0" BackgroundColor="Transparent" TextColor="#555555" FontSize="16"/>
                                 </Grid>
                                 <Grid Grid.Row="0" ColumnDefinitions="*,34" RowDefinitions="Auto,Auto" RowSpacing="2"
                                       IsVisible="{Binding IsCompactLayout}">
                                     <Label Text="{Binding Name}" TextColor="#202020" FontSize="11" LineBreakMode="TailTruncation"/>
-                                    <Button Grid.Column="1" Grid.RowSpan="2" Text="⋯" Clicked="OnAssetContextClicked" CommandParameter="{Binding .}" Padding="0" WidthRequest="26" HeightRequest="26" BackgroundColor="Transparent" TextColor="#555555" FontSize="16"/>
+                                    <Button Grid.Column="1" Grid.RowSpan="2" Text="⋯" Clicked="OnAssetContextClicked" CommandParameter="{Binding .}" Padding="0" WidthRequest="24" HeightRequest="24" MinimumWidthRequest="0" MinimumHeightRequest="0" BackgroundColor="Transparent" TextColor="#555555" FontSize="16"/>
                                     <Label Grid.Row="1" Text="{Binding CompactDetails}" TextColor="#555555" FontSize="9" LineBreakMode="TailTruncation"/>
                                 </Grid>
                                 <BoxView Grid.Row="1" HeightRequest="1" BackgroundColor="#D6D6D6"/>
@@ -85,10 +85,10 @@
                     <CollectionView.EmptyView><Label Text="No scene hierarchy loaded" TextColor="#555555" HorizontalTextAlignment="Center" VerticalTextAlignment="Center"/></CollectionView.EmptyView>
                     <CollectionView.ItemTemplate>
                         <DataTemplate>
-                            <Grid ColumnDefinitions="24,Auto,*" Padding="{Binding IndentPadding}" ColumnSpacing="5" MinimumHeightRequest="38">
-                                <Button Text="{Binding ExpandGlyph}" Clicked="OnHierarchyExpandClicked" IsVisible="{Binding HasChildren}" Padding="0" WidthRequest="24" HeightRequest="30" BackgroundColor="Transparent" TextColor="#555555" FontSize="13"/>
-                                <CheckBox Grid.Column="1" IsChecked="{Binding IsChecked, Mode=TwoWay}" CheckedChanged="OnHierarchyCheckChanged" Color="#2878C8"/>
-                                <Label Grid.Column="2" Text="{Binding DisplayName}" TextColor="#202020" VerticalTextAlignment="Center" FontSize="13" LineBreakMode="TailTruncation"/>
+                            <Grid ColumnDefinitions="20,Auto,*" Padding="{Binding IndentPadding}" ColumnSpacing="4" MinimumHeightRequest="24">
+                                <Button Text="{Binding ExpandGlyph}" Clicked="OnHierarchyExpandClicked" IsVisible="{Binding HasChildren}" Padding="0" WidthRequest="20" HeightRequest="20" MinimumWidthRequest="0" MinimumHeightRequest="0" BackgroundColor="Transparent" TextColor="#555555" FontSize="11"/>
+                                <CheckBox Grid.Column="1" IsChecked="{Binding IsChecked, Mode=TwoWay}" CheckedChanged="OnHierarchyCheckChanged" WidthRequest="16" HeightRequest="16" MinimumWidthRequest="0" MinimumHeightRequest="0" Color="#2878C8"/>
+                                <Label Grid.Column="2" Text="{Binding DisplayName}" TextColor="#202020" VerticalTextAlignment="Center" FontSize="11" LineBreakMode="TailTruncation"/>
                             </Grid>
                         </DataTemplate>
                     </CollectionView.ItemTemplate>
@@ -97,12 +97,12 @@
                     <CollectionView.EmptyView><Label x:Name="ClassEmptyLabel" Text="No asset classes were loaded." TextColor="#555555" HorizontalTextAlignment="Center" VerticalTextAlignment="Center"/></CollectionView.EmptyView>
                     <CollectionView.ItemTemplate>
                         <DataTemplate>
-                            <Grid ColumnDefinitions="*,Auto" Padding="10,9" ColumnSpacing="8">
+                            <Grid ColumnDefinitions="*,Auto" Padding="5,4" ColumnSpacing="8">
                                 <VerticalStackLayout Spacing="2">
-                                    <Label Text="{Binding Name}" TextColor="#202020" FontSize="13"/>
-                                    <Label Text="{Binding Version}" TextColor="#777777" FontSize="10"/>
+                                    <Label Text="{Binding Name}" TextColor="#202020" FontSize="11"/>
+                                    <Label Text="{Binding Version}" TextColor="#777777" FontSize="9"/>
                                 </VerticalStackLayout>
-                                <Label Grid.Column="1" Text="{Binding Id}" TextColor="#555555" FontSize="12" VerticalTextAlignment="Center"/>
+                                <Label Grid.Column="1" Text="{Binding Id}" TextColor="#555555" FontSize="10" VerticalTextAlignment="Center"/>
                             </Grid>
                         </DataTemplate>
                     </CollectionView.ItemTemplate>
@@ -197,29 +197,32 @@
             </Grid>
         </Grid></Grid>        <Grid Grid.Row="3" ColumnDefinitions="*,Auto,Auto" Padding="5,2" ColumnSpacing="6" BackgroundColor="#F0F0F0">
             <Label x:Name="StatusLabel" Text="Ready to go" TextColor="#444444" FontSize="12" VerticalTextAlignment="Center"/>
-            <Button x:Name="CancelLoadButton" Grid.Column="1" Text="Cancel load" IsVisible="False" Clicked="OnCancelLoadClicked" Padding="8,3" HeightRequest="30" FontSize="11" BackgroundColor="#7B3438" TextColor="White"/>
+            <Button x:Name="CancelLoadButton" Grid.Column="1" Text="Cancel load" IsVisible="False" Clicked="OnCancelLoadClicked" Padding="8,3" HeightRequest="26" MinimumHeightRequest="0" MinimumWidthRequest="0" FontSize="10" BackgroundColor="#7B3438" TextColor="White"/>
             <ActivityIndicator x:Name="BusyIndicator" Grid.Column="2" IsRunning="False" IsVisible="False" HeightRequest="20"/>
         </Grid>
     </Grid>
     <ContentPage.Resources>
         <ResourceDictionary>
             <Style x:Key="MenuButton" TargetType="Button">
-                <Setter Property="Padding" Value="8,2"/><Setter Property="CornerRadius" Value="0"/>
-                <Setter Property="FontSize" Value="11"/><Setter Property="TextColor" Value="#202020"/>
-                <Setter Property="BackgroundColor" Value="Transparent"/><Setter Property="BorderColor" Value="#B7B7B7"/>
-                <Setter Property="BorderWidth" Value="1"/><Setter Property="HeightRequest" Value="27"/>
+                <Setter Property="Padding" Value="5,0"/><Setter Property="CornerRadius" Value="0"/>
+                <Setter Property="FontSize" Value="10"/><Setter Property="TextColor" Value="#202020"/>
+                <Setter Property="BackgroundColor" Value="#F0F0F0"/><Setter Property="BorderColor" Value="Transparent"/>
+                <Setter Property="BorderWidth" Value="0"/><Setter Property="HeightRequest" Value="25"/>
+                <Setter Property="MinimumHeightRequest" Value="0"/><Setter Property="MinimumWidthRequest" Value="0"/>
             </Style>
             <Style x:Key="HeaderButton" TargetType="Button">
                 <Setter Property="Padding" Value="2,1"/><Setter Property="CornerRadius" Value="0"/>
                 <Setter Property="FontSize" Value="10"/><Setter Property="TextColor" Value="#444444"/>
                 <Setter Property="BackgroundColor" Value="Transparent"/><Setter Property="BorderColor" Value="#B7B7B7"/>
-                <Setter Property="BorderWidth" Value="1"/><Setter Property="HeightRequest" Value="27"/>
+                <Setter Property="BorderWidth" Value="1"/><Setter Property="HeightRequest" Value="22"/>
+                <Setter Property="MinimumHeightRequest" Value="0"/><Setter Property="MinimumWidthRequest" Value="0"/>
             </Style>
             <Style x:Key="TabButton" TargetType="Button">
-                <Setter Property="Padding" Value="5,2"/><Setter Property="CornerRadius" Value="0"/>
+                <Setter Property="Padding" Value="5,0"/><Setter Property="CornerRadius" Value="0"/>
                 <Setter Property="FontSize" Value="10"/><Setter Property="TextColor" Value="#202020"/>
                 <Setter Property="BackgroundColor" Value="#E2E2E2"/><Setter Property="BorderColor" Value="#B7B7B7"/>
-                <Setter Property="BorderWidth" Value="1"/><Setter Property="HeightRequest" Value="27"/>
+                <Setter Property="BorderWidth" Value="1"/><Setter Property="HeightRequest" Value="22"/>
+                <Setter Property="MinimumHeightRequest" Value="0"/><Setter Property="MinimumWidthRequest" Value="0"/>
             </Style>
         </ResourceDictionary>
     </ContentPage.Resources>

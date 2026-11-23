@@ -38,10 +38,10 @@ The iPhone app supports portrait and landscape. On narrow screens the desktop-st
 
 This is not yet feature parity with the Windows GUI:
 
-- The native texture decoder DLL has no iOS build, so formats routed through it (including DXT, PVRTC, ETC, ASTC, and Crunch) cannot currently be converted or previewed as PNG. Batch export preserves those assets as raw serialized data and records the fallback in the ZIP manifest.
-- Audio is extracted in the stored format; the desktop FMOD-based decoder/transcoder is Windows-only.
-- Mesh preview/OBJ export operate on individual Mesh assets. Scene hierarchy, materials, animation, and FBX export are not implemented; FBX depends on the Windows Autodesk FBX SDK native library.
-- MonoBehaviour JSON export requires the asset's serialized type tree. Assembly-assisted conversion is not available in the mobile UI.
+- The mobile exporter decodes DXT1, DXT3, and DXT5 textures in managed code and includes platform-native decoder runtimes for Android, iOS, Mac Catalyst, and Windows. This adds the desktop decoder's PVRTC, ETC/EAC, ATC, ASTC, BC4/5/6H/7, and Crunch support to mobile exports. The converter also handles Unity's ARGBFloat, BGR24, and RGBFloat formats. The upstream iOS native package has only been verified by its publisher in the simulator, so physical-device decoding still needs device testing.
+- PCM audio can be exported as WAV. Other audio is exported in its stored format; the desktop FMOD-based decoder/transcoder is Windows-only, and native iOS playback is limited to codecs supported by AVAudioPlayer.
+- The mobile app builds a scene hierarchy and supports checked-scene OBJ export with hierarchy transforms, individual mesh wireframe preview, and iOS-only static FBX export. OBJ exports still omit materials and skinning; static FBX exports mesh geometry without scene transforms, materials, skinning, or animation. Animator plus AnimationClip export remains raw data rather than animated FBX.
+- MonoBehaviour JSON and text dumps use serialized type trees when present. If a MonoBehaviour has no type tree, choose **Options → Load script assemblies** and select the DLLs from the game's `Managed` folder. Mono.Cecil then rebuilds a Unity-serializable field tree for preview and export. Missing script types or unsupported field schemas are reported; converted exports preserve the original bytes as a raw `.dat` fallback.
 
 Build the iOS simulator target on Windows with:
 

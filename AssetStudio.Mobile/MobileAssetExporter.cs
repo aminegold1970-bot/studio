@@ -26,10 +26,11 @@ internal static class MobileAssetExporter
         AssetStudio.Object asset,
         MobileExportKind kind,
         string? container = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        MobileMonoBehaviourAssemblyService? monoBehaviourAssemblyService = null)
     {
         ArgumentNullException.ThrowIfNull(asset);
-        var payload = CreateExportPayload(asset, kind, container, cancellationToken);
+        var payload = CreateExportPayload(asset, kind, container, cancellationToken, monoBehaviourAssemblyService);
         return new MobileSingleExportResult(
             WriteAssetFile(asset, payload.Data, payload.Extension, cancellationToken),
             payload.UsedRawFallback,
@@ -39,9 +40,11 @@ internal static class MobileAssetExporter
     public static string ExportRaw(AssetStudio.Object asset) =>
         WriteAssetFile(asset, asset.GetRawData(), ".dat");
 
-    public static string ExportDump(AssetStudio.Object asset)
+    public static string ExportDump(
+        AssetStudio.Object asset,
+        MobileMonoBehaviourAssemblyService? monoBehaviourAssemblyService = null)
     {
-        var (data, extension) = GetDumpData(asset);
+        var (data, extension) = GetDumpData(asset, monoBehaviourAssemblyService);
         return WriteAssetFile(asset, data, extension);
     }
 
@@ -49,19 +52,22 @@ internal static class MobileAssetExporter
         IEnumerable<AssetStudio.Object> assets,
         MobileExportKind kind,
         IProgress<MainPage.AssetLoadProgress>? progress = null,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default,
+        MobileMonoBehaviourAssemblyService? monoBehaviourAssemblyService = null) =>
         ExportArchive(
             assets?.Select(asset => new MobileExportItem(asset, null))
                 ?? throw new ArgumentNullException(nameof(assets)),
             kind,
             progress,
-            cancellationToken);
+            cancellationToken,
+            monoBehaviourAssemblyService);
 
     public static MobileArchiveExportResult ExportArchive(
         IEnumerable<MobileExportItem> assets,
         MobileExportKind kind,
         IProgress<MainPage.AssetLoadProgress>? progress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        MobileMonoBehaviourAssemblyService? monoBehaviourAssemblyService = null)
     {
         ArgumentNullException.ThrowIfNull(assets);
         var sourceItems = assets.ToList();
@@ -85,7 +91,8 @@ internal static class MobileAssetExporter
                         ?? throw new InvalidDataException($"Asset {index + 1} is null.");
                     var asset = item.Asset
                         ?? throw new InvalidDataException($"Asset {index + 1} has no parsed object.");
-                    var payload = CreateExportPayload(asset, kind, item.Container, cancellationToken);
+                    var payload = CreateExportPayload(
+                        asset, kind, item.Container, cancellationToken, monoBehaviourAssemblyService);
                     var entryName = GetUniqueArchiveEntryName(
                         entryNames,
                         GetArchiveAssetName(asset, payload.Extension),
@@ -467,7 +474,8 @@ internal static class MobileAssetExporter
         AssetStudio.Object asset,
         MobileExportKind kind,
         string? container,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        MobileMonoBehaviourAssemblyService? monoBehaviourAssemblyService)
     {
         cancellationToken.ThrowIfCancellationRequested();
         try
@@ -475,8 +483,8 @@ internal static class MobileAssetExporter
             var (data, extension) = kind switch
             {
                 MobileExportKind.Raw => (asset.GetRawData(), ".dat"),
-                MobileExportKind.Dump => GetDumpData(asset),
-                _ => ExportConverted(asset, container, cancellationToken)
+                MobileExportKind.Dump => GetDumpData(asset, monoBehaviourAssemblyService),
+                _ => ExportConverted(asset, container, cancellationToken, monoBehaviourAssemblyService)
             };
             cancellationToken.ThrowIfCancellationRequested();
             return new ExportPayload(data, extension, false, null);
@@ -495,9 +503,23 @@ internal static class MobileAssetExporter
         }
     }
 
-    private static (byte[] Data, string Extension) GetDumpData(AssetStudio.Object asset)
+    private static (byte[] Data, string Extension) GetDumpData(
+        AssetStudio.Object asset,
+        MobileMonoBehaviourAssemblyService? monoBehaviourAssemblyService)
     {
-        var dump = asset.Dump();
+        string? dump;
+        if (asset is MonoBehaviour behaviour && monoBehaviourAssemblyService != null)
+        {
+            dump = monoBehaviourAssemblyService.GetDump(behaviour, out var error);
+            if (dump is null)
+                throw new NotSupportedException(
+                    error ?? "The assembly-derived MonoBehaviour dump could not be read.");
+        }
+        else
+        {
+            dump = asset.Dump();
+        }
+
         if (dump is null)
             throw new NotSupportedException($"Asset type {asset.type} does not provide a text dump.");
         return (Encoding.UTF8.GetBytes(dump), ".txt");
@@ -506,14 +528,16 @@ internal static class MobileAssetExporter
     private static (byte[] Data, string Extension) ExportConverted(
         AssetStudio.Object asset,
         string? container = null,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default,
+        MobileMonoBehaviourAssemblyService? monoBehaviourAssemblyService = null) =>
         asset switch
         {
             Texture2D texture => ExportTexture(texture, cancellationToken),
             TextAsset text => ExportTextAsset(text, container),
             AudioClip audio => ExportAudio(audio, cancellationToken),
             VideoClip video => ExportVideo(video, cancellationToken),
-            MonoBehaviour behaviour => ExportMonoBehaviour(behaviour, cancellationToken),
+            MonoBehaviour behaviour => ExportMonoBehaviour(
+                behaviour, cancellationToken, monoBehaviourAssemblyService),
             Mesh mesh => (Encoding.UTF8.GetBytes(ExportObj(mesh, cancellationToken)), ".obj"),
             AssetStudio.Font font => ExportFont(font),
             MovieTexture movie => ExportMovieTexture(movie),
@@ -591,13 +615,17 @@ internal static class MobileAssetExporter
 
     private static (byte[] Data, string Extension) ExportMonoBehaviour(
         MonoBehaviour behaviour,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        MobileMonoBehaviourAssemblyService? monoBehaviourAssemblyService)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var typeData = behaviour.ToType();
+        var conversion = monoBehaviourAssemblyService?.Convert(behaviour);
+        var typeData = conversion?.Data ?? behaviour.ToType();
         if (typeData is null)
         {
-            throw new NotSupportedException("This MonoBehaviour has no serialized type tree. Export its raw data or load the game's managed assemblies on desktop.");
+            throw new NotSupportedException(
+                conversion?.Error
+                ?? "This MonoBehaviour has no serialized type tree. Load the game's managed DLL assemblies to convert it.");
         }
 
         var data = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(typeData, Formatting.Indented));

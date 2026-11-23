@@ -69,6 +69,7 @@
 		<PackageReference Include="Microsoft.Maui.Controls" Version="$(MauiVersion)" />
 		<PackageReference Include="Microsoft.Extensions.Logging.Debug" Version="10.0.0" />
 		<PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+		<PackageReference Include="Mono.Cecil" Version="0.11.3" />
 		<PackageReference Include="Praeclarum.FbxSharp" Version="0.1.12" Condition="'$(TargetFramework)' == 'net10.0-ios'" />
 		<PackageReference Include="Kyaru.Texture2DDecoder.Android" Version="0.2.0" Condition="'$(TargetFramework)' == 'net10.0-android'" />
 		<PackageReference Include="Kyaru.Texture2DDecoder.iOS" Version="0.2.0" Condition="'$(TargetFramework)' == 'net10.0-ios'" />
@@ -85,6 +86,13 @@
 		<Compile Include="..\AssetStudioUtility\Texture2DConverter.cs" Link="Texture2DConverter.cs" />
 		<Compile Include="..\AssetStudioUtility\ShaderConverter.cs" Link="ShaderConverter.cs" />
 		<Compile Include="..\AssetStudioUtility\SpirVShaderConverter.cs" Link="SpirVShaderConverter.cs" />
+		<Compile Include="..\AssetStudioUtility\AssemblyLoader.cs" Link="MonoBehaviour\AssemblyLoader.cs" />
+		<Compile Include="..\AssetStudioUtility\MyAssemblyResolver.cs" Link="MonoBehaviour\MyAssemblyResolver.cs" />
+		<Compile Include="..\AssetStudioUtility\MonoBehaviourConverter.cs" Link="MonoBehaviour\MonoBehaviourConverter.cs" />
+		<Compile Include="..\AssetStudioUtility\SerializedTypeHelper.cs" Link="MonoBehaviour\SerializedTypeHelper.cs" />
+		<Compile Include="..\AssetStudioUtility\TypeDefinitionConverter.cs" Link="MonoBehaviour\TypeDefinitionConverter.cs" />
+		<Compile Include="..\AssetStudioUtility\Unity.CecilTools\**\*.cs" Link="MonoBehaviour\Unity.CecilTools\%(RecursiveDir)%(Filename)%(Extension)" />
+		<Compile Include="..\AssetStudioUtility\Unity.SerializationLogic\*.cs" Link="MonoBehaviour\Unity.SerializationLogic\%(Filename)%(Extension)" />
 		<Compile Include="..\AssetStudioUtility\CSspv\*.cs" Link="CSspv\%(Filename)%(Extension)" />
 		<Compile Include="..\AssetStudioUtility\Smolv\*.cs" Link="Smolv\%(Filename)%(Extension)" />
 	</ItemGroup>

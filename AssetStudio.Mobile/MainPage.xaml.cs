@@ -62,6 +62,7 @@ public partial class MainPage : ContentPage
     private bool _showingEmptyPreview = true;
     private readonly AssetDocumentLibrary _documentLibrary = new();
     private readonly AssetStudioMobileLoader _assetLoader = new();
+    private readonly MobileMonoBehaviourAssemblyService _monoBehaviourAssemblyService = new();
     private bool? _compactWorkspace;
     private bool _showingPreviewPane;
     private const double WorkspaceDividerWidth = 10;
@@ -143,20 +144,24 @@ public partial class MainPage : ContentPage
         foreach (var tab in new[] { HierarchyTab, AssetListTab, ClassesTab })
         {
             tab.FontSize = 10;
-            tab.HeightRequest = compact ? 34 : 27;
-            tab.Padding = compact ? new Thickness(3, 1) : new Thickness(5, 2);
+            tab.HeightRequest = 22;
+            tab.MinimumHeightRequest = 0;
+            tab.MinimumWidthRequest = 0;
+            tab.Padding = compact ? new Thickness(3, 0) : new Thickness(5, 0);
         }
-        AssetSearchFrame.HeightRequest = compact ? 28 : 32;
-        ClassSearchFrame.HeightRequest = compact ? 28 : 32;
-        HierarchySearchFrame.HeightRequest = compact ? 28 : 32;
+        AssetSearchFrame.HeightRequest = 21;
+        ClassSearchFrame.HeightRequest = 21;
+        HierarchySearchFrame.HeightRequest = 21;
 
         if (MenuScroll.Content is HorizontalStackLayout menu)
         {
             foreach (var child in menu.Children.OfType<Button>())
             {
-                child.FontSize = compact ? 9 : 11;
-                child.HeightRequest = compact ? 24 : 27;
-                child.Padding = compact ? new Thickness(5, 1) : new Thickness(8, 2);
+                child.FontSize = compact ? 9 : 10;
+                child.HeightRequest = compact ? 24 : 25;
+                child.MinimumHeightRequest = 0;
+                child.MinimumWidthRequest = 0;
+                child.Padding = compact ? new Thickness(4, 0) : new Thickness(5, 0);
             }
         }
 
@@ -365,6 +370,7 @@ public partial class MainPage : ContentPage
             foreach (var root in _hierarchyRoots) AddVisibleHierarchyNode(root, 0);
             _hierarchySearchResults.Clear();
             _nextHierarchySearchResult = 0;
+            HierarchySearchNextButton.IsVisible = false;
             if (_browserTab == "Scene Hierarchy")
                 StatusLabel.Text = $"Scene Hierarchy · {incoming.Count} objects";
         }
@@ -959,6 +965,7 @@ public partial class MainPage : ContentPage
         _hierarchyById.Clear();
         _hierarchySearchResults.Clear();
         _nextHierarchySearchResult = 0;
+        HierarchySearchNextButton.IsVisible = false;
         _classes.Clear();
         _visibleClasses.Clear();
         _metadataRows.Clear();
@@ -1011,7 +1018,15 @@ public partial class MainPage : ContentPage
 
     private async void OnOptionsMenuClicked(object sender, EventArgs e)
     {
-        var choice = await Choose("Options", "Display all assets", "Enable preview", "Display asset information", "Specify Unity version", "Export options");
+        var choice = await Choose(
+            "Options",
+            "Display all assets",
+            "Enable preview",
+            "Display asset information",
+            "Specify Unity version",
+            "Load script assemblies",
+            "Clear script assemblies",
+            "Export options");
         if (choice == null) return;
         switch (choice)
         {
@@ -1034,10 +1049,81 @@ public partial class MainPage : ContentPage
             case "Specify Unity version":
                 await SpecifyUnityVersionAsync();
                 break;
+            case "Load script assemblies":
+                await LoadMonoBehaviourAssembliesAsync();
+                break;
+            case "Clear script assemblies":
+                _monoBehaviourAssemblyService.Clear();
+                StatusLabel.Text = "Script assemblies cleared.";
+                if (_selectedAsset?.SourceAsset is AssetStudio.MonoBehaviour)
+                    await PresentAssetPreviewAsync(_selectedAsset);
+                break;
             case "Export options":
                 await ChooseDefaultExportKindAsync();
                 break;
             default: ReportUnwired(choice); break;
+        }
+    }
+
+    private async Task LoadMonoBehaviourAssembliesAsync()
+    {
+        SetBusy(true, "Choose the game's Managed DLL assemblies…");
+        try
+        {
+            var selected = await FilePicker.Default.PickMultipleAsync(
+                new PickOptions { PickerTitle = "Select all DLLs from the game's Managed folder" });
+            var selectedFiles = selected?.ToList() ?? new List<FileResult>();
+            var dllFiles = selectedFiles
+                .Where(file => string.Equals(Path.GetExtension(file.FileName), ".dll", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            var skippedSelections = selectedFiles
+                .Where(file => !string.Equals(Path.GetExtension(file.FileName), ".dll", StringComparison.OrdinalIgnoreCase))
+                .Select(file => $"Ignored non-DLL selection: {file.FileName}")
+                .ToList();
+            if (dllFiles.Count == 0)
+            {
+                SetBusy(false, selectedFiles.Count > 0
+                    ? "No DLL files selected."
+                    : "Assembly selection cancelled.");
+                return;
+            }
+
+            var persisted = new List<FileResult>(dllFiles.Count);
+            foreach (var file in dllFiles)
+            {
+                SetBusy(true, $"Copying {file.FileName} to Library…");
+                var imported = await _documentLibrary.ImportAsync(file);
+                if (string.IsNullOrWhiteSpace(imported.FullPath) || !File.Exists(imported.FullPath))
+                    throw new IOException($"The selected assembly '{file.FileName}' was not saved to the AssetStudio library.");
+                persisted.Add(imported);
+            }
+
+            SetBusy(true, $"Reading {persisted.Count} managed assemblies…");
+            var summary = await Task.Run(() =>
+                _monoBehaviourAssemblyService.LoadFiles(persisted.Select(file => file.FullPath)));
+            var warnings = summary.Warnings.Concat(skippedSelections).ToList();
+            var warningText = warnings.Count == 0
+                ? string.Empty
+                : $" · {warnings.Count} skipped";
+            SetBusy(false, $"{summary.LoadedAssemblyCount} script assemblies loaded{warningText}");
+
+            if (warnings.Count > 0)
+            {
+                var details = string.Join(Environment.NewLine, warnings.Take(8));
+                await DisplayAlert("Some assemblies were skipped", details, "OK");
+            }
+
+            if (_selectedAsset is { SourceAsset: AssetStudio.MonoBehaviour } selectedAsset)
+                await PresentAssetPreviewAsync(selectedAsset);
+        }
+        catch (OperationCanceledException)
+        {
+            SetBusy(false, "Assembly selection cancelled.");
+        }
+        catch (Exception exception)
+        {
+            SetBusy(false, $"Assembly load failed: {exception.Message}");
+            await DisplayAlert("Assembly load failed", exception.Message, "OK");
         }
     }
 
@@ -1381,7 +1467,8 @@ public partial class MainPage : ContentPage
                             item.Asset,
                             kind,
                             item.Container,
-                            cancellation.Token),
+                            cancellation.Token,
+                            _monoBehaviourAssemblyService),
                         cancellation.Token);
                     outputPath = result.FilePath;
                     rawFallbackCount = result.UsedRawFallback ? 1 : 0;
@@ -1390,7 +1477,8 @@ public partial class MainPage : ContentPage
                 else
                 {
                     var result = await Task.Run(
-                        () => MobileAssetExporter.ExportArchive(exportItems, kind, progress, cancellation.Token),
+                        () => MobileAssetExporter.ExportArchive(
+                            exportItems, kind, progress, cancellation.Token, _monoBehaviourAssemblyService),
                         cancellation.Token);
                     outputPath = result.ArchivePath;
                     rawFallbackCount = result.RawFallbackCount;
@@ -1534,7 +1622,8 @@ public partial class MainPage : ContentPage
         AssetSearchFrame.IsVisible = _browserTab == "Asset List";
         ClassSearchFrame.IsVisible = _browserTab == "Asset Classes";
         HierarchySearchPanel.IsVisible = _browserTab == "Scene Hierarchy";
-        HierarchyActions.IsVisible = _browserTab == "Scene Hierarchy";
+        HierarchySearchNextButton.IsVisible = _browserTab == "Scene Hierarchy" && _hierarchySearchResults.Count > 0;
+        HierarchyActions.IsVisible = _browserTab == "Scene Hierarchy" && _hierarchy.Count > 0;
         AssetColumnHeaders.IsVisible = _compactWorkspace != true && _browserTab == "Asset List";
         StatusLabel.Text = _browserTab switch
         {
@@ -1628,10 +1717,12 @@ public partial class MainPage : ContentPage
         var query = e.NewTextValue?.Trim() ?? string.Empty;
         if (query.Length == 0)
         {
+            HierarchySearchNextButton.IsVisible = false;
             StatusLabel.Text = $"{_hierarchy.Count} visible / {_hierarchyById.Count} scene objects";
             return;
         }
         foreach (var root in _hierarchyRoots) CollectHierarchyMatches(root, query);
+        HierarchySearchNextButton.IsVisible = _hierarchySearchResults.Count > 0;
         StatusLabel.Text = _hierarchySearchResults.Count == 0
             ? "No matching scene objects"
             : $"{_hierarchySearchResults.Count} scene object matches · press Enter or Next";
@@ -1843,19 +1934,24 @@ public partial class MainPage : ContentPage
                         $"Mesh · {mesh.m_VertexCount:N0} vertices · Open the wireframe preview to inspect it.");
                     break;
                 case AssetStudio.MonoBehaviour behaviour:
-                    var behaviourData = await Task.Run(() => behaviour.ToType());
+                    var conversion = await Task.Run(() => _monoBehaviourAssemblyService.Convert(behaviour));
                     if (_selectedAsset?.Id != row.Id) return;
-                    if (behaviourData != null)
+                    if (conversion.Data != null)
                     {
                         var json = Newtonsoft.Json.JsonConvert.SerializeObject(
-                            behaviourData, Newtonsoft.Json.Formatting.Indented);
-                        ShowTextPreview(row.Name, "MonoBehaviour", json);
+                            conversion.Data, Newtonsoft.Json.Formatting.Indented);
+                        ShowTextPreview(
+                            row.Name,
+                            conversion.AssemblyAssisted ? "MonoBehaviour · assembly-assisted" : "MonoBehaviour",
+                            json);
                     }
                     else
                     {
-                        ShowTextPreview(row.Name, "MonoBehaviour dump",
+                        ShowTextPreview(
+                            row.Name,
+                            "MonoBehaviour dump",
                             behaviour.Dump() ?? string.Empty,
-                            "No serialized type tree is available for this asset; showing the raw dump.");
+                            conversion.Error ?? "No serialized type tree or assembly-derived schema is available.");
                     }
                     break;
                 case AssetStudio.AudioClip audio:
@@ -2156,7 +2252,15 @@ public partial class MainPage : ContentPage
         DumpText.Text = "Generating serialized dump…";
         try
         {
-            var dump = await Task.Run(() => asset.Dump() ?? string.Empty);
+            var dump = await Task.Run(() =>
+            {
+                if (asset is not AssetStudio.MonoBehaviour behaviour)
+                    return asset.Dump() ?? string.Empty;
+
+                var text = _monoBehaviourAssemblyService.GetDump(behaviour, out var error);
+                return text ?? throw new NotSupportedException(
+                    error ?? "The assembly-derived MonoBehaviour dump could not be read.");
+            });
             if (_selectedAsset?.Id == row.Id)
                 DumpText.Text = dump;
         }
