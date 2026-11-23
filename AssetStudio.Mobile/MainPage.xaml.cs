@@ -53,11 +53,14 @@ public partial class MainPage : ContentPage
     private readonly List<AssetRow> _selectedAssets = new();
     private bool _showingDump;
     private readonly AssetDocumentLibrary _documentLibrary = new();
+    private readonly AssetStudioMobileLoader _assetLoader = new();
     private bool _dropBridgeAttached;
 
     public MainPage()
     {
         InitializeComponent();
+        _assetLoader.MainPageHost = SetAssets;
+        AssetFilesSelected += _assetLoader.LoadFilesAsync;
         BindableLayout.SetItemsSource(MetadataHost, _metadataRows);
         BindableLayout.SetItemTemplate(MetadataHost, new DataTemplate(() =>
         {
@@ -76,6 +79,45 @@ public partial class MainPage : ContentPage
         DroppedFilesReceived += OnDroppedFilesReceived;
     }
 
+
+
+    private void OnWorkspaceSizeChanged(object? sender, EventArgs e)
+    {
+        // AssetStudio's desktop workspace is a browser pane beside a preview pane.
+        // Keep that arrangement in landscape; stack the panes on a narrow portrait screen.
+        if (WorkspaceGrid.Width <= 0 || WorkspaceGrid.Height <= 0)
+            return;
+
+        bool landscape = WorkspaceGrid.Width >= WorkspaceGrid.Height;
+        if (landscape)
+        {
+            WorkspaceGrid.ColumnDefinitions = new ColumnDefinitionCollection
+            {
+                new ColumnDefinition(new GridLength(38, GridUnitType.Star)),
+                new ColumnDefinition(new GridLength(1)),
+                new ColumnDefinition(new GridLength(62, GridUnitType.Star))
+            };
+            WorkspaceGrid.RowDefinitions = new RowDefinitionCollection { new RowDefinition(GridLength.Star) };
+            Grid.SetRow(BrowserPane, 0); Grid.SetColumn(BrowserPane, 0);
+            Grid.SetRow(WorkspaceDivider, 0); Grid.SetColumn(WorkspaceDivider, 1);
+            WorkspaceDivider.WidthRequest = 1; WorkspaceDivider.HeightRequest = -1;
+            Grid.SetRow(PreviewPane, 0); Grid.SetColumn(PreviewPane, 2);
+        }
+        else
+        {
+            WorkspaceGrid.ColumnDefinitions = new ColumnDefinitionCollection { new ColumnDefinition(GridLength.Star) };
+            WorkspaceGrid.RowDefinitions = new RowDefinitionCollection
+            {
+                new RowDefinition(new GridLength(45, GridUnitType.Star)),
+                new RowDefinition(new GridLength(1)),
+                new RowDefinition(new GridLength(55, GridUnitType.Star))
+            };
+            Grid.SetRow(BrowserPane, 0); Grid.SetColumn(BrowserPane, 0);
+            Grid.SetRow(WorkspaceDivider, 1); Grid.SetColumn(WorkspaceDivider, 0);
+            WorkspaceDivider.WidthRequest = -1; WorkspaceDivider.HeightRequest = 1;
+            Grid.SetRow(PreviewPane, 2); Grid.SetColumn(PreviewPane, 0);
+        }
+    }
 
     protected override void OnHandlerChanged()
     {
@@ -151,7 +193,7 @@ public partial class MainPage : ContentPage
         catch (Exception ex)
         {
             SetBusy(false, $"Load failed: {ex.Message}");
-            if (_showErrorMessages) await DisplayAlert("Asset loading failed", ex.Message, "OK");
+            await DisplayAlert("Asset loading failed", ex.Message, "OK");
         }
         finally { _loadCancellation = null; }
     }
@@ -159,13 +201,16 @@ public partial class MainPage : ContentPage
     // Integration points for the real mobile asset-loading layer.
     public void SetAssets(IEnumerable<AssetRow> assets)
     {
-        MainThread.BeginInvokeOnMainThread(() =>
+        var incoming = assets?.ToList() ?? new List<AssetRow>();
+        void Apply()
         {
             _allAssets.Clear();
-            foreach (var asset in assets) _allAssets.Add(asset);
+            foreach (var asset in incoming) _allAssets.Add(asset);
             ApplyAssetFilter();
             StatusLabel.Text = $"{_allAssets.Count} assets";
-        });
+        }
+        if (MainThread.IsMainThread) Apply();
+        else MainThread.BeginInvokeOnMainThread(Apply);
     }
 
     // Supply the original GameObject tree as a flat sequence with stable IDs and
@@ -648,7 +693,7 @@ public partial class MainPage : ContentPage
         {
             SetBusy(false, "Ready");
             StatusLabel.Text = $"File import failed: {ex.Message}";
-            if (_showErrorMessages) await DisplayAlert("File import failed", ex.Message, "OK");
+            await DisplayAlert("File import failed", ex.Message, "OK");
         }
     }
 

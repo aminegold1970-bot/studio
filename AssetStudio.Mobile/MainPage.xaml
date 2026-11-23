@@ -48,8 +48,8 @@
             </Grid>
         </Grid>
 
-        <Grid Grid.Row="3" RowDefinitions="2*,Auto,3*" BackgroundColor="#17191D">
-            <Grid Grid.Row="0">
+        <Grid x:Name="WorkspaceGrid" Grid.Row="3" ColumnDefinitions="38*,Auto,62*" BackgroundColor="#17191D" ColumnSpacing="0" SizeChanged="OnWorkspaceSizeChanged">
+            <Grid x:Name="BrowserPane" Grid.Column="0">
                 <CollectionView x:Name="AssetCollection" SelectionMode="Multiple"
                                 SelectionChanged="OnAssetSelectionChanged" BackgroundColor="#17191D">
                     <CollectionView.EmptyView>
@@ -104,8 +104,8 @@
                     </CollectionView.ItemTemplate>
                 </CollectionView>
             </Grid>
-            <BoxView Grid.Row="1" HeightRequest="1" Color="#3B414B"/>
-            <Grid Grid.Row="2" RowDefinitions="Auto,*" BackgroundColor="#1D2025">
+            <BoxView x:Name="WorkspaceDivider" Grid.Column="1" WidthRequest="1" Color="#3B414B"/>
+            <Grid x:Name="PreviewPane" Grid.Column="2" RowDefinitions="Auto,*" BackgroundColor="#1D2025">
                 <Grid ColumnDefinitions="*,*" Padding="6" ColumnSpacing="5">
                     <Button x:Name="PreviewTab" Text="Preview" Clicked="OnPreviewTabClicked" Style="{StaticResource TabButton}"/>
                     <Button x:Name="DumpTab" Grid.Column="1" Text="Dump" Clicked="OnDumpTabClicked" Style="{StaticResource TabButton}"/>
