@@ -31,8 +31,13 @@ jobs:
             global.json
             NuGet.config
 
+      - name: Set up .NET 6
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 6.0.x
+
       - name: Verify .NET SDK
-        run: dotnet --version
+        run: dotnet --info
 
       - name: Install .NET iOS workload
         run: dotnet workload install maui-ios --version 10.0.401
@@ -43,12 +48,61 @@ jobs:
       - name: Verify Apple toolchain
         run: xcodebuild -version
 
+      - name: Clean generated NuGet assets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for project in \
+            AssetStudio \
+            AssetStudio.PInvoke \
+            Texture2DDecoderWrapper \
+            AssetStudio.Mobile
+          do
+            if [ -d "$project/obj" ]; then
+              rm -rf "$project/obj"
+            fi
+          done
+
+      - name: Restore AssetStudio dependencies (.NET 6)
+        run: |
+          dotnet restore AssetStudio/AssetStudio.csproj \
+            -p:TargetFramework=net6.0
+
+          dotnet restore AssetStudio.PInvoke/AssetStudio.PInvoke.csproj \
+            -p:TargetFramework=net6.0
+
+          dotnet restore Texture2DDecoderWrapper/Texture2DDecoderWrapper.csproj \
+            -p:TargetFramework=net6.0
+
       - name: Restore iOS app and referenced projects
         run: |
           dotnet restore AssetStudio.Mobile/AssetStudioMobile.csproj \
             --runtime ios-arm64 \
-            -p:TargetFramework=net10.0-ios \
-            --verbosity minimal
+            -p:TargetFramework=net10.0-ios
+
+      - name: Verify restored targets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for project in \
+            AssetStudio \
+            AssetStudio.PInvoke \
+            Texture2DDecoderWrapper
+          do
+            assets="$project/obj/project.assets.json"
+
+            if [ ! -f "$assets" ]; then
+              echo "::error::Missing $assets"
+              exit 1
+            fi
+
+            if ! grep -q '"net6.0"' "$assets"; then
+              echo "::error::$assets does not contain net6.0"
+              exit 1
+            fi
+          done
 
       - name: Publish unsigned Release app for ARM64
         run: |
@@ -89,7 +143,7 @@ jobs:
           unzip -tq "$ipa_path"
 
           if ! unzip -Z1 "$ipa_path" | grep -Eq '^Payload/[^/]+\.app/Info\.plist$'; then
-            echo "::error::Invalid IPA structure"
+            echo "::error::The generated IPA does not contain a valid app bundle"
             exit 1
           fi
 
