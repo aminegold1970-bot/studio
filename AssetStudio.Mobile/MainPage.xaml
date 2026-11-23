@@ -3,6 +3,7 @@
     <Grid RowDefinitions="Auto,*,Auto" RowSpacing="0" ColumnDefinitions="*">
         <ScrollView Grid.Row="0" Orientation="Horizontal" BackgroundColor="#F0F0F0">
             <HorizontalStackLayout Padding="5,1" Spacing="0">
+                <Button Text="Open files" Clicked="OnOpenFilesClicked" Style="{StaticResource MenuButton}"/>
                 <Button Text="File" Clicked="OnFileMenuClicked" Style="{StaticResource MenuButton}"/>
                 <Button Text="Library" Clicked="OnLibraryClicked" Style="{StaticResource MenuButton}"/>
                 <Button Text="Options" Clicked="OnOptionsMenuClicked" Style="{StaticResource MenuButton}"/>
@@ -13,7 +14,7 @@
             </HorizontalStackLayout>
         </ScrollView>
 
-        <Grid x:Name="WorkspaceGrid" Grid.Row="1" ColumnDefinitions="75*,1,25*" RowDefinitions="Auto,*" ColumnSpacing="0" BackgroundColor="#B7B7B7" SizeChanged="OnWorkspaceSizeChanged">
+        <Grid x:Name="WorkspaceGrid" Grid.Row="1" ColumnDefinitions="75*,20,25*" RowDefinitions="Auto,*" ColumnSpacing="0" BackgroundColor="#B7B7B7" SizeChanged="OnWorkspaceSizeChanged">
             <Grid x:Name="CompactWorkspaceTabs" Grid.Row="0" ColumnDefinitions="*,*" Padding="4,2" ColumnSpacing="2" BackgroundColor="#F0F0F0" IsVisible="False">
                 <Button x:Name="CompactAssetsButton" Text="Assets" CommandParameter="Assets" Clicked="OnCompactWorkspaceTabClicked" Style="{StaticResource TabButton}"/>
                 <Button x:Name="CompactPreviewButton" Grid.Column="1" Text="Preview" CommandParameter="Preview" Clicked="OnCompactWorkspaceTabClicked" Style="{StaticResource TabButton}"/>
@@ -99,7 +100,11 @@
                     </CollectionView.ItemTemplate>
                 </CollectionView>
             </Grid>
-            </Grid><BoxView x:Name="WorkspaceDivider" Grid.Row="1" Grid.Column="1" WidthRequest="1" BackgroundColor="#888888"/><Grid x:Name="PreviewPane" Grid.Row="1" Grid.Column="2" RowDefinitions="*" RowSpacing="0" BackgroundColor="#A7A5A6"><Grid RowDefinitions="Auto,*" BackgroundColor="#F0F0F0" Grid.Row="0">
+            </Grid><Grid x:Name="WorkspaceDivider" Grid.Row="1" Grid.Column="1" WidthRequest="20" BackgroundColor="Transparent"
+                         AutomationProperties.Name="Resize asset and preview panes"
+                         SemanticProperties.Hint="Drag horizontally to resize the asset list and preview panes">
+                <BoxView WidthRequest="1" BackgroundColor="#888888" HorizontalOptions="Center"/>
+            </Grid><Grid x:Name="PreviewPane" Grid.Row="1" Grid.Column="2" RowDefinitions="*" RowSpacing="0" BackgroundColor="#A7A5A6"><Grid RowDefinitions="Auto,*" BackgroundColor="#F0F0F0" Grid.Row="0">
                 <Grid ColumnDefinitions="Auto,Auto,*" Padding="2,1" ColumnSpacing="1" BackgroundColor="#F0F0F0">
                     <Button x:Name="PreviewTab" Text="Preview" Clicked="OnPreviewTabClicked" Style="{StaticResource TabButton}"/>
                     <Button x:Name="DumpTab" Grid.Column="1" Text="Dump" Clicked="OnDumpTabClicked" Style="{StaticResource TabButton}"/>

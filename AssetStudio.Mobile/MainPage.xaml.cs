@@ -65,6 +65,9 @@ public partial class MainPage : ContentPage
     private bool _dropBridgeAttached;
     private bool? _compactWorkspace;
     private bool _showingCompactPreview;
+    private const double WorkspaceDividerWidth = 20;
+    private double _workspaceBrowserRatio = 0.75;
+    private double _workspaceDragStartRatio = 0.75;
 
     public MainPage()
     {
@@ -98,6 +101,9 @@ public partial class MainPage : ContentPage
         ClassesCollection.ItemsSource = _visibleClasses;
         RefreshBrowserTab();
         DroppedFilesReceived += OnDroppedFilesReceived;
+        var workspaceSplitter = new PanGestureRecognizer();
+        workspaceSplitter.PanUpdated += OnWorkspaceDividerPanUpdated;
+        WorkspaceDivider.GestureRecognizers.Add(workspaceSplitter);
     }
 
 
@@ -138,12 +144,7 @@ public partial class MainPage : ContentPage
         }
         else
         {
-            WorkspaceGrid.ColumnDefinitions = new ColumnDefinitionCollection
-            {
-                new ColumnDefinition(new GridLength(75, GridUnitType.Star)),
-                new ColumnDefinition(new GridLength(1)),
-                new ColumnDefinition(new GridLength(25, GridUnitType.Star))
-            };
+            ApplyWorkspacePaneRatio();
             WorkspaceGrid.RowDefinitions = new RowDefinitionCollection { new RowDefinition(GridLength.Star) };
             Grid.SetRow(BrowserPane, 0);
             Grid.SetColumn(BrowserPane, 0);
@@ -151,7 +152,7 @@ public partial class MainPage : ContentPage
             Grid.SetColumn(WorkspaceDivider, 1);
             Grid.SetRow(PreviewPane, 0);
             Grid.SetColumn(PreviewPane, 2);
-            WorkspaceDivider.WidthRequest = 1;
+            WorkspaceDivider.WidthRequest = WorkspaceDividerWidth;
             WorkspaceDivider.HeightRequest = -1;
             WorkspaceDivider.IsVisible = true;
             BrowserPane.IsVisible = true;
@@ -160,6 +161,45 @@ public partial class MainPage : ContentPage
 
         foreach (var asset in _allAssets)
             asset.IsCompactLayout = compact;
+    }
+
+    private void OnWorkspaceDividerPanUpdated(object? sender, PanUpdatedEventArgs e)
+    {
+        if (_compactWorkspace == true)
+            return;
+
+        if (e.StatusType == GestureStatus.Started)
+        {
+            _workspaceDragStartRatio = _workspaceBrowserRatio;
+            return;
+        }
+
+        if (e.StatusType == GestureStatus.Running)
+        {
+            var availableWidth = WorkspaceGrid.Width - WorkspaceDividerWidth;
+            if (availableWidth <= 0)
+                return;
+            var ratio = _workspaceDragStartRatio + e.TotalX / availableWidth;
+            _workspaceBrowserRatio = Math.Clamp(ratio, 0.25, 0.85);
+            ApplyWorkspacePaneRatio();
+            return;
+        }
+
+        if (e.StatusType == GestureStatus.Completed)
+        {
+            var browserPercent = (int)Math.Round(_workspaceBrowserRatio * 100);
+            StatusLabel.Text = $"Asset list {browserPercent}% · Preview {100 - browserPercent}%";
+        }
+    }
+
+    private void ApplyWorkspacePaneRatio()
+    {
+        WorkspaceGrid.ColumnDefinitions = new ColumnDefinitionCollection
+        {
+            new(new GridLength(_workspaceBrowserRatio, GridUnitType.Star)),
+            new(new GridLength(WorkspaceDividerWidth, GridUnitType.Absolute)),
+            new(new GridLength(1 - _workspaceBrowserRatio, GridUnitType.Star))
+        };
     }
 
     private void OnCompactWorkspaceTabClicked(object? sender, EventArgs e)
@@ -675,6 +715,9 @@ public partial class MainPage : ContentPage
         }
     }
 
+    private async void OnOpenFilesClicked(object sender, EventArgs e) =>
+        await PickAssetFilesAsync(allowMultiple: true);
+
     private async Task ExtractFilesAsync()
     {
         if (ExtractFilesRequested == null)
@@ -850,7 +893,7 @@ public partial class MainPage : ContentPage
         }
     }
 
-    private async Task PickAssetFilesAsync(bool allowMultiple = false)
+    private async Task PickAssetFilesAsync(bool allowMultiple = true)
     {
         SetBusy(true, allowMultiple ? "Choose Unity files…" : "Choose a Unity file…");
         try
@@ -871,7 +914,17 @@ public partial class MainPage : ContentPage
 
             if (selected.Count == 0)
             {
-                SetBusy(false, "File selection cancelled.");
+                SetBusy(false, "No files selected. In Files, select a file before returning to AssetStudio.");
+                return;
+            }
+
+            if (!await DisplayAlert(
+                    "Open selected files?",
+                    $"Open {selected.Count} file(s) in AssetStudio?",
+                    "Open",
+                    "Cancel"))
+            {
+                SetBusy(false, "File opening cancelled.");
                 return;
             }
 
@@ -1743,7 +1796,7 @@ public partial class MainPage : ContentPage
                         shaderSource.Replace("\n", "\r\n").Replace("\0", ""));
                     break;
                 case AssetStudio.Sprite sprite:
-                    PreviewDetails.Text = "Cropped sprite preview; packed tight-mesh transparency and separate alpha textures are not applied.";
+                    PreviewDetails.Text = "Cropped sprite preview with packed rotation, tight-mesh masking, and separate alpha texture applied when present.";
                     var spriteImage = await Task.Run(() => MobileAssetExporter.Export(sprite));
                     if (_selectedAsset?.Id != row.Id) return;
                     ShowTexturePreview(row.Name, ImageSource.FromFile(spriteImage),

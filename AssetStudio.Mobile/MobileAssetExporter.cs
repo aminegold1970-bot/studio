@@ -310,7 +310,9 @@ internal static class MobileAssetExporter
     private static (byte[] Data, string Extension) ExportSprite(Sprite sprite)
     {
         Texture2D texture;
+        Texture2D? alphaTexture = null;
         Rectf textureRect;
+        Vector2 textureRectOffset;
         SpriteSettings settings;
         float downscaleMultiplier;
         if (sprite.m_SpriteAtlas.TryGet(out var atlas)
@@ -318,12 +320,16 @@ internal static class MobileAssetExporter
             && atlasData.texture.TryGet(out texture))
         {
             textureRect = atlasData.textureRect;
+            textureRectOffset = atlasData.textureRectOffset;
+            atlasData.alphaTexture?.TryGet(out alphaTexture);
             settings = atlasData.settingsRaw;
             downscaleMultiplier = atlasData.downscaleMultiplier;
         }
         else if (sprite.m_RD.texture.TryGet(out texture))
         {
             textureRect = sprite.m_RD.textureRect;
+            textureRectOffset = sprite.m_RD.textureRectOffset;
+            sprite.m_RD.alphaTexture?.TryGet(out alphaTexture);
             settings = sprite.m_RD.settingsRaw;
             downscaleMultiplier = sprite.m_RD.downscaleMultiplier;
         }
@@ -333,6 +339,7 @@ internal static class MobileAssetExporter
         }
 
         var source = DecodeTexture(texture);
+        var alphaSource = alphaTexture == null ? null : DecodeTexture(alphaTexture);
         var scale = downscaleMultiplier > 0 && float.IsFinite(downscaleMultiplier)
             ? 1f / downscaleMultiplier
             : 1f;
@@ -353,6 +360,8 @@ internal static class MobileAssetExporter
             throw new InvalidDataException("The sprite has an empty or out-of-range texture rectangle.");
 
         var rotation = settings.packed == 1 ? settings.packingRotation : SpritePackingRotation.None;
+        if (rotation is < SpritePackingRotation.None or > SpritePackingRotation.Rotate90)
+            throw new NotSupportedException($"Sprite packing rotation {rotation} is not supported.");
         var outputWidth = rotation == SpritePackingRotation.Rotate90 ? cropHeight : cropWidth;
         var outputHeight = rotation == SpritePackingRotation.Rotate90 ? cropWidth : cropHeight;
         var output = new byte[checked(outputWidth * outputHeight * 4)];
@@ -371,11 +380,208 @@ internal static class MobileAssetExporter
                 var sourceOffset = checked(((top + sourceY) * texture.m_Width + left + sourceX) * 4);
                 var outputOffset = checked((y * outputWidth + x) * 4);
                 Buffer.BlockCopy(source, sourceOffset, output, outputOffset, 4);
+                if (alphaSource != null)
+                {
+                    var alphaX = Math.Clamp(
+                        (int)((left + sourceX + 0.5) * alphaTexture!.m_Width / texture.m_Width),
+                        0, alphaTexture.m_Width - 1);
+                    var alphaY = Math.Clamp(
+                        (int)((top + sourceY + 0.5) * alphaTexture.m_Height / texture.m_Height),
+                        0, alphaTexture.m_Height - 1);
+                    var alphaOffset = checked((alphaY * alphaTexture.m_Width + alphaX) * 4);
+                    var alphaChannel = alphaTexture.m_TextureFormat == TextureFormat.Alpha8
+                        ? alphaSource[alphaOffset + 3]
+                        : alphaSource[alphaOffset + 2];
+                    output[outputOffset + 3] =
+                        (byte)(output[outputOffset + 3] * alphaChannel / 255);
+                }
             }
+        }
+
+        if (settings.packingMode == SpritePackingMode.Tight)
+        {
+            ApplySpriteMeshMask(sprite, textureRectOffset, rotation, cropWidth, cropHeight,
+                output, outputWidth, outputHeight);
         }
 
         return (EncodePng(outputWidth, outputHeight, output), ".png");
     }
+
+    private static void ApplySpriteMeshMask(
+        Sprite sprite,
+        Vector2 textureRectOffset,
+        SpritePackingRotation rotation,
+        int cropWidth,
+        int cropHeight,
+        byte[] pixels,
+        int width,
+        int height)
+    {
+        var renderData = sprite.m_RD;
+        var triangles = ReadSpriteTriangles(renderData);
+        if (triangles.Count == 0)
+            throw new NotSupportedException("The tight-packed sprite has no readable triangles.");
+
+        var covered = new bool[checked(width * height)];
+        foreach (var triangle in triangles)
+        {
+            var p1 = TransformSpritePoint(sprite, textureRectOffset, rotation, cropWidth, cropHeight, triangle.A);
+            var p2 = TransformSpritePoint(sprite, textureRectOffset, rotation, cropWidth, cropHeight, triangle.B);
+            var p3 = TransformSpritePoint(sprite, textureRectOffset, rotation, cropWidth, cropHeight, triangle.C);
+            if (!double.IsFinite(p1.X) || !double.IsFinite(p1.Y)
+                || !double.IsFinite(p2.X) || !double.IsFinite(p2.Y)
+                || !double.IsFinite(p3.X) || !double.IsFinite(p3.Y))
+                throw new InvalidDataException("The sprite mesh contains invalid vertex positions.");
+            var area = Edge(p1, p2, p3.X, p3.Y);
+            if (!double.IsFinite(area) || Math.Abs(area) < 1e-8)
+                continue;
+
+            var rawMinX = Math.Floor(Math.Min(p1.X, Math.Min(p2.X, p3.X)));
+            var rawMaxX = Math.Ceiling(Math.Max(p1.X, Math.Max(p2.X, p3.X)));
+            var rawMinY = Math.Floor(Math.Min(p1.Y, Math.Min(p2.Y, p3.Y)));
+            var rawMaxY = Math.Ceiling(Math.Max(p1.Y, Math.Max(p2.Y, p3.Y)));
+            if (rawMaxX < 0 || rawMinX >= width || rawMaxY < 0 || rawMinY >= height)
+                continue;
+            var minX = ClampPixel(rawMinX, width - 1);
+            var maxX = ClampPixel(rawMaxX, width - 1);
+            var minY = ClampPixel(rawMinY, height - 1);
+            var maxY = ClampPixel(rawMaxY, height - 1);
+            for (var y = minY; y <= maxY; y++)
+            {
+                for (var x = minX; x <= maxX; x++)
+                {
+                    var pointX = x + 0.5;
+                    var pointY = y + 0.5;
+                    var edge1 = Edge(p1, p2, pointX, pointY);
+                    var edge2 = Edge(p2, p3, pointX, pointY);
+                    var edge3 = Edge(p3, p1, pointX, pointY);
+                    if ((area > 0 && edge1 >= 0 && edge2 >= 0 && edge3 >= 0)
+                        || (area < 0 && edge1 <= 0 && edge2 <= 0 && edge3 <= 0))
+                    {
+                        covered[y * width + x] = true;
+                    }
+                }
+            }
+        }
+
+        for (var index = 0; index < covered.Length; index++)
+        {
+            if (!covered[index])
+                pixels[index * 4 + 3] = 0;
+        }
+    }
+
+    private static List<(Vector3 A, Vector3 B, Vector3 C)> ReadSpriteTriangles(SpriteRenderData renderData)
+    {
+        var triangles = new List<(Vector3 A, Vector3 B, Vector3 C)>();
+        if (renderData.vertices is { Length: > 0 } && renderData.indices is { Length: > 0 })
+        {
+            for (var index = 0; index + 2 < renderData.indices.Length; index += 3)
+            {
+                if (renderData.indices[index] >= renderData.vertices.Length
+                    || renderData.indices[index + 1] >= renderData.vertices.Length
+                    || renderData.indices[index + 2] >= renderData.vertices.Length)
+                    throw new InvalidDataException("The sprite index buffer references a missing vertex.");
+                triangles.Add((
+                    renderData.vertices[renderData.indices[index]].pos,
+                    renderData.vertices[renderData.indices[index + 1]].pos,
+                    renderData.vertices[renderData.indices[index + 2]].pos));
+            }
+            return triangles;
+        }
+
+        var vertexData = renderData.m_VertexData;
+        if (vertexData?.m_Channels is not { Length: > 0 }
+            || vertexData.m_Streams is not { Length: > 0 }
+            || vertexData.m_DataSize is not { Length: > 0 }
+            || renderData.m_SubMeshes is not { Length: > 0 }
+            || renderData.m_IndexBuffer is not { Length: > 0 })
+        {
+            return triangles;
+        }
+
+        var channel = vertexData.m_Channels[0];
+        if (channel.stream >= vertexData.m_Streams.Length)
+            throw new InvalidDataException("The sprite vertex channel references an invalid stream.");
+        var stream = vertexData.m_Streams[channel.stream];
+        if (stream.stride < channel.offset + 12)
+            throw new InvalidDataException("The sprite vertex stream has an invalid stride.");
+
+        foreach (var subMesh in renderData.m_SubMeshes)
+        {
+            if (subMesh.indexCount % 3 != 0)
+                throw new NotSupportedException("The tight sprite mesh is not a triangle list.");
+            var firstIndexByte = checked((int)subMesh.firstByte);
+            var indexCount = checked((int)subMesh.indexCount);
+            if (firstIndexByte < 0 || firstIndexByte > renderData.m_IndexBuffer.Length
+                || indexCount > (renderData.m_IndexBuffer.Length - firstIndexByte) / 2)
+                throw new InvalidDataException("The sprite index buffer is truncated.");
+
+            for (var index = 0; index < indexCount; index += 3)
+            {
+                var a = ReadSpriteVertex(renderData, stream, channel, subMesh,
+                    ReadUInt16(renderData.m_IndexBuffer, firstIndexByte + index * 2));
+                var b = ReadSpriteVertex(renderData, stream, channel, subMesh,
+                    ReadUInt16(renderData.m_IndexBuffer, firstIndexByte + (index + 1) * 2));
+                var c = ReadSpriteVertex(renderData, stream, channel, subMesh,
+                    ReadUInt16(renderData.m_IndexBuffer, firstIndexByte + (index + 2) * 2));
+                triangles.Add((a, b, c));
+                if (triangles.Count > 100_000)
+                    throw new NotSupportedException("The sprite mesh exceeds the mobile preview limit.");
+            }
+        }
+        return triangles;
+    }
+
+    private static Vector3 ReadSpriteVertex(
+        SpriteRenderData renderData,
+        StreamInfo stream,
+        ChannelInfo channel,
+        SubMesh subMesh,
+        ushort index)
+    {
+        if (index < subMesh.firstVertex)
+            throw new InvalidDataException("The sprite index buffer references a vertex before its submesh.");
+        var vertexIndex = (uint)index - subMesh.firstVertex;
+        if (vertexIndex >= subMesh.vertexCount)
+            throw new InvalidDataException("The sprite index buffer references a vertex outside its submesh.");
+        var positionOffset = (long)stream.offset + (long)subMesh.firstVertex * stream.stride
+            + (long)vertexIndex * stream.stride + channel.offset;
+        if (positionOffset < 0 || positionOffset + 12 > renderData.m_VertexData.m_DataSize.Length)
+            throw new InvalidDataException("The sprite vertex buffer is truncated.");
+        var position = (int)positionOffset;
+        return new Vector3(
+            BitConverter.ToSingle(renderData.m_VertexData.m_DataSize, position),
+            BitConverter.ToSingle(renderData.m_VertexData.m_DataSize, position + 4),
+            BitConverter.ToSingle(renderData.m_VertexData.m_DataSize, position + 8));
+    }
+
+    private static ushort ReadUInt16(byte[] buffer, int offset) =>
+        BinaryPrimitives.ReadUInt16LittleEndian(buffer.AsSpan(offset, sizeof(ushort)));
+
+    private static int ClampPixel(double value, int maximum) =>
+        (int)Math.Clamp(value, 0, maximum);
+
+    private static (double X, double Y) TransformSpritePoint(
+        Sprite sprite, Vector2 textureRectOffset, SpritePackingRotation rotation,
+        int cropWidth, int cropHeight, Vector3 position)
+    {
+        var x = position.X * sprite.m_PixelsToUnits
+            + sprite.m_Rect.width * sprite.m_Pivot.X - textureRectOffset.X;
+        var y = position.Y * sprite.m_PixelsToUnits
+            + sprite.m_Rect.height * sprite.m_Pivot.Y - textureRectOffset.Y;
+        return rotation switch
+        {
+            SpritePackingRotation.FlipHorizontal => (cropWidth - x, y),
+            SpritePackingRotation.FlipVertical => (x, cropHeight - y),
+            SpritePackingRotation.Rotate180 => (cropWidth - x, cropHeight - y),
+            SpritePackingRotation.Rotate90 => (cropHeight - y, x),
+            _ => (x, y)
+        };
+    }
+
+    private static double Edge((double X, double Y) a, (double X, double Y) b, double x, double y) =>
+        (x - a.X) * (b.Y - a.Y) - (y - a.Y) * (b.X - a.X);
 
     private static byte[] EncodePng(int width, int height, byte[] bgra)
     {

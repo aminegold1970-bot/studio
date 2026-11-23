@@ -55,7 +55,7 @@ public sealed class AssetLibraryPage : ContentPage
         };
         _search.TextChanged += (_, _) => ApplyFilter();
 
-        var loadButton = MakeButton("Load selected", async () =>
+        var loadButton = MakeButton("Open selected", async () =>
         {
             var files = _all.Where(entry => _selected.Contains(entry.File.FullPath)).Select(entry => entry.File).ToList();
             if (files.Count == 0) { await DisplayAlert("Asset Library", "Select one or more saved files first.", "OK"); return; }
