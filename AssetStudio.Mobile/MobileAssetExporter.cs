@@ -1109,6 +1109,8 @@ internal static class MobileAssetExporter
             : audio.m_CompressionFormat switch
             {
                 AudioCompressionFormat.AAC => ".m4a",
+                AudioCompressionFormat.MP3 => ".mp3",
+                AudioCompressionFormat.Vorbis => ".ogg",
                 _ => ".fsb"
             };
 

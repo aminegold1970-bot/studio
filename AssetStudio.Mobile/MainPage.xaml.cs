@@ -57,6 +57,10 @@ public partial class MainPage : ContentPage
     private readonly List<HierarchyRow> _hierarchySearchResults = new();
     private int _nextHierarchySearchResult;
     private AssetRow? _selectedAsset;
+#if IOS || ANDROID
+    private AssetStudio.AudioClip? _selectedAudioClip;
+#endif
+    private bool _isPickingAssetFiles;
     private readonly List<AssetRow> _selectedAssets = new();
     private bool _showingDump;
     private bool _showingEmptyPreview = true;
@@ -903,9 +907,16 @@ public partial class MainPage : ContentPage
 
     private async Task PickAssetFilesAsync(bool allowMultiple = false)
     {
-        SetBusy(true, allowMultiple ? "Choose Unity files…" : "Choose a Unity file…");
+        if (_isPickingAssetFiles)
+            return;
+
+        _isPickingAssetFiles = true;
         try
         {
+#if IOS
+            await WaitForActionSheetDismissalAsync();
+#endif
+            SetBusy(true, allowMultiple ? "Choose Unity files…" : "Choose a Unity file…");
             List<FileResult> selected;
             if (allowMultiple)
             {
@@ -949,7 +960,28 @@ public partial class MainPage : ContentPage
             StatusLabel.Text = $"File import failed: {ex.Message}";
             await DisplayAlert("File import failed", ex.Message, "OK");
         }
+        finally
+        {
+            _isPickingAssetFiles = false;
+        }
     }
+
+#if IOS
+    private async Task WaitForActionSheetDismissalAsync()
+    {
+        if (Handler?.PlatformView is not UIKit.UIViewController presenter)
+            return;
+
+        for (var attempt = 0; attempt < 40; attempt++)
+        {
+            if (presenter.PresentedViewController is not UIKit.UIAlertController)
+                return;
+            await Task.Delay(50);
+        }
+
+        throw new InvalidOperationException("The iOS menu did not dismiss before the file picker was opened. Try again.");
+    }
+#endif
 
     // Mirrors the original ResetForm() lifecycle before a confirmed new load.
     // Existing content is retained when the native picker is cancelled.
@@ -1879,7 +1911,7 @@ public partial class MainPage : ContentPage
 
     private void OnAssetSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-#if IOS
+#if IOS || ANDROID
         StopPreviewAudio();
 #endif
         _selectedAssets.Clear();
@@ -1955,11 +1987,11 @@ public partial class MainPage : ContentPage
                     }
                     break;
                 case AssetStudio.AudioClip audio:
-#if IOS
+#if IOS || ANDROID
                     _selectedAudioClip = audio;
 #endif
                     ShowAudioPreview(row.Name, audio.m_CompressionFormat.ToString(),
-                        $"Length: {audio.m_Length:N2} seconds · {audio.m_Channels} channel(s)\nPlay attempts native iOS playback; unsupported codecs can still be exported.");
+                        $"Length: {audio.m_Length:N2} seconds · {audio.m_Channels} channel(s)\nPlay uses the native audio player; unsupported codecs can still be exported.");
                     break;
                 case AssetStudio.Font font:
                     ShowFontPreview(row.Name,
@@ -2022,7 +2054,6 @@ public partial class MainPage : ContentPage
     }
 
 #if IOS
-    private AssetStudio.AudioClip? _selectedAudioClip;
     private AVAudioPlayer? _audioPlayer;
     private string? _registeredPreviewFontPath;
 
@@ -2102,6 +2133,8 @@ public partial class MainPage : ContentPage
         }
         catch (Exception ex)
         {
+            if (!ReferenceEquals(_selectedAudioClip, clip))
+                return;
             StatusLabel.Text = $"Audio playback failed: {ex.Message}";
             await DisplayAlert("Audio playback failed", ex.Message, "OK");
         }
@@ -2116,9 +2149,10 @@ public partial class MainPage : ContentPage
 
     private void OnAudioStopRequested(object? sender, EventArgs e)
     {
+        var duration = _audioPlayer?.Duration ?? 0;
         _audioPlayer?.Stop();
         if (_audioPlayer != null && _selectedAudioClip != null)
-            UpdateAudioPlaybackState("Stopped", 0, _audioPlayer.Duration, _selectedAudioClip.m_Frequency);
+            UpdateAudioPlaybackState("Stopped", 0, duration, _selectedAudioClip.m_Frequency);
     }
 
     private void OnAudioLoopChanged(bool enabled)
@@ -2146,10 +2180,110 @@ public partial class MainPage : ContentPage
         _audioPlayer = null;
         _selectedAudioClip = null;
     }
+#elif ANDROID
+    private MobileAndroidAudioPlayer? _audioPlayer;
+
+    private async void OnAudioPlaybackRequested(object? sender, EventArgs e)
+    {
+        var clip = _selectedAudioClip;
+        if (clip == null)
+            return;
+
+        try
+        {
+            if (_audioPlayer is { IsPrepared: false })
+            {
+                _audioPlayer.Dispose();
+                _audioPlayer = null;
+            }
+
+            if (_audioPlayer == null)
+            {
+                var path = await Task.Run(() => MobileAssetExporter.Export(clip));
+                if (!ReferenceEquals(_selectedAudioClip, clip))
+                    return;
+
+                var player = new MobileAndroidAudioPlayer();
+                _audioPlayer = player;
+                await player.PrepareAsync(path);
+                if (!ReferenceEquals(_audioPlayer, player))
+                    return;
+
+                player.Looping = _audioLoopEnabled;
+                player.Volume = AudioVolumeSlider.Value;
+                player.PlaybackCompleted += (_, _) =>
+                {
+                    if (ReferenceEquals(_audioPlayer, player))
+                        UpdateAudioPlaybackState("Stopped", player.CurrentTime, player.Duration, clip.m_Frequency);
+                };
+            }
+
+            _audioPlayer.Play();
+            var activePlayer = _audioPlayer;
+            Dispatcher.StartTimer(TimeSpan.FromMilliseconds(250), () =>
+            {
+                if (!ReferenceEquals(_audioPlayer, activePlayer))
+                    return false;
+                UpdateAudioPlaybackState(
+                    activePlayer.IsPlaying ? "Playing" : activePlayer.IsPaused ? "Paused" : "Stopped",
+                    activePlayer.CurrentTime,
+                    activePlayer.Duration,
+                    clip.m_Frequency);
+                return activePlayer.IsPlaying;
+            });
+            UpdateAudioPlaybackState("Playing", activePlayer.CurrentTime, activePlayer.Duration, clip.m_Frequency);
+        }
+        catch (Exception ex)
+        {
+            if (!ReferenceEquals(_selectedAudioClip, clip))
+                return;
+            StatusLabel.Text = $"Audio playback failed: {ex.Message}";
+            await DisplayAlert("Audio playback failed", ex.Message, "OK");
+        }
+    }
+
+    private void OnAudioPauseRequested(object? sender, EventArgs e)
+    {
+        _audioPlayer?.Pause();
+        if (_audioPlayer != null && _selectedAudioClip != null)
+            UpdateAudioPlaybackState("Paused", _audioPlayer.CurrentTime, _audioPlayer.Duration, _selectedAudioClip.m_Frequency);
+    }
+
+    private void OnAudioStopRequested(object? sender, EventArgs e)
+    {
+        var player = _audioPlayer;
+        var duration = player?.Duration ?? 0;
+        player?.Stop();
+        player?.Dispose();
+        _audioPlayer = null;
+        if (_selectedAudioClip != null)
+            UpdateAudioPlaybackState("Stopped", 0, duration, _selectedAudioClip.m_Frequency);
+    }
+
+    private void OnAudioLoopChanged(bool enabled)
+    {
+        if (_audioPlayer != null)
+            _audioPlayer.Looping = enabled;
+    }
+
+    private void OnAudioSeekRequested(double seconds) => _audioPlayer?.Seek(seconds);
+
+    private void OnAudioVolumeChanged(double volume)
+    {
+        if (_audioPlayer != null)
+            _audioPlayer.Volume = volume;
+    }
+
+    private void StopPreviewAudio()
+    {
+        _audioPlayer?.Dispose();
+        _audioPlayer = null;
+        _selectedAudioClip = null;
+    }
 #else
     private async void OnAudioPlaybackRequested(object? sender, EventArgs e) =>
         await DisplayAlert("Audio playback unavailable",
-            "Audio playback is implemented only for the iOS app. The clip can still be exported.", "OK");
+            "Audio playback is unavailable on this platform. The clip can still be exported.", "OK");
 
     private static void OnAudioPauseRequested(object? sender, EventArgs e) { }
     private static void OnAudioStopRequested(object? sender, EventArgs e) { }
@@ -2171,7 +2305,7 @@ public partial class MainPage : ContentPage
 
     private void ClearSelectedAsset()
     {
-#if IOS
+#if IOS || ANDROID
         StopPreviewAudio();
 #endif
         _selectedAsset = null;
