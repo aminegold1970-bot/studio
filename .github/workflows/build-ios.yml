@@ -77,7 +77,8 @@ jobs:
             -m \
             -p:EnableCodeSigning=false \
             -p:ArchiveOnBuild=false \
-            -p:BuildIpa=false
+            -p:BuildIpa=false \
+            -p:PublishTrimmed=false
 
       - name: Package unsigned app as IPA
         shell: bash
