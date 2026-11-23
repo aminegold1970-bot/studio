@@ -16,7 +16,7 @@ internal sealed class MeshPreviewPage : ContentPage
         _graphicsView = new GraphicsView
         {
             Drawable = _drawable,
-            BackgroundColor = MauiColor.FromArgb("#111827")
+            BackgroundColor = MauiColor.FromArgb("#A7A5A6")
         };
 
         var pan = new PanGestureRecognizer();
@@ -31,13 +31,13 @@ internal sealed class MeshPreviewPage : ContentPage
         var instructions = new Label
         {
             Text = "Drag to rotate • Pinch to zoom",
-            TextColor = Colors.Gray,
+            TextColor = MauiColor.FromArgb("#555555"),
             HorizontalTextAlignment = TextAlignment.Center,
             Margin = new Thickness(0, 10, 0, 4)
         };
         var grid = new Grid
         {
-            Padding = 12,
+            Padding = 4,
             RowDefinitions =
             {
                 new RowDefinition { Height = GridLength.Star },
@@ -150,7 +150,7 @@ internal sealed class MeshWireframeDrawable : IDrawable
 
     public void Draw(ICanvas canvas, RectF dirtyRect)
     {
-        canvas.FillColor = MauiColor.FromArgb("#111827");
+        canvas.FillColor = MauiColor.FromArgb("#A7A5A6");
         canvas.FillRectangle(dirtyRect);
         var bounds = GetBounds();
         var centerX = (bounds.MinX + bounds.MaxX) * 0.5f;
@@ -182,7 +182,7 @@ internal sealed class MeshWireframeDrawable : IDrawable
                 dirtyRect.Center.Y - rotatedY * scale);
         }
 
-        canvas.StrokeColor = MauiColor.FromArgb("#7DD3FC");
+        canvas.StrokeColor = MauiColor.FromArgb("#555555");
         canvas.StrokeSize = 1f;
         foreach (var (a, b, c) in _triangles)
         {

@@ -8,8 +8,15 @@ public sealed class AssetLibraryPage : ContentPage
     private readonly AssetDocumentLibrary _library;
     private readonly Func<IReadOnlyList<FileResult>, Task> _load;
     private readonly CollectionView _items = new();
-    private readonly SearchBar _search = new() { Placeholder = "Search saved files…", FontSize = 14 };
-    private readonly Label _summary = new() { FontSize = 12, TextColor = Color.FromArgb("#929BA8") };
+    private readonly SearchBar _search = new()
+    {
+        Placeholder = "Search saved files…",
+        FontSize = 14,
+        TextColor = Color.FromArgb("#202020"),
+        PlaceholderColor = Color.FromArgb("#777777"),
+        BackgroundColor = Colors.White
+    };
+    private readonly Label _summary = new() { FontSize = 12, TextColor = Color.FromArgb("#666666") };
     private readonly List<LibraryFileEntry> _all = new();
     private readonly HashSet<string> _selected = new(StringComparer.Ordinal);
 
@@ -18,21 +25,27 @@ public sealed class AssetLibraryPage : ContentPage
         _library = library;
         _load = load;
         Title = "Asset Library";
-        BackgroundColor = Color.FromArgb("#171B22");
+        BackgroundColor = Colors.White;
         _items.SelectionMode = SelectionMode.Multiple;
         _items.ItemTemplate = new DataTemplate(() =>
         {
-            var name = new Label { FontSize = 13, TextColor = Colors.White, LineBreakMode = LineBreakMode.MiddleTruncation };
+            var name = new Label { FontSize = 13, TextColor = Color.FromArgb("#202020"), LineBreakMode = LineBreakMode.MiddleTruncation };
             name.SetBinding(Label.TextProperty, nameof(LibraryFileEntry.StoredName));
-            var detail = new Label { FontSize = 11, TextColor = Color.FromArgb("#929BA8") };
+            var detail = new Label { FontSize = 11, TextColor = Color.FromArgb("#666666") };
             detail.SetBinding(Label.TextProperty, new MultiBinding
             {
                 StringFormat = "{0} · {1}",
                 Bindings = { new Binding(nameof(LibraryFileEntry.DisplaySize)), new Binding(nameof(LibraryFileEntry.DisplayDate)) }
             });
-            var stack = new VerticalStackLayout { Spacing = 3, Padding = new Thickness(10, 8) };
-            stack.Add(name); stack.Add(detail);
-            return new Border { Stroke = Color.FromArgb("#303744"), StrokeThickness = 1, StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 8 }, Margin = new Thickness(0, 3), Content = stack };
+            var stack = new VerticalStackLayout { Spacing = 3, Padding = new Thickness(8, 6) };
+            stack.Add(name);
+            stack.Add(detail);
+            var row = new Grid { RowDefinitions = { new RowDefinition(GridLength.Auto), new RowDefinition(1) } };
+            row.Add(stack);
+            var separator = new BoxView { Color = Color.FromArgb("#D6D6D6") };
+            Grid.SetRow(separator, 1);
+            row.Add(separator);
+            return row;
         });
         _items.SelectionChanged += (_, e) =>
         {
@@ -64,7 +77,7 @@ public sealed class AssetLibraryPage : ContentPage
         {
             Padding = new Thickness(14, 10), RowSpacing = 10,
             RowDefinitions = { new RowDefinition(GridLength.Auto), new RowDefinition(GridLength.Auto), new RowDefinition(GridLength.Auto), new RowDefinition(GridLength.Star), new RowDefinition(GridLength.Auto) },
-            Children = { new Label { Text = "Saved Unity files", FontSize = 20, FontAttributes = FontAttributes.Bold, TextColor = Colors.White }, _search, _summary, _items, actions }
+            Children = { new Label { Text = "Saved Unity files", FontSize = 16, FontAttributes = FontAttributes.Bold, TextColor = Color.FromArgb("#202020") }, _search, _summary, _items, actions }
         };
         Grid.SetRow(_search, 1); Grid.SetRow(_summary, 2); Grid.SetRow(_items, 3); Grid.SetRow(actions, 4);
         Refresh();
@@ -72,7 +85,18 @@ public sealed class AssetLibraryPage : ContentPage
 
     private static Button MakeButton(string text, Func<Task> action)
     {
-        var button = new Button { Text = text, FontSize = 12, Padding = new Thickness(5, 10), BackgroundColor = Color.FromArgb("#303744"), TextColor = Colors.White };
+        var button = new Button
+        {
+            Text = text,
+            FontSize = 12,
+            Padding = new Thickness(5, 6),
+            MinimumHeightRequest = 36,
+            CornerRadius = 0,
+            BorderWidth = 1,
+            BorderColor = Color.FromArgb("#B7B7B7"),
+            BackgroundColor = Color.FromArgb("#E2E2E2"),
+            TextColor = Color.FromArgb("#202020")
+        };
         button.Clicked += async (_, _) => await action();
         return button;
     }

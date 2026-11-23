@@ -78,7 +78,7 @@
                         <DataTemplate>
                             <Grid ColumnDefinitions="24,Auto,*" Padding="{Binding IndentPadding}" ColumnSpacing="5" MinimumHeightRequest="38">
                                 <Button Text="{Binding ExpandGlyph}" Clicked="OnHierarchyExpandClicked" IsVisible="{Binding HasChildren}" Padding="0" WidthRequest="24" HeightRequest="30" BackgroundColor="Transparent" TextColor="#555555" FontSize="13"/>
-                                <CheckBox Grid.Column="1" IsChecked="{Binding IsChecked, Mode=TwoWay}" CheckedChanged="OnHierarchyCheckChanged" Color="#8B78D6"/>
+                                <CheckBox Grid.Column="1" IsChecked="{Binding IsChecked, Mode=TwoWay}" CheckedChanged="OnHierarchyCheckChanged" Color="#2878C8"/>
                                 <Label Grid.Column="2" Text="{Binding DisplayName}" TextColor="#202020" VerticalTextAlignment="Center" FontSize="13" LineBreakMode="TailTruncation"/>
                             </Grid>
                         </DataTemplate>

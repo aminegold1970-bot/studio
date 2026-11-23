@@ -214,7 +214,7 @@ public partial class MainPage : ContentPage
             await DisplayAlert("Asset Library", "No saved source files yet. Drop files here or use File → Load file; imported files are kept in Documents/AssetStudio/Library.", "OK");
             return;
         }
-        await Navigation.PushModalAsync(new NavigationPage(new AssetLibraryPage(_documentLibrary,
+        await Navigation.PushModalAsync(CreateModalNavigationPage(new AssetLibraryPage(_documentLibrary,
             files => LoadPersistentFilesAsync(files, "Saved library"))));
     }
 
@@ -1080,11 +1080,7 @@ public partial class MainPage : ContentPage
             _selectedTypes = selected == null || selected.Count == types.Length ? null : selected;
             ApplyAssetFilter();
         });
-        await Navigation.PushModalAsync(new NavigationPage(dialog)
-        {
-            BarBackgroundColor = Color.FromArgb("#E8E8E8"),
-            BarTextColor = Color.FromArgb("#202020")
-        });
+        await Navigation.PushModalAsync(CreateModalNavigationPage(dialog));
     }
 
     private async void OnDebugMenuClicked(object sender, EventArgs e)
@@ -1417,13 +1413,20 @@ public partial class MainPage : ContentPage
 
         try
         {
-            await Navigation.PushModalAsync(new NavigationPage(new MeshPreviewPage(mesh)));
+            await Navigation.PushModalAsync(CreateModalNavigationPage(new MeshPreviewPage(mesh)));
         }
         catch (Exception ex)
         {
             await DisplayAlert("Mesh preview failed", ex.Message, "OK");
         }
     }
+
+    private static NavigationPage CreateModalNavigationPage(Page page) =>
+        new(page)
+        {
+            BarBackgroundColor = Color.FromArgb("#E2E2E2"),
+            BarTextColor = Color.FromArgb("#202020")
+        };
 
     // Returns the current multi-selection in the same order reported by CollectionView.
     // Export commands can consume this list once connected to the real exporter.
@@ -1556,7 +1559,7 @@ public partial class MainPage : ContentPage
                 list.Add(row);
             }
 
-            var apply = new Button { Text = "Apply", BackgroundColor = Color.FromArgb("#2878C8"), TextColor = Colors.White };
+            var apply = new Button { Text = "Apply", BackgroundColor = Color.FromArgb("#E2E2E2"), TextColor = Color.FromArgb("#202020") };
             apply.Clicked += async (_, _) => await Finish(true);
             var cancel = new Button { Text = "Cancel", BackgroundColor = Color.FromArgb("#E0E0E0"), TextColor = Color.FromArgb("#202020") };
             cancel.Clicked += async (_, _) => await Finish(false);
