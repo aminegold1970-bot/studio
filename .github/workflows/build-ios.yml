@@ -25,6 +25,7 @@ jobs:
           dotnet-version: 10.0.x
 
       - name: Cache .NET iOS workload packs
+        id: ios-workload-cache
         uses: actions/cache@v4
         with:
           path: |
@@ -45,6 +46,7 @@ jobs:
         run: dotnet --version
 
       - name: Install .NET iOS workload
+        if: steps.ios-workload-cache.outputs.cache-hit != 'true'
         run: dotnet workload install maui-ios --version 10.0.401
 
       - name: Select Xcode 26.6
@@ -54,7 +56,7 @@ jobs:
         run: xcodebuild -version
 
       - name: Restore iOS app and referenced projects
-        run: dotnet restore AssetStudio.Mobile/AssetStudioMobile.csproj --runtime ios-arm64
+        run: dotnet restore AssetStudio.Mobile/AssetStudioMobile.csproj --runtime ios-arm64 -p:BuildIosOnly=true
 
       - name: Publish unsigned Release app for ARM64
         run: >-
@@ -63,6 +65,7 @@ jobs:
           --framework net10.0-ios
           --runtime ios-arm64
           --no-restore
+          -p:BuildIosOnly=true
           -p:EnableCodeSigning=false
           -p:ArchiveOnBuild=false
           -p:BuildIpa=false
