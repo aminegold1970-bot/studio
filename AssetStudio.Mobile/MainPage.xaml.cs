@@ -63,6 +63,7 @@ public partial class MainPage : ContentPage
     private readonly AssetDocumentLibrary _documentLibrary = new();
     private readonly AssetStudioMobileLoader _assetLoader = new();
     private bool? _compactWorkspace;
+    private bool _showingPreviewPane;
     private const double WorkspaceDividerWidth = 10;
     private double _workspaceBrowserRatio = 0.38;
     private double _workspaceDragStartRatio = 0.38;
@@ -117,23 +118,37 @@ public partial class MainPage : ContentPage
             return;
 
         _compactWorkspace = compact;
-        ApplyWorkspacePaneRatio();
+        WorkspaceGrid.ColumnDefinitions = compact
+            ? new ColumnDefinitionCollection { new(GridLength.Star) }
+            : new ColumnDefinitionCollection
+            {
+                new(new GridLength(_workspaceBrowserRatio, GridUnitType.Star)),
+                new(new GridLength(WorkspaceDividerWidth, GridUnitType.Absolute)),
+                new(new GridLength(1 - _workspaceBrowserRatio, GridUnitType.Star))
+            };
+        Grid.SetColumn(BrowserPane, 0);
+        Grid.SetColumn(WorkspaceDivider, compact ? 0 : 1);
+        Grid.SetColumn(PreviewPane, compact ? 0 : 2);
         WorkspaceDivider.WidthRequest = WorkspaceDividerWidth;
         WorkspaceDivider.HeightRequest = -1;
-        WorkspaceDivider.IsVisible = true;
+        WorkspaceDivider.IsVisible = !compact;
+        WorkspaceViewTabs.IsVisible = compact;
+        BrowserPane.IsVisible = !compact || !_showingPreviewPane;
+        PreviewPane.IsVisible = !compact || _showingPreviewPane;
+        RefreshWorkspaceTabs();
 
-        HierarchyTab.Text = compact ? "Scene\nHierarchy" : "Scene Hierarchy";
-        AssetListTab.Text = compact ? "Asset\nList" : "Asset List";
-        ClassesTab.Text = compact ? "Asset\nClasses" : "Asset Classes";
+        HierarchyTab.Text = "Scene Hierarchy";
+        AssetListTab.Text = "Asset List";
+        ClassesTab.Text = "Asset Classes";
         foreach (var tab in new[] { HierarchyTab, AssetListTab, ClassesTab })
         {
-            tab.FontSize = compact ? 8 : 10;
+            tab.FontSize = 10;
             tab.HeightRequest = compact ? 34 : 27;
-            tab.Padding = compact ? new Thickness(0, 1) : new Thickness(5, 2);
+            tab.Padding = compact ? new Thickness(3, 1) : new Thickness(5, 2);
         }
-        AssetSearch.HeightRequest = compact ? 28 : 32;
-        ClassSearch.HeightRequest = compact ? 28 : 32;
-        HierarchySearch.HeightRequest = compact ? 28 : 32;
+        AssetSearchFrame.HeightRequest = compact ? 28 : 32;
+        ClassSearchFrame.HeightRequest = compact ? 28 : 32;
+        HierarchySearchFrame.HeightRequest = compact ? 28 : 32;
 
         if (MenuScroll.Content is HorizontalStackLayout menu)
         {
@@ -148,6 +163,23 @@ public partial class MainPage : ContentPage
         AssetColumnHeaders.IsVisible = !compact && _browserTab == "Asset List";
         foreach (var asset in _allAssets)
             asset.IsCompactLayout = compact;
+    }
+
+    private void OnWorkspaceTabClicked(object sender, EventArgs e)
+    {
+        if (sender is not Button button)
+            return;
+
+        _showingPreviewPane = button.CommandParameter as string == "Preview";
+        BrowserPane.IsVisible = !_showingPreviewPane;
+        PreviewPane.IsVisible = _showingPreviewPane;
+        RefreshWorkspaceTabs();
+    }
+
+    private void RefreshWorkspaceTabs()
+    {
+        AssetsWorkspaceTab.BackgroundColor = _showingPreviewPane ? Color.FromArgb("#E2E2E2") : Color.FromArgb("#FFFFFF");
+        PreviewWorkspaceTab.BackgroundColor = _showingPreviewPane ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
     }
 
     private void OnWorkspaceDividerPanUpdated(object? sender, PanUpdatedEventArgs e)
@@ -1490,8 +1522,8 @@ public partial class MainPage : ContentPage
         AssetCollection.IsVisible = _browserTab == "Asset List";
         HierarchyCollection.IsVisible = _browserTab == "Scene Hierarchy";
         ClassesCollection.IsVisible = _browserTab == "Asset Classes";
-        AssetSearch.IsVisible = _browserTab == "Asset List";
-        ClassSearch.IsVisible = _browserTab == "Asset Classes";
+        AssetSearchFrame.IsVisible = _browserTab == "Asset List";
+        ClassSearchFrame.IsVisible = _browserTab == "Asset Classes";
         HierarchySearchPanel.IsVisible = _browserTab == "Scene Hierarchy";
         HierarchyActions.IsVisible = _browserTab == "Scene Hierarchy";
         AssetColumnHeaders.IsVisible = _compactWorkspace != true && _browserTab == "Asset List";

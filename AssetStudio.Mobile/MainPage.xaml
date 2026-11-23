@@ -1,6 +1,6 @@
 <?xml version='1.0' encoding='utf-8'?>
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui" xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml" x:Class="AssetStudioMobile.MainPage" Shell.NavBarIsVisible="False" BackgroundColor="#FFFFFF">
-    <Grid RowDefinitions="Auto,*,Auto" RowSpacing="0" ColumnDefinitions="*">
+    <Grid RowDefinitions="Auto,Auto,*,Auto" RowSpacing="0" ColumnDefinitions="*">
         <ScrollView x:Name="MenuScroll" Grid.Row="0" Orientation="Horizontal" BackgroundColor="#F0F0F0">
             <HorizontalStackLayout Padding="5,1" Spacing="0">
                 <Button Text="File" Clicked="OnFileMenuClicked" Style="{StaticResource MenuButton}"/>
@@ -12,7 +12,15 @@
             </HorizontalStackLayout>
         </ScrollView>
 
-        <Grid x:Name="WorkspaceGrid" Grid.Row="1" ColumnDefinitions="38*,10,62*" RowDefinitions="*" ColumnSpacing="0" BackgroundColor="#B7B7B7" SizeChanged="OnWorkspaceSizeChanged">
+        <Grid x:Name="WorkspaceViewTabs" Grid.Row="1" ColumnDefinitions="*,*" Padding="2,1" ColumnSpacing="1"
+              BackgroundColor="#F0F0F0" IsVisible="False">
+            <Button x:Name="AssetsWorkspaceTab" Grid.Column="0" Text="Assets" CommandParameter="Assets"
+                    Clicked="OnWorkspaceTabClicked" Style="{StaticResource TabButton}"/>
+            <Button x:Name="PreviewWorkspaceTab" Grid.Column="1" Text="Preview" CommandParameter="Preview"
+                    Clicked="OnWorkspaceTabClicked" Style="{StaticResource TabButton}"/>
+        </Grid>
+
+        <Grid x:Name="WorkspaceGrid" Grid.Row="2" ColumnDefinitions="38*,10,62*" RowDefinitions="*" ColumnSpacing="0" BackgroundColor="#B7B7B7" SizeChanged="OnWorkspaceSizeChanged">
             <Grid x:Name="BrowserPane" Grid.Row="0" Grid.Column="0" RowDefinitions="Auto,Auto,*" RowSpacing="0" BackgroundColor="#FFFFFF"><Grid x:Name="BrowserTabsGrid" Grid.Row="0" ColumnDefinitions="*,*,*" Padding="2,1" ColumnSpacing="1" BackgroundColor="#F0F0F0">
             <Button x:Name="HierarchyTab" Grid.Column="0" Text="Scene Hierarchy" CommandParameter="Scene Hierarchy" Clicked="OnBrowserTabClicked" Style="{StaticResource TabButton}"/>
             <Button x:Name="AssetListTab" Grid.Column="1" Text="Asset List" CommandParameter="Asset List" Clicked="OnBrowserTabClicked" Style="{StaticResource TabButton}"/>
@@ -20,10 +28,16 @@
         </Grid>
 
         <Grid Grid.Row="1" RowDefinitions="34,Auto,Auto,Auto" Padding="3,1" BackgroundColor="#F0F0F0">
-            <SearchBar x:Name="AssetSearch" Placeholder="Search" PlaceholderColor="#777777" TextColor="#202020" BackgroundColor="#FFFFFF" HeightRequest="32" FontSize="12" Margin="0" TextChanged="OnAssetSearchTextChanged"/>
-            <SearchBar x:Name="ClassSearch" Grid.Row="0" IsVisible="False" Placeholder="Search" PlaceholderColor="#777777" TextColor="#202020" BackgroundColor="#FFFFFF" HeightRequest="32" FontSize="12" Margin="0" TextChanged="OnClassSearchTextChanged"/>
+            <Border x:Name="AssetSearchFrame" Stroke="#B7B7B7" StrokeThickness="1" Padding="5,0" BackgroundColor="#FFFFFF" HeightRequest="32">
+                <Entry x:Name="AssetSearch" Placeholder="Search" PlaceholderColor="#777777" TextColor="#202020" BackgroundColor="Transparent" MinimumHeightRequest="0" FontSize="12" Margin="0" TextChanged="OnAssetSearchTextChanged"/>
+            </Border>
+            <Border x:Name="ClassSearchFrame" Grid.Row="0" IsVisible="False" Stroke="#B7B7B7" StrokeThickness="1" Padding="5,0" BackgroundColor="#FFFFFF" HeightRequest="32">
+                <Entry x:Name="ClassSearch" Placeholder="Search" PlaceholderColor="#777777" TextColor="#202020" BackgroundColor="Transparent" MinimumHeightRequest="0" FontSize="12" Margin="0" TextChanged="OnClassSearchTextChanged"/>
+            </Border>
             <Grid x:Name="HierarchySearchPanel" Grid.Row="0" IsVisible="False" ColumnDefinitions="*,Auto" ColumnSpacing="5">
-                <SearchBar x:Name="HierarchySearch" Placeholder="Search" PlaceholderColor="#777777" TextColor="#202020" BackgroundColor="#FFFFFF" HeightRequest="32" FontSize="12" Margin="0" SearchButtonPressed="OnHierarchySearchButtonPressed" TextChanged="OnHierarchySearchTextChanged"/>
+                <Border x:Name="HierarchySearchFrame" Stroke="#B7B7B7" StrokeThickness="1" Padding="5,0" BackgroundColor="#FFFFFF" HeightRequest="32">
+                    <Entry x:Name="HierarchySearch" Placeholder="Search" PlaceholderColor="#777777" TextColor="#202020" BackgroundColor="Transparent" MinimumHeightRequest="0" FontSize="12" Margin="0" ReturnType="Search" Completed="OnHierarchySearchButtonPressed" TextChanged="OnHierarchySearchTextChanged"/>
+                </Border>
                 <Button Grid.Column="1" Text="Next" Clicked="OnHierarchySearchNextClicked" Style="{StaticResource TabButton}"/>
             </Grid>
             <HorizontalStackLayout x:Name="HierarchyActions" Grid.Row="1" IsVisible="False" Spacing="5" Padding="0,3">
@@ -181,7 +195,7 @@
                     <Label x:Name="DumpText" Text="Select an asset to view its dump." TextColor="#202020" FontFamily="monospace" FontSize="11"/>
                 </ScrollView>
             </Grid>
-        </Grid></Grid>        <Grid Grid.Row="2" ColumnDefinitions="*,Auto,Auto" Padding="5,2" ColumnSpacing="6" BackgroundColor="#F0F0F0">
+        </Grid></Grid>        <Grid Grid.Row="3" ColumnDefinitions="*,Auto,Auto" Padding="5,2" ColumnSpacing="6" BackgroundColor="#F0F0F0">
             <Label x:Name="StatusLabel" Text="Ready to go" TextColor="#444444" FontSize="12" VerticalTextAlignment="Center"/>
             <Button x:Name="CancelLoadButton" Grid.Column="1" Text="Cancel load" IsVisible="False" Clicked="OnCancelLoadClicked" Padding="8,3" HeightRequest="30" FontSize="11" BackgroundColor="#7B3438" TextColor="White"/>
             <ActivityIndicator x:Name="BusyIndicator" Grid.Column="2" IsRunning="False" IsVisible="False" HeightRequest="20"/>
@@ -192,17 +206,20 @@
             <Style x:Key="MenuButton" TargetType="Button">
                 <Setter Property="Padding" Value="8,2"/><Setter Property="CornerRadius" Value="0"/>
                 <Setter Property="FontSize" Value="11"/><Setter Property="TextColor" Value="#202020"/>
-                <Setter Property="BackgroundColor" Value="Transparent"/><Setter Property="HeightRequest" Value="27"/>
+                <Setter Property="BackgroundColor" Value="Transparent"/><Setter Property="BorderColor" Value="#B7B7B7"/>
+                <Setter Property="BorderWidth" Value="1"/><Setter Property="HeightRequest" Value="27"/>
             </Style>
             <Style x:Key="HeaderButton" TargetType="Button">
                 <Setter Property="Padding" Value="2,1"/><Setter Property="CornerRadius" Value="0"/>
                 <Setter Property="FontSize" Value="10"/><Setter Property="TextColor" Value="#444444"/>
-                <Setter Property="BackgroundColor" Value="Transparent"/><Setter Property="HeightRequest" Value="27"/>
+                <Setter Property="BackgroundColor" Value="Transparent"/><Setter Property="BorderColor" Value="#B7B7B7"/>
+                <Setter Property="BorderWidth" Value="1"/><Setter Property="HeightRequest" Value="27"/>
             </Style>
             <Style x:Key="TabButton" TargetType="Button">
                 <Setter Property="Padding" Value="5,2"/><Setter Property="CornerRadius" Value="0"/>
                 <Setter Property="FontSize" Value="10"/><Setter Property="TextColor" Value="#202020"/>
-                <Setter Property="BackgroundColor" Value="#E2E2E2"/><Setter Property="HeightRequest" Value="27"/>
+                <Setter Property="BackgroundColor" Value="#E2E2E2"/><Setter Property="BorderColor" Value="#B7B7B7"/>
+                <Setter Property="BorderWidth" Value="1"/><Setter Property="HeightRequest" Value="27"/>
             </Style>
         </ResourceDictionary>
     </ContentPage.Resources>
