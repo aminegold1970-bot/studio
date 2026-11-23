@@ -5,6 +5,9 @@ using System.Text;
 using AssetStudio;
 using Newtonsoft.Json;
 using System.Xml.Linq;
+using NumericsMatrix4x4 = System.Numerics.Matrix4x4;
+using NumericsQuaternion = System.Numerics.Quaternion;
+using NumericsVector3 = System.Numerics.Vector3;
 
 namespace AssetStudioMobile;
 
@@ -139,21 +142,88 @@ internal static class MobileAssetExporter
         if (meshes.Count == 0)
             throw new InvalidOperationException("No meshes were selected for model export.");
 
+        var objectFiles = meshes.Select((mesh, index) => (
+            Name: string.IsNullOrWhiteSpace(mesh.m_Name) ? $"mesh_{index + 1}" : mesh.m_Name,
+            Contents: ExportObj(mesh, cancellationToken)));
+        return WriteMergedObj(objectFiles, "MergedMeshes", cancellationToken);
+    }
+
+    public static string ExportMergedSceneObjects(
+        IEnumerable<GameObject> gameObjects,
+        CancellationToken cancellationToken = default)
+    {
+        var sceneMeshes = GetSceneMeshGeometries(gameObjects, cancellationToken);
+        if (sceneMeshes.Count == 0)
+            throw new InvalidOperationException("The selected scene objects contain no exportable meshes.");
+
+        var objectFiles = sceneMeshes.Select(item => (
+            item.Name,
+            Contents: ExportObj(item.Mesh, item.WorldTransform, cancellationToken)));
+        return WriteMergedObj(objectFiles, "MergedSceneObjects", cancellationToken);
+    }
+
+    public static string ExportSceneObjectsArchive(
+        IEnumerable<GameObject> gameObjects,
+        CancellationToken cancellationToken = default)
+    {
+        var sceneMeshes = GetSceneMeshGeometries(gameObjects, cancellationToken);
+        if (sceneMeshes.Count == 0)
+            throw new InvalidOperationException("The selected scene objects contain no exportable meshes.");
+
+        Directory.CreateDirectory(FileSystem.CacheDirectory);
+        var archivePath = Path.Combine(
+            FileSystem.CacheDirectory,
+            $"AssetStudio_SceneObjects_{Guid.NewGuid():N}.zip");
+        try
+        {
+            var entryNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            using (var archive = new ZipArchive(File.Create(archivePath), ZipArchiveMode.Create))
+            {
+                foreach (var item in sceneMeshes)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var entryName = GetUniqueArchiveEntryName(
+                        entryNames,
+                        SanitizeFileName(item.Name),
+                        ".obj");
+                    var entry = archive.CreateEntry(entryName, CompressionLevel.Fastest);
+                    using var writer = new StreamWriter(entry.Open(), new UTF8Encoding(false));
+                    writer.Write(ExportObj(item.Mesh, item.WorldTransform, cancellationToken));
+                }
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            return archivePath;
+        }
+        catch
+        {
+            if (File.Exists(archivePath))
+                File.Delete(archivePath);
+            throw;
+        }
+    }
+
+    private static string WriteMergedObj(
+        IEnumerable<(string Name, string Contents)> objectFiles,
+        string outputName,
+        CancellationToken cancellationToken)
+    {
         var builder = new StringBuilder();
         builder.AppendLine("# Merged by AssetStudio Mobile");
         var vertexOffset = 0;
         var uvOffset = 0;
         var normalOffset = 0;
         var groupIndex = 0;
-        foreach (var mesh in meshes)
+        foreach (var objectFile in objectFiles)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var vertices = 0;
             var uvs = 0;
             var normals = 0;
-            var obj = ExportObj(mesh, cancellationToken);
-            builder.Append("g mesh_").Append(groupIndex++).AppendLine();
-            foreach (var rawLine in obj.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            builder.Append("g ")
+                .Append(SanitizeObjGroupName(objectFile.Name, groupIndex++))
+                .AppendLine();
+            foreach (var rawLine in objectFile.Contents.Split('\n', StringSplitOptions.RemoveEmptyEntries))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var line = rawLine.TrimEnd('\r');
@@ -171,10 +241,6 @@ internal static class MobileAssetExporter
                 {
                     builder.AppendLine(line);
                     normals++;
-                }
-                else if (line.StartsWith("g ", StringComparison.Ordinal))
-                {
-                    builder.AppendLine(line);
                 }
                 else if (line.StartsWith("f ", StringComparison.Ordinal))
                 {
@@ -206,11 +272,115 @@ internal static class MobileAssetExporter
 
         cancellationToken.ThrowIfCancellationRequested();
         return WriteOutputFile(
-            "MergedMeshes",
+            outputName,
             Encoding.UTF8.GetBytes(builder.ToString()),
             ".obj",
             cancellationToken);
     }
+
+    private static string SanitizeObjGroupName(string name, int fallbackIndex)
+    {
+        var groupName = string.Concat(name.Select(character =>
+            char.IsWhiteSpace(character) || char.IsControl(character) ? '_' : character));
+        return string.IsNullOrWhiteSpace(groupName) ? $"object_{fallbackIndex}" : groupName;
+    }
+
+    private static List<SceneMeshGeometry> GetSceneMeshGeometries(
+        IEnumerable<GameObject> gameObjects,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(gameObjects);
+        var geometries = new List<SceneMeshGeometry>();
+        var transformCache = new Dictionary<AssetStudio.Transform, NumericsMatrix4x4>();
+        var activeTransforms = new HashSet<AssetStudio.Transform>();
+        foreach (var gameObject in gameObjects.Distinct())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (gameObject.m_Transform is not { } transform)
+                continue;
+
+            var worldTransform = GetWorldTransform(
+                transform,
+                transformCache,
+                activeTransforms,
+                cancellationToken);
+            foreach (var pointer in gameObject.m_Components)
+            {
+                if (!pointer.TryGet(out var component))
+                    continue;
+
+                Mesh? mesh = component switch
+                {
+                    MeshFilter meshFilter when meshFilter.m_Mesh.TryGet(out var value) => value,
+                    SkinnedMeshRenderer renderer when renderer.m_Mesh.TryGet(out var value) => value,
+                    _ => null
+                };
+                if (mesh == null)
+                    continue;
+
+                var objectName = string.IsNullOrWhiteSpace(gameObject.m_Name)
+                    ? string.IsNullOrWhiteSpace(mesh.m_Name) ? "Mesh" : mesh.m_Name
+                    : string.IsNullOrWhiteSpace(mesh.m_Name)
+                        ? gameObject.m_Name
+                        : $"{gameObject.m_Name}_{mesh.m_Name}";
+                geometries.Add(new SceneMeshGeometry(mesh, worldTransform, objectName));
+            }
+        }
+
+        return geometries;
+    }
+
+    private static NumericsMatrix4x4 GetWorldTransform(
+        AssetStudio.Transform transform,
+        Dictionary<AssetStudio.Transform, NumericsMatrix4x4> transformCache,
+        HashSet<AssetStudio.Transform> activeTransforms,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (transformCache.TryGetValue(transform, out var cached))
+            return cached;
+        if (!activeTransforms.Add(transform))
+            throw new InvalidDataException("The scene contains a cycle in its transform hierarchy.");
+
+        try
+        {
+            var position = transform.m_LocalPosition;
+            var scale = transform.m_LocalScale;
+            var rotation = transform.m_LocalRotation;
+            if (!float.IsFinite(position.X) || !float.IsFinite(position.Y) || !float.IsFinite(position.Z)
+                || !float.IsFinite(scale.X) || !float.IsFinite(scale.Y) || !float.IsFinite(scale.Z)
+                || !float.IsFinite(rotation.X) || !float.IsFinite(rotation.Y)
+                || !float.IsFinite(rotation.Z) || !float.IsFinite(rotation.W))
+            {
+                throw new InvalidDataException("The scene contains a non-finite transform.");
+            }
+
+            var targetRotation = new NumericsQuaternion(rotation.X, -rotation.Y, -rotation.Z, rotation.W);
+            var rotationLengthSquared = targetRotation.LengthSquared();
+            if (!float.IsFinite(rotationLengthSquared) || rotationLengthSquared <= 1e-12f)
+                throw new InvalidDataException("The scene contains an invalid transform rotation.");
+            targetRotation = NumericsQuaternion.Normalize(targetRotation);
+
+            var localTransform =
+                NumericsMatrix4x4.CreateScale(scale.X, scale.Y, scale.Z)
+                * NumericsMatrix4x4.CreateFromQuaternion(targetRotation)
+                * NumericsMatrix4x4.CreateTranslation(-position.X, position.Y, position.Z);
+            var worldTransform = transform.m_Father.TryGet(out var parent)
+                ? localTransform * GetWorldTransform(parent, transformCache, activeTransforms, cancellationToken)
+                : localTransform;
+            transformCache.Add(transform, worldTransform);
+            return worldTransform;
+        }
+        finally
+        {
+            activeTransforms.Remove(transform);
+        }
+    }
+
+    private readonly record struct SceneMeshGeometry(
+        Mesh Mesh,
+        NumericsMatrix4x4 WorldTransform,
+        string Name);
 
     private static string WriteAssetFile(
         AssetStudio.Object asset,
@@ -449,6 +619,26 @@ internal static class MobileAssetExporter
         if (texture.m_Width <= 0 || texture.m_Height <= 0
             || (long)texture.m_Width * texture.m_Height > MaxTexturePixels)
             throw new InvalidDataException("This texture is too large or has invalid dimensions for decoding on iPhone.");
+
+        if (texture.m_TextureFormat is TextureFormat.DXT1 or TextureFormat.DXT3 or TextureFormat.DXT5)
+        {
+            var compressedData = texture.image_data?.GetData()
+                ?? throw new InvalidDataException("This compressed texture contains no image data.");
+            if (texture.platform == BuildTarget.XBOX360)
+                SwapDxtBytesForXbox(compressedData);
+
+            return texture.m_TextureFormat switch
+            {
+                TextureFormat.DXT1 => ManagedDxtDecoder.DecodeDxt1(
+                    compressedData, texture.m_Width, texture.m_Height, cancellationToken),
+                TextureFormat.DXT3 => ManagedDxtDecoder.DecodeDxt3(
+                    compressedData, texture.m_Width, texture.m_Height, cancellationToken),
+                TextureFormat.DXT5 => ManagedDxtDecoder.DecodeDxt5(
+                    compressedData, texture.m_Width, texture.m_Height, cancellationToken),
+                _ => throw new InvalidOperationException("Unexpected DXT texture format.")
+            };
+        }
+
         try
         {
             var bgra = new byte[checked(texture.m_Width * texture.m_Height * 4)];
@@ -478,6 +668,12 @@ internal static class MobileAssetExporter
                 $"Texture format {texture.m_TextureFormat} requires a native decoder that is not available on iOS.",
                 exception.InnerException);
         }
+    }
+
+    private static void SwapDxtBytesForXbox(byte[] data)
+    {
+        for (var index = 0; index + 1 < data.Length; index += 2)
+            (data[index], data[index + 1]) = (data[index + 1], data[index]);
     }
 
     private static (byte[] Data, string Extension) ExportSprite(
@@ -965,7 +1161,13 @@ internal static class MobileAssetExporter
         return (movie.m_MovieData, ".ogv");
     }
 
-    private static string ExportObj(Mesh mesh, CancellationToken cancellationToken = default)
+    private static string ExportObj(Mesh mesh, CancellationToken cancellationToken = default) =>
+        ExportObj(mesh, NumericsMatrix4x4.Identity, cancellationToken);
+
+    private static string ExportObj(
+        Mesh mesh,
+        NumericsMatrix4x4 worldTransform,
+        CancellationToken cancellationToken)
     {
         var positions = mesh.m_Vertices;
         if (positions is null || mesh.m_VertexCount <= 0
@@ -984,6 +1186,16 @@ internal static class MobileAssetExporter
         var uvStride = uvs.Length == 0 ? 0 : uvs.Length / mesh.m_VertexCount;
         var normals = mesh.m_Normals ?? Array.Empty<float>();
         var normalStride = normals.Length == 0 ? 0 : normals.Length / mesh.m_VertexCount;
+        var hasNormalTransform = NumericsMatrix4x4.Invert(worldTransform, out var inverseTransform);
+        if (!hasNormalTransform)
+            normalStride = 0;
+        var normalTransform = hasNormalTransform
+            ? NumericsMatrix4x4.Transpose(inverseTransform)
+            : NumericsMatrix4x4.Identity;
+        var determinant = worldTransform.GetDeterminant();
+        if (!float.IsFinite(determinant))
+            throw new InvalidDataException("The scene contains an invalid world transform.");
+        var reverseFaceWinding = determinant >= 0;
         var builder = new StringBuilder(mesh.m_VertexCount * 48);
         builder.AppendLine("# Exported by AssetStudio Mobile");
         var hasFaces = false;
@@ -992,10 +1204,18 @@ internal static class MobileAssetExporter
         {
             if ((i & 1023) == 0)
                 cancellationToken.ThrowIfCancellationRequested();
+            var position = NumericsVector3.Transform(
+                new NumericsVector3(
+                    -positions[i * positionStride],
+                    positions[i * positionStride + 1],
+                    positions[i * positionStride + 2]),
+                worldTransform);
+            if (!float.IsFinite(position.X) || !float.IsFinite(position.Y) || !float.IsFinite(position.Z))
+                throw new InvalidDataException("The scene transform produced a non-finite vertex.");
             builder.Append("v ")
-                .Append((-positions[i * positionStride]).ToString("R", CultureInfo.InvariantCulture)).Append(' ')
-                .Append(positions[i * positionStride + 1].ToString("R", CultureInfo.InvariantCulture)).Append(' ')
-                .Append(positions[i * positionStride + 2].ToString("R", CultureInfo.InvariantCulture)).AppendLine();
+                .Append(position.X.ToString("R", CultureInfo.InvariantCulture)).Append(' ')
+                .Append(position.Y.ToString("R", CultureInfo.InvariantCulture)).Append(' ')
+                .Append(position.Z.ToString("R", CultureInfo.InvariantCulture)).AppendLine();
         }
 
         if (uvStride >= 2)
@@ -1016,10 +1236,21 @@ internal static class MobileAssetExporter
             {
                 if ((i & 1023) == 0)
                     cancellationToken.ThrowIfCancellationRequested();
+                var normal = NumericsVector3.TransformNormal(
+                    new NumericsVector3(
+                        -normals[i * normalStride],
+                        normals[i * normalStride + 1],
+                        normals[i * normalStride + 2]),
+                    normalTransform);
+                var lengthSquared = normal.LengthSquared();
+                if (!float.IsFinite(lengthSquared))
+                    throw new InvalidDataException("The scene transform produced a non-finite normal.");
+                if (lengthSquared > 1e-12f)
+                    normal = NumericsVector3.Normalize(normal);
                 builder.Append("vn ")
-                    .Append((-normals[i * normalStride]).ToString("R", CultureInfo.InvariantCulture)).Append(' ')
-                    .Append(normals[i * normalStride + 1].ToString("R", CultureInfo.InvariantCulture)).Append(' ')
-                    .Append(normals[i * normalStride + 2].ToString("R", CultureInfo.InvariantCulture)).AppendLine();
+                    .Append(normal.X.ToString("R", CultureInfo.InvariantCulture)).Append(' ')
+                    .Append(normal.Y.ToString("R", CultureInfo.InvariantCulture)).Append(' ')
+                    .Append(normal.Z.ToString("R", CultureInfo.InvariantCulture)).AppendLine();
             }
         }
 
@@ -1038,16 +1269,16 @@ internal static class MobileAssetExporter
             {
                 if ((face & 1023) == 0)
                     cancellationToken.ThrowIfCancellationRequested();
-                var indices = new[]
-                {
-                    mesh.m_Indices[face * 3 + 2],
-                    mesh.m_Indices[face * 3 + 1],
-                    mesh.m_Indices[face * 3]
-                };
+                var faceOffset = face * 3;
+                var index0 = checked((int)mesh.m_Indices[faceOffset]);
+                var index1 = checked((int)mesh.m_Indices[faceOffset + 1]);
+                var index2 = checked((int)mesh.m_Indices[faceOffset + 2]);
+                var indices = reverseFaceWinding
+                    ? new[] { index2, index1, index0 }
+                    : new[] { index0, index1, index2 };
                 builder.Append("f");
-                foreach (var rawIndex in indices)
+                foreach (var index in indices)
                 {
-                    var index = checked((int)rawIndex);
                     if ((uint)index >= (uint)mesh.m_VertexCount)
                     {
                         throw new InvalidDataException("The mesh contains an out-of-range triangle index.");

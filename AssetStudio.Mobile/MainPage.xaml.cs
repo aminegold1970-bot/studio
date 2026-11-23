@@ -1101,9 +1101,10 @@ public partial class MainPage : ContentPage
         var exportAll = choice.StartsWith("Export all", StringComparison.Ordinal);
         var merge = choice.Contains("merged", StringComparison.Ordinal);
         var exportFbx = choice.Contains("(static FBX)", StringComparison.Ordinal);
+        var sceneObjects = exportAll ? null : GetCheckedSceneObjects().ToList();
         var meshes = exportAll
             ? _allAssets.Select(row => row.SourceAsset).OfType<AssetStudio.Mesh>().Distinct().ToList()
-            : GetCheckedSceneObjects()
+            : sceneObjects!
                 .SelectMany(GetMeshes)
                 .Distinct()
                 .ToList();
@@ -1130,6 +1131,14 @@ public partial class MainPage : ContentPage
             {
                 outputPath = await Task.Run(
                     () => MobileFbxExporter.ExportMeshes(meshes, cancellation.Token),
+                    cancellation.Token);
+            }
+            else if (sceneObjects != null)
+            {
+                outputPath = await Task.Run(
+                    () => merge
+                        ? MobileAssetExporter.ExportMergedSceneObjects(sceneObjects, cancellation.Token)
+                        : MobileAssetExporter.ExportSceneObjectsArchive(sceneObjects, cancellation.Token),
                     cancellation.Token);
             }
             else if (merge)
