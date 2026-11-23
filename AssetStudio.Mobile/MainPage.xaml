@@ -200,6 +200,18 @@
             <Button x:Name="CancelLoadButton" Grid.Column="1" Text="Cancel load" IsVisible="False" Clicked="OnCancelLoadClicked" Padding="8,3" HeightRequest="26" MinimumHeightRequest="0" MinimumWidthRequest="0" FontSize="10" BackgroundColor="#7B3438" TextColor="White"/>
             <ActivityIndicator x:Name="BusyIndicator" Grid.Column="2" IsRunning="False" IsVisible="False" HeightRequest="20"/>
         </Grid>
+        <Grid x:Name="DropTargetOverlay" Grid.RowSpan="4" IsVisible="False" InputTransparent="True"
+              BackgroundColor="#662878C8" ZIndex="100">
+            <Border Stroke="#2878C8" StrokeThickness="3" BackgroundColor="#F5FFFFFF"
+                    Padding="28,20" HorizontalOptions="Center" VerticalOptions="Center">
+                <VerticalStackLayout Spacing="6">
+                    <Label Text="Drop files to load" TextColor="#202020" FontSize="18"
+                           FontAttributes="Bold" HorizontalTextAlignment="Center"/>
+                    <Label Text="Unity assets, bundles, and ZIP files" TextColor="#555555" FontSize="12"
+                           HorizontalTextAlignment="Center"/>
+                </VerticalStackLayout>
+            </Border>
+        </Grid>
     </Grid>
     <ContentPage.Resources>
         <ResourceDictionary>

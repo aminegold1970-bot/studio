@@ -106,6 +106,7 @@ public partial class MainPage : ContentPage
         RefreshBrowserTab();
         DroppedFilesReceived += OnDroppedFilesReceived;
         DropFailed += OnDropFailed;
+        DropTargetChanged += OnDropTargetChanged;
         var workspaceSplitter = new PanGestureRecognizer();
         workspaceSplitter.PanUpdated += OnWorkspaceDividerPanUpdated;
         WorkspaceDivider.GestureRecognizers.Add(workspaceSplitter);
@@ -239,8 +240,10 @@ public partial class MainPage : ContentPage
     // immediately copied into the app's Documents library before the provider URL expires.
     public static event Action<IReadOnlyList<string>>? DroppedFilesReceived;
     public static event Action<string>? DropFailed;
+    public static event Action<bool>? DropTargetChanged;
     public static void PublishDroppedFiles(IReadOnlyList<string> paths) => DroppedFilesReceived?.Invoke(paths);
     public static void PublishDropFailure(string message) => DropFailed?.Invoke(message);
+    public static void PublishDropTargetChanged(bool isTargeted) => DropTargetChanged?.Invoke(isTargeted);
 
     private async void OnDroppedFilesReceived(IReadOnlyList<string> paths)
     {
@@ -249,9 +252,18 @@ public partial class MainPage : ContentPage
             var imported = new List<FileResult>();
             foreach (var path in paths)
             {
-                if (!File.Exists(path))
-                    throw new FileNotFoundException("A dropped file was no longer available.", path);
-                imported.Add(await _documentLibrary.ImportPathAsync(path));
+                try
+                {
+                    if (!File.Exists(path))
+                        throw new FileNotFoundException("A dropped file was no longer available.", path);
+                    imported.Add(await _documentLibrary.ImportPathAsync(path));
+                }
+                finally
+                {
+#if IOS
+                    AssetStudioDropBridge.CleanupTemporaryCopy(path);
+#endif
+                }
             }
             if (imported.Count == 0) return;
             await LoadPersistentFilesAsync(imported, "Dropped files");
@@ -269,6 +281,9 @@ public partial class MainPage : ContentPage
         if (_showErrorMessages)
             await DisplayAlert("Could not import dropped file", message, "OK");
     }
+
+    private void OnDropTargetChanged(bool isTargeted) =>
+        MainThread.BeginInvokeOnMainThread(() => DropTargetOverlay.IsVisible = isTargeted);
 
     private async void OnLibraryClicked(object sender, EventArgs e) => await OpenLibraryAsync();
 

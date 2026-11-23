@@ -36,13 +36,43 @@ internal sealed class AssetStudioDropBridge : UIDropInteractionDelegate
                                      item.ItemProvider.HasItemConformingTo("public.file-url") ||
                                      item.ItemProvider.HasItemConformingTo("public.url"));
 
+    public override void SessionDidEnter(UIDropInteraction interaction, IUIDropSession session)
+        => MainPage.PublishDropTargetChanged(true);
+
     public override UIDropProposal SessionDidUpdate(UIDropInteraction interaction, IUIDropSession session)
         => new UIDropProposal(UIDropOperation.Copy);
 
+    public override void SessionDidExit(UIDropInteraction interaction, IUIDropSession session)
+        => MainPage.PublishDropTargetChanged(false);
+
+    public override void SessionDidEnd(UIDropInteraction interaction, IUIDropSession session)
+        => MainPage.PublishDropTargetChanged(false);
+
     public override void PerformDrop(UIDropInteraction interaction, IUIDropSession session)
     {
+        MainPage.PublishDropTargetChanged(false);
         var providers = session.Items.Select(item => item.ItemProvider).ToArray();
         _ = CopyProvidersAsync(providers);
+    }
+
+    internal static void CleanupTemporaryCopy(string path)
+    {
+        var root = Path.GetFullPath(TemporaryDropDirectory) + Path.DirectorySeparatorChar;
+        var fullPath = Path.GetFullPath(path);
+        if (!fullPath.StartsWith(root, StringComparison.Ordinal) || !File.Exists(fullPath))
+            return;
+
+        File.Delete(fullPath);
+        var directory = Path.GetDirectoryName(fullPath);
+        if (directory != null && !string.Equals(
+                directory,
+                Path.GetFullPath(TemporaryDropDirectory),
+                StringComparison.Ordinal)
+            && Directory.Exists(directory)
+            && !Directory.EnumerateFileSystemEntries(directory).Any())
+        {
+            Directory.Delete(directory);
+        }
     }
 
     private static async Task CopyProvidersAsync(NSItemProvider[] providers)
