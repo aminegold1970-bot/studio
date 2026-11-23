@@ -1,0 +1,802 @@
+diff --git a/AssetStudio.Mobile/MainPage.xaml b/AssetStudio.Mobile/MainPage.xaml
+--- a/AssetStudio.Mobile/MainPage.xaml
++++ b/AssetStudio.Mobile/MainPage.xaml
+@@ -1,7 +1,7 @@
+ <?xml version='1.0' encoding='utf-8'?>
+-<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui" xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml" x:Class="AssetStudioMobile.MainPage" Title="AssetStudio" BackgroundColor="#17191D">
++<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui" xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml" x:Class="AssetStudioMobile.MainPage" Title="AssetStudio" BackgroundColor="#FFFFFF">
+     <Grid RowDefinitions="Auto,*,Auto" RowSpacing="0" ColumnDefinitions="*">
+-        <ScrollView Grid.Row="0" Orientation="Horizontal" BackgroundColor="#22252B">
++        <ScrollView Grid.Row="0" Orientation="Horizontal" BackgroundColor="#E8E8E8">
+             <HorizontalStackLayout Padding="5,4" Spacing="3">
+                 <Button Text="File" Clicked="OnFileMenuClicked" Style="{StaticResource MenuButton}"/>
+                 <Button Text="Library" Clicked="OnLibraryClicked" Style="{StaticResource MenuButton}"/>
+@@ -13,17 +13,22 @@
+             </HorizontalStackLayout>
+         </ScrollView>
+ 
+-        <Grid x:Name="WorkspaceGrid" Grid.Row="1" ColumnDefinitions="38*,1,62*" ColumnSpacing="0" BackgroundColor="#3B414B" SizeChanged="OnWorkspaceSizeChanged"><Grid x:Name="BrowserPane" Grid.Column="0" RowDefinitions="Auto,Auto,*" RowSpacing="0" BackgroundColor="#1D2025"><Grid Grid.Row="0" ColumnDefinitions="*,*,*" Padding="6,5" ColumnSpacing="4" BackgroundColor="#1D2025">
++        <Grid x:Name="WorkspaceGrid" Grid.Row="1" ColumnDefinitions="38*,1,62*" RowDefinitions="Auto,*" ColumnSpacing="0" BackgroundColor="#B7B7B7" SizeChanged="OnWorkspaceSizeChanged">
++            <Grid x:Name="CompactWorkspaceTabs" Grid.Row="0" ColumnDefinitions="*,*" Padding="6,4" ColumnSpacing="4" BackgroundColor="#F0F0F0" IsVisible="False">
++                <Button x:Name="CompactAssetsButton" Text="Assets" CommandParameter="Assets" Clicked="OnCompactWorkspaceTabClicked" Style="{StaticResource TabButton}"/>
++                <Button x:Name="CompactPreviewButton" Grid.Column="1" Text="Preview" CommandParameter="Preview" Clicked="OnCompactWorkspaceTabClicked" Style="{StaticResource TabButton}"/>
++            </Grid>
++            <Grid x:Name="BrowserPane" Grid.Row="1" Grid.Column="0" RowDefinitions="Auto,Auto,*" RowSpacing="0" BackgroundColor="#F0F0F0"><Grid Grid.Row="0" ColumnDefinitions="*,*,*" Padding="6,4" ColumnSpacing="4" BackgroundColor="#F0F0F0">
+             <Button x:Name="HierarchyTab" Grid.Column="0" Text="Scene Hierarchy" Clicked="OnBrowserTabClicked" Style="{StaticResource TabButton}"/>
+             <Button x:Name="AssetListTab" Grid.Column="1" Text="Asset List" Clicked="OnBrowserTabClicked" Style="{StaticResource TabButton}"/>
+             <Button x:Name="ClassesTab" Grid.Column="2" Text="Asset Classes" Clicked="OnBrowserTabClicked" Style="{StaticResource TabButton}"/>
+         </Grid>
+ 
+-        <Grid Grid.Row="1" RowDefinitions="Auto,Auto,Auto,Auto" Padding="7,3" BackgroundColor="#1D2025">
+-            <SearchBar x:Name="AssetSearch" Placeholder="Filter assets" PlaceholderColor="#9298A2" TextColor="#F1F3F5" BackgroundColor="#292D34" HeightRequest="42" TextChanged="OnAssetSearchTextChanged"/>
+-            <SearchBar x:Name="ClassSearch" Grid.Row="0" IsVisible="False" Placeholder="Filter asset classes" PlaceholderColor="#9298A2" TextColor="#F1F3F5" BackgroundColor="#292D34" HeightRequest="42" TextChanged="OnClassSearchTextChanged"/>
++        <Grid Grid.Row="1" RowDefinitions="Auto,Auto,Auto,Auto" Padding="7,3" BackgroundColor="#F0F0F0">
++            <SearchBar x:Name="AssetSearch" Placeholder="Filter assets" PlaceholderColor="#777777" TextColor="#202020" BackgroundColor="#F7F7F7" HeightRequest="42" TextChanged="OnAssetSearchTextChanged"/>
++            <SearchBar x:Name="ClassSearch" Grid.Row="0" IsVisible="False" Placeholder="Filter asset classes" PlaceholderColor="#777777" TextColor="#202020" BackgroundColor="#F7F7F7" HeightRequest="42" TextChanged="OnClassSearchTextChanged"/>
+             <Grid x:Name="HierarchySearchPanel" Grid.Row="0" IsVisible="False" ColumnDefinitions="*,Auto" ColumnSpacing="5">
+-                <SearchBar x:Name="HierarchySearch" Placeholder="Find scene object" PlaceholderColor="#9298A2" TextColor="#F1F3F5" BackgroundColor="#292D34" HeightRequest="42" SearchButtonPressed="OnHierarchySearchButtonPressed" TextChanged="OnHierarchySearchTextChanged"/>
++                <SearchBar x:Name="HierarchySearch" Placeholder="Find scene object" PlaceholderColor="#777777" TextColor="#202020" BackgroundColor="#F7F7F7" HeightRequest="42" SearchButtonPressed="OnHierarchySearchButtonPressed" TextChanged="OnHierarchySearchTextChanged"/>
+                 <Button Grid.Column="1" Text="Next" Clicked="OnHierarchySearchNextClicked" Style="{StaticResource TabButton}"/>
+             </Grid>
+             <HorizontalStackLayout x:Name="HierarchyActions" Grid.Row="1" IsVisible="False" Spacing="5" Padding="0,3">
+@@ -40,51 +45,61 @@
+         </Grid>
+ 
+         <Grid Grid.Row="2">
+-                <CollectionView x:Name="AssetCollection" SelectionMode="Multiple" SelectionChanged="OnAssetSelectionChanged" BackgroundColor="#17191D">
++                <CollectionView x:Name="AssetCollection" SelectionMode="Multiple" SelectionChanged="OnAssetSelectionChanged" BackgroundColor="#FFFFFF">
+                     <CollectionView.EmptyView>
+-                        <Label Text="Drop Unity files here, or use File → Load file" TextColor="#AEB6C2" HorizontalTextAlignment="Center" VerticalTextAlignment="Center"/>
++                        <Label Text="Drop Unity files here, or use File → Load file" TextColor="#555555" HorizontalTextAlignment="Center" VerticalTextAlignment="Center"/>
+                     </CollectionView.EmptyView>
+                     <CollectionView.ItemTemplate>
+                         <DataTemplate>
+-                            <Grid ColumnDefinitions="2*,1.25*,1.1*,1.1*,.7*,34" Padding="7,9" ColumnSpacing="5" MinimumHeightRequest="42" RowDefinitions="Auto,1">
+-                                <Label Text="{Binding Name}" TextColor="#E7EAF0" FontSize="12" LineBreakMode="TailTruncation" Grid.Row="0"/>
+-                                <Label Grid.Column="1" Text="{Binding Container}" TextColor="#AEB6C2" FontSize="11" LineBreakMode="TailTruncation" Grid.Row="0"/>
+-                                <Label Grid.Column="2" Text="{Binding Type}" TextColor="#AEB6C2" FontSize="11" LineBreakMode="TailTruncation" Grid.Row="0"/>
+-                                <Label Grid.Column="3" Text="{Binding PathId}" TextColor="#AEB6C2" FontSize="11" Grid.Row="0"/>
+-                                <Label Grid.Column="4" Text="{Binding Size}" TextColor="#AEB6C2" FontSize="11" Grid.Row="0"/>
+-                                <Button Grid.Column="5" Text="⋯" Clicked="OnAssetContextClicked" CommandParameter="{Binding .}" Padding="0" WidthRequest="30" HeightRequest="30" BackgroundColor="Transparent" TextColor="#B9C0CA" FontSize="18" Grid.Row="0"/>
+-                            <BoxView Grid.Row="1" Grid.ColumnSpan="6" HeightRequest="1" BackgroundColor="#2B3038"/></Grid>
+-                        </DataTemplate>
+-                    </CollectionView.ItemTemplate>
+-                </CollectionView>
+-                <CollectionView x:Name="HierarchyCollection" IsVisible="False" SelectionMode="None" BackgroundColor="#17191D">
+-                    <CollectionView.EmptyView><Label Text="No scene hierarchy loaded" TextColor="#AEB6C2" HorizontalTextAlignment="Center" VerticalTextAlignment="Center"/></CollectionView.EmptyView>
+-                    <CollectionView.ItemTemplate>
+-                        <DataTemplate>
+-                            <Grid ColumnDefinitions="24,Auto,*" Padding="{Binding IndentPadding}" ColumnSpacing="5" MinimumHeightRequest="38">
+-                                <Button Text="{Binding ExpandGlyph}" Clicked="OnHierarchyExpandClicked" IsVisible="{Binding HasChildren}" Padding="0" WidthRequest="24" HeightRequest="30" BackgroundColor="Transparent" TextColor="#B9C0CA" FontSize="13"/>
+-                                <CheckBox Grid.Column="1" IsChecked="{Binding IsChecked, Mode=TwoWay}" CheckedChanged="OnHierarchyCheckChanged" Color="#8B78D6"/>
+-                                <Label Grid.Column="2" Text="{Binding DisplayName}" TextColor="#E7EAF0" VerticalTextAlignment="Center" FontSize="13" LineBreakMode="TailTruncation"/>
++                            <Grid ColumnDefinitions="*" Padding="7,5" RowDefinitions="Auto,1" MinimumHeightRequest="40">
++                                <Grid Grid.RowSpan="2" ColumnDefinitions="2*,1.25*,1.1*,1.1*,.7*,34"
++                                      ColumnSpacing="5" IsVisible="{Binding IsDesktopLayout}">
++                                    <Label Text="{Binding Name}" TextColor="#202020" FontSize="12" LineBreakMode="TailTruncation"/>
++                                    <Label Grid.Column="1" Text="{Binding Container}" TextColor="#555555" FontSize="11" LineBreakMode="TailTruncation"/>
++                                    <Label Grid.Column="2" Text="{Binding Type}" TextColor="#555555" FontSize="11" LineBreakMode="TailTruncation"/>
++                                    <Label Grid.Column="3" Text="{Binding PathId}" TextColor="#555555" FontSize="11"/>
++                                    <Label Grid.Column="4" Text="{Binding Size}" TextColor="#555555" FontSize="11"/>
++                                    <Button Grid.Column="5" Text="⋯" Clicked="OnAssetContextClicked" CommandParameter="{Binding .}" Padding="0" WidthRequest="30" HeightRequest="30" BackgroundColor="Transparent" TextColor="#555555" FontSize="18"/>
++                                </Grid>
++                                <Grid Grid.Row="0" ColumnDefinitions="*,34" RowDefinitions="Auto,Auto" RowSpacing="2"
++                                      IsVisible="{Binding IsCompactLayout}">
++                                    <Label Text="{Binding Name}" TextColor="#202020" FontSize="13" LineBreakMode="TailTruncation"/>
++                                    <Button Grid.Column="1" Grid.RowSpan="2" Text="⋯" Clicked="OnAssetContextClicked" CommandParameter="{Binding .}" Padding="0" WidthRequest="30" HeightRequest="30" BackgroundColor="Transparent" TextColor="#555555" FontSize="18"/>
++                                    <Label Grid.Row="1" Text="{Binding CompactDetails}" TextColor="#555555" FontSize="10" LineBreakMode="TailTruncation"/>
++                                </Grid>
++                                <BoxView Grid.Row="1" HeightRequest="1" BackgroundColor="#D6D6D6"/>
+                             </Grid>
+                         </DataTemplate>
+                     </CollectionView.ItemTemplate>
+                 </CollectionView>
+-                <CollectionView x:Name="ClassesCollection" IsVisible="False" SelectionMode="Single" SelectionChanged="OnClassSelectionChanged" BackgroundColor="#17191D">
+-                    <CollectionView.EmptyView><Label Text="No asset classes loaded" TextColor="#AEB6C2" HorizontalTextAlignment="Center" VerticalTextAlignment="Center"/></CollectionView.EmptyView>
++                <CollectionView x:Name="HierarchyCollection" IsVisible="False" SelectionMode="None" BackgroundColor="#FFFFFF">
++                    <CollectionView.EmptyView><Label Text="No scene hierarchy loaded" TextColor="#555555" HorizontalTextAlignment="Center" VerticalTextAlignment="Center"/></CollectionView.EmptyView>
++                    <CollectionView.ItemTemplate>
++                        <DataTemplate>
++                            <Grid ColumnDefinitions="24,Auto,*" Padding="{Binding IndentPadding}" ColumnSpacing="5" MinimumHeightRequest="38">
++                                <Button Text="{Binding ExpandGlyph}" Clicked="OnHierarchyExpandClicked" IsVisible="{Binding HasChildren}" Padding="0" WidthRequest="24" HeightRequest="30" BackgroundColor="Transparent" TextColor="#555555" FontSize="13"/>
++                                <CheckBox Grid.Column="1" IsChecked="{Binding IsChecked, Mode=TwoWay}" CheckedChanged="OnHierarchyCheckChanged" Color="#8B78D6"/>
++                                <Label Grid.Column="2" Text="{Binding DisplayName}" TextColor="#202020" VerticalTextAlignment="Center" FontSize="13" LineBreakMode="TailTruncation"/>
++                            </Grid>
++                        </DataTemplate>
++                    </CollectionView.ItemTemplate>
++                </CollectionView>
++                <CollectionView x:Name="ClassesCollection" IsVisible="False" SelectionMode="Single" SelectionChanged="OnClassSelectionChanged" BackgroundColor="#FFFFFF">
++                    <CollectionView.EmptyView><Label Text="No asset classes loaded" TextColor="#555555" HorizontalTextAlignment="Center" VerticalTextAlignment="Center"/></CollectionView.EmptyView>
+                     <CollectionView.ItemTemplate>
+                         <DataTemplate>
+                             <Grid ColumnDefinitions="*,Auto" Padding="10,9" ColumnSpacing="8">
+                                 <VerticalStackLayout Spacing="2">
+-                                    <Label Text="{Binding Name}" TextColor="#E7EAF0" FontSize="13"/>
+-                                    <Label Text="{Binding Version}" TextColor="#8F98A5" FontSize="10"/>
++                                    <Label Text="{Binding Name}" TextColor="#202020" FontSize="13"/>
++                                    <Label Text="{Binding Version}" TextColor="#777777" FontSize="10"/>
+                                 </VerticalStackLayout>
+-                                <Label Grid.Column="1" Text="{Binding Id}" TextColor="#AEB6C2" FontSize="12" VerticalTextAlignment="Center"/>
++                                <Label Grid.Column="1" Text="{Binding Id}" TextColor="#555555" FontSize="12" VerticalTextAlignment="Center"/>
+                             </Grid>
+                         </DataTemplate>
+                     </CollectionView.ItemTemplate>
+                 </CollectionView>
+             </Grid>
+-            </Grid><BoxView x:Name="WorkspaceDivider" Grid.Column="1" WidthRequest="1" BackgroundColor="#3B414B"/><Grid x:Name="PreviewPane" Grid.Column="2" RowDefinitions="*" RowSpacing="0" BackgroundColor="#F0F0F0"><Grid RowDefinitions="Auto,*" BackgroundColor="#F0F0F0" Grid.Row="0">
++            </Grid><BoxView x:Name="WorkspaceDivider" Grid.Row="1" Grid.Column="1" WidthRequest="1" BackgroundColor="#B7B7B7"/><Grid x:Name="PreviewPane" Grid.Row="1" Grid.Column="2" RowDefinitions="*" RowSpacing="0" BackgroundColor="#F0F0F0"><Grid RowDefinitions="Auto,*" BackgroundColor="#F0F0F0" Grid.Row="0">
+                 <Grid ColumnDefinitions="*,*" Padding="4,3" ColumnSpacing="2" BackgroundColor="#E6E6E6">
+                     <Button x:Name="PreviewTab" Text="Preview" Clicked="OnPreviewTabClicked" Style="{StaticResource TabButton}"/>
+                     <Button x:Name="DumpTab" Grid.Column="1" Text="Dump" Clicked="OnDumpTabClicked" Style="{StaticResource TabButton}"/>
+@@ -140,6 +155,7 @@
+                             <VerticalStackLayout Spacing="6">
+                                 <Label Text="3D model preview" TextColor="#202020" FontAttributes="Bold"/>
+                                 <Label x:Name="ModelPreviewInfo" Text="A native iOS 3D renderer must be connected." TextColor="#444444" FontSize="12"/>
++                                <Button x:Name="OpenMeshPreviewButton" Text="Open wireframe preview" Clicked="OnMeshPreviewClicked" IsVisible="False" Style="{StaticResource TabButton}"/>
+                             </VerticalStackLayout>
+                         </Border>
+                         <Border x:Name="MetadataFrame" IsVisible="False" BackgroundColor="#FFFFFF" Stroke="#C8C8C8" StrokeThickness="1" Padding="0">
+@@ -148,7 +164,7 @@
+                                     <DataTemplate>
+                                         <Grid ColumnDefinitions="*,1.2*" Padding="4,4" ColumnSpacing="8">
+                                             <Label Text="{Binding Key}" TextColor="#555555" FontSize="11"/>
+-                                            <Label Grid.Column="1" Text="{Binding Value}" TextColor="#E2E6EC" FontSize="11" HorizontalTextAlignment="End"/>
++                                            <Label Grid.Column="1" Text="{Binding Value}" TextColor="#202020" FontSize="11" HorizontalTextAlignment="End"/>
+                                         </Grid>
+                                     </DataTemplate>
+                                 </BindableLayout.ItemTemplate>
+@@ -161,8 +177,8 @@
+                     <Label x:Name="DumpText" Text="Select an asset to view its dump." TextColor="#202020" FontFamily="monospace" FontSize="11"/>
+                 </ScrollView>
+             </Grid>
+-        </Grid></Grid><Grid Grid.Row="2" ColumnDefinitions="*,Auto,Auto" Padding="9,6" ColumnSpacing="8" BackgroundColor="#22252B">
+-            <Label x:Name="StatusLabel" Text="Ready to go" TextColor="#B9C0CA" FontSize="12" VerticalTextAlignment="Center"/>
++        </Grid></Grid>        <Grid Grid.Row="2" ColumnDefinitions="*,Auto,Auto" Padding="9,6" ColumnSpacing="8" BackgroundColor="#E8E8E8">
++            <Label x:Name="StatusLabel" Text="Ready to go" TextColor="#444444" FontSize="12" VerticalTextAlignment="Center"/>
+             <Button x:Name="CancelLoadButton" Grid.Column="1" Text="Cancel load" IsVisible="False" Clicked="OnCancelLoadClicked" Padding="8,3" HeightRequest="30" FontSize="11" BackgroundColor="#7B3438" TextColor="White"/>
+             <ActivityIndicator x:Name="BusyIndicator" Grid.Column="2" IsRunning="False" IsVisible="False" HeightRequest="20"/>
+         </Grid>
+@@ -170,19 +186,19 @@
+     <ContentPage.Resources>
+         <ResourceDictionary>
+             <Style x:Key="MenuButton" TargetType="Button">
+-                <Setter Property="Padding" Value="10,5"/><Setter Property="CornerRadius" Value="4"/>
+-                <Setter Property="FontSize" Value="12"/><Setter Property="TextColor" Value="#E7EAF0"/>
+-                <Setter Property="BackgroundColor" Value="#30353E"/><Setter Property="HeightRequest" Value="33"/>
++                <Setter Property="Padding" Value="7,3"/><Setter Property="CornerRadius" Value="4"/>
++                <Setter Property="FontSize" Value="11"/><Setter Property="TextColor" Value="#202020"/>
++                <Setter Property="BackgroundColor" Value="#E0E0E0"/><Setter Property="HeightRequest" Value="31"/>
+             </Style>
+             <Style x:Key="HeaderButton" TargetType="Button">
+                 <Setter Property="Padding" Value="2,3"/><Setter Property="CornerRadius" Value="2"/>
+-                <Setter Property="FontSize" Value="10"/><Setter Property="TextColor" Value="#B9C0CA"/>
++                <Setter Property="FontSize" Value="10"/><Setter Property="TextColor" Value="#555555"/>
+                 <Setter Property="BackgroundColor" Value="Transparent"/><Setter Property="HeightRequest" Value="27"/>
+             </Style>
+             <Style x:Key="TabButton" TargetType="Button">
+-                <Setter Property="Padding" Value="3,6"/><Setter Property="CornerRadius" Value="4"/>
+-                <Setter Property="FontSize" Value="11"/><Setter Property="TextColor" Value="#E7EAF0"/>
+-                <Setter Property="BackgroundColor" Value="#30353E"/><Setter Property="HeightRequest" Value="35"/>
++                <Setter Property="Padding" Value="3,4"/><Setter Property="CornerRadius" Value="4"/>
++                <Setter Property="FontSize" Value="11"/><Setter Property="TextColor" Value="#202020"/>
++                <Setter Property="BackgroundColor" Value="#E0E0E0"/><Setter Property="HeightRequest" Value="32"/>
+             </Style>
+         </ResourceDictionary>
+     </ContentPage.Resources>
+diff --git a/AssetStudio.Mobile/MainPage.xaml.cs b/AssetStudio.Mobile/MainPage.xaml.cs
+--- a/AssetStudio.Mobile/MainPage.xaml.cs
++++ b/AssetStudio.Mobile/MainPage.xaml.cs
+@@ -3,6 +3,7 @@
+ using System.Linq;
+ using System.IO;
+ using System.Security.Cryptography;
++using System.Text;
+ 
+ namespace AssetStudioMobile;
+ 
+@@ -55,6 +56,8 @@
+     private readonly AssetDocumentLibrary _documentLibrary = new();
+     private readonly AssetStudioMobileLoader _assetLoader = new();
+     private bool _dropBridgeAttached;
++    private bool? _compactWorkspace;
++    private bool _showingCompactPreview;
+ 
+     public MainPage()
+     {
+@@ -64,9 +67,9 @@
+         BindableLayout.SetItemsSource(MetadataHost, _metadataRows);
+         BindableLayout.SetItemTemplate(MetadataHost, new DataTemplate(() =>
+         {
+-            var key = new Label { TextColor = Color.FromArgb("#929BA8"), FontSize = 11 };
++            var key = new Label { TextColor = Color.FromArgb("#777777"), FontSize = 11 };
+             key.SetBinding(Label.TextProperty, nameof(MetadataRow.Key));
+-            var value = new Label { TextColor = Color.FromArgb("#E2E6EC"), FontSize = 11, HorizontalTextAlignment = TextAlignment.End };
++            var value = new Label { TextColor = Color.FromArgb("#202020"), FontSize = 11, HorizontalTextAlignment = TextAlignment.End };
+             value.SetBinding(Label.TextProperty, nameof(MetadataRow.Value));
+             var row = new Grid { ColumnDefinitions = { new ColumnDefinition(GridLength.Star), new ColumnDefinition(new GridLength(1.2, GridUnitType.Star)) }, Padding = new Thickness(2, 5), ColumnSpacing = 8 };
+             row.Add(key); row.Add(value, 1);
+@@ -83,13 +86,39 @@
+ 
+     private void OnWorkspaceSizeChanged(object? sender, EventArgs e)
+     {
+-        // AssetStudio's desktop workspace is a browser pane beside a preview pane.
+-        // Keep that arrangement in landscape; stack the panes on a narrow portrait screen.
+         if (WorkspaceGrid.Width <= 0 || WorkspaceGrid.Height <= 0)
+             return;
+ 
+-        bool landscape = WorkspaceGrid.Width >= WorkspaceGrid.Height;
+-        if (landscape)
++        var compact = WorkspaceGrid.Width < 960;
++        if (_compactWorkspace == compact)
++            return;
++
++        _compactWorkspace = compact;
++        CompactWorkspaceTabs.IsVisible = compact;
++        AssetColumnHeaders.IsVisible = !compact && _browserTab == "Asset List";
++        if (compact)
++        {
++            _showingCompactPreview = false;
++            WorkspaceGrid.ColumnDefinitions = new ColumnDefinitionCollection { new ColumnDefinition(GridLength.Star) };
++            WorkspaceGrid.RowDefinitions = new RowDefinitionCollection
++            {
++                new RowDefinition(GridLength.Auto),
++                new RowDefinition(GridLength.Star)
++            };
++            Grid.SetRow(CompactWorkspaceTabs, 0);
++            Grid.SetColumn(CompactWorkspaceTabs, 0);
++            Grid.SetRow(BrowserPane, 1);
++            Grid.SetColumn(BrowserPane, 0);
++            Grid.SetRow(WorkspaceDivider, 1);
++            Grid.SetColumn(WorkspaceDivider, 0);
++            Grid.SetRow(PreviewPane, 1);
++            Grid.SetColumn(PreviewPane, 0);
++            WorkspaceDivider.WidthRequest = -1;
++            WorkspaceDivider.HeightRequest = 1;
++            WorkspaceDivider.IsVisible = false;
++            RefreshCompactWorkspacePane();
++        }
++        else
+         {
+             WorkspaceGrid.ColumnDefinitions = new ColumnDefinitionCollection
+             {
+@@ -98,25 +127,45 @@
+                 new ColumnDefinition(new GridLength(62, GridUnitType.Star))
+             };
+             WorkspaceGrid.RowDefinitions = new RowDefinitionCollection { new RowDefinition(GridLength.Star) };
+-            Grid.SetRow(BrowserPane, 0); Grid.SetColumn(BrowserPane, 0);
+-            Grid.SetRow(WorkspaceDivider, 0); Grid.SetColumn(WorkspaceDivider, 1);
+-            WorkspaceDivider.WidthRequest = 1; WorkspaceDivider.HeightRequest = -1;
+-            Grid.SetRow(PreviewPane, 0); Grid.SetColumn(PreviewPane, 2);
+-        }
+-        else
+-        {
+-            WorkspaceGrid.ColumnDefinitions = new ColumnDefinitionCollection { new ColumnDefinition(GridLength.Star) };
+-            WorkspaceGrid.RowDefinitions = new RowDefinitionCollection
+-            {
+-                new RowDefinition(new GridLength(45, GridUnitType.Star)),
+-                new RowDefinition(new GridLength(1)),
+-                new RowDefinition(new GridLength(55, GridUnitType.Star))
+-            };
+-            Grid.SetRow(BrowserPane, 0); Grid.SetColumn(BrowserPane, 0);
+-            Grid.SetRow(WorkspaceDivider, 1); Grid.SetColumn(WorkspaceDivider, 0);
+-            WorkspaceDivider.WidthRequest = -1; WorkspaceDivider.HeightRequest = 1;
+-            Grid.SetRow(PreviewPane, 2); Grid.SetColumn(PreviewPane, 0);
+-        }
++            Grid.SetRow(BrowserPane, 0);
++            Grid.SetColumn(BrowserPane, 0);
++            Grid.SetRow(WorkspaceDivider, 0);
++            Grid.SetColumn(WorkspaceDivider, 1);
++            Grid.SetRow(PreviewPane, 0);
++            Grid.SetColumn(PreviewPane, 2);
++            WorkspaceDivider.WidthRequest = 1;
++            WorkspaceDivider.HeightRequest = -1;
++            WorkspaceDivider.IsVisible = true;
++            BrowserPane.IsVisible = true;
++            PreviewPane.IsVisible = true;
++        }
++
++        foreach (var asset in _allAssets)
++            asset.IsCompactLayout = compact;
++    }
++
++    private void OnCompactWorkspaceTabClicked(object? sender, EventArgs e)
++    {
++        if (sender is not Button button)
++            return;
++
++        _showingCompactPreview = Equals(button.CommandParameter, "Preview");
++        RefreshCompactWorkspacePane();
++    }
++
++    private void RefreshCompactWorkspacePane()
++    {
++        if (_compactWorkspace != true)
++            return;
++
++        BrowserPane.IsVisible = !_showingCompactPreview;
++        PreviewPane.IsVisible = _showingCompactPreview;
++        CompactAssetsButton.BackgroundColor = _showingCompactPreview
++            ? Color.FromArgb("#E0E0E0")
++            : Color.FromArgb("#C5D8EB");
++        CompactPreviewButton.BackgroundColor = _showingCompactPreview
++            ? Color.FromArgb("#C5D8EB")
++            : Color.FromArgb("#E0E0E0");
+     }
+ 
+     protected override void OnHandlerChanged()
+@@ -205,7 +254,11 @@
+         void Apply()
+         {
+             _allAssets.Clear();
+-            foreach (var asset in incoming) _allAssets.Add(asset);
++            foreach (var asset in incoming)
++            {
++                asset.IsCompactLayout = _compactWorkspace == true;
++                _allAssets.Add(asset);
++            }
+             ApplyAssetFilter();
+             StatusLabel.Text = $"{_allAssets.Count} assets";
+         }
+@@ -436,7 +489,8 @@
+             PreviewKind.Text = "Mesh / Model";
+             ModelPreviewFrame.IsVisible = true;
+             ModelPreviewInfo.Text = string.IsNullOrWhiteSpace(details)
+-                ? "Mesh data is available, but a native iOS 3D renderer is not connected." : details;
++                ? "A wireframe preview is available for individual Mesh assets." : details;
++            OpenMeshPreviewButton.IsVisible = _selectedAsset?.SourceAsset is AssetStudio.Mesh;
+             PreviewDetails.Text = "";
+         });
+     }
+@@ -461,6 +515,7 @@
+         FontPreviewFrame.IsVisible = false;
+         AudioPreviewFrame.IsVisible = false;
+         ModelPreviewFrame.IsVisible = false;
++        OpenMeshPreviewButton.IsVisible = false;
+         AssetImagePreview.Source = null;
+         AssetTextPreview.Text = string.Empty;
+         AudioPreviewInfo.Text = string.Empty;
+@@ -544,7 +599,40 @@
+ 
+     private async Task ExtractFilesAsync()
+     {
+-        if (ExtractFilesRequested == null || AssetFolderPickerRequested == null)
++        if (ExtractFilesRequested == null)
++        {
++            if (AssetFolderPickerRequested != null)
++            {
++                ReportUnwired("Extract file");
++                return;
++            }
++
++            try
++            {
++                var pickedSources = await FilePicker.PickMultipleAsync(new PickOptions { PickerTitle = "Select files to extract" });
++                var sources = pickedSources?.ToList() ?? new List<FileResult>();
++                if (sources.Count == 0) return;
++
++                var persisted = new List<FileResult>();
++                foreach (var source in sources)
++                    persisted.Add(await _documentLibrary.ImportAsync(source));
++
++                SetBusy(true, $"Unpacking {persisted.Count} file(s)…");
++                var archivePath = await Task.Run(() => MobileBundleExtractor.CreateArchive(
++                    persisted.Select(file => file.FullPath).ToArray()));
++                await Share.Default.RequestAsync(new ShareFileRequest(
++                    "AssetStudio unpacked files", new ShareFile(archivePath)));
++                SetBusy(false, "Unpacked files are ready to share.");
++            }
++            catch (Exception ex)
++            {
++                SetBusy(false, $"File extraction failed: {ex.Message}");
++                if (_showErrorMessages) await DisplayAlert("File extraction failed", ex.Message, "OK");
++            }
++            return;
++        }
++
++        if (AssetFolderPickerRequested == null)
+         {
+             ReportUnwired("Extract file");
+             return;
+@@ -590,7 +678,10 @@
+     {
+         if (ExtractFolderRequested == null || AssetFolderPickerRequested == null)
+         {
+-            ReportUnwired("Extract folder");
++            await DisplayAlert("Extract folder",
++                "On iPhone, choose Extract file and select the Unity bundles or ZIP files to unpack.",
++                "Choose files");
++            await ExtractFilesAsync();
+             return;
+         }
+ 
+@@ -633,7 +724,10 @@
+     {
+         if (AssetFolderPickerRequested == null || AssetFolderSelected == null)
+         {
+-            StatusLabel.Text = "Folder loading requires host folder-picker and AssetStudio loader adapters";
++            await DisplayAlert("Load folder",
++                "On iPhone, choose Load file to select multiple Unity files from Files.",
++                "Choose files");
++            await PickAssetFilesAsync();
+             return;
+         }
+ 
+@@ -876,12 +970,6 @@
+ 
+     private async Task RunAssetExportAsync(string exportKind, string scope)
+     {
+-        if (ExportAssetsRequested == null || AssetFolderPickerRequested == null)
+-        {
+-            ReportUnwired($"{exportKind} export");
+-            return;
+-        }
+-
+         IReadOnlyList<AssetRow> targets = scope switch
+         {
+             "All assets" => _allAssets.ToList(),
+@@ -895,17 +983,57 @@
+             return;
+         }
+ 
+-        var destination = await AssetFolderPickerRequested.Invoke();
+-        if (string.IsNullOrWhiteSpace(destination)) return;
+-
+         using var cancellation = new CancellationTokenSource();
+         try
+         {
+             SetBusy(true, $"Exporting {targets.Count} assets…");
+-            var progress = new Progress<AssetLoadProgress>(update =>
+-                SetLoadingProgress(Math.Clamp(update.Percent, 0, 100),
+-                    string.IsNullOrWhiteSpace(update.Message) ? $"Exporting {targets.Count} assets…" : update.Message));
+-            var count = await ExportAssetsRequested.Invoke(exportKind, targets, destination, progress, cancellation.Token);
++            int count;
++            if (ExportAssetsRequested != null)
++            {
++                if (AssetFolderPickerRequested == null)
++                    throw new InvalidOperationException("The connected exporter requires a destination folder picker.");
++
++                var destination = await AssetFolderPickerRequested.Invoke();
++                if (string.IsNullOrWhiteSpace(destination)) return;
++                var progress = new Progress<AssetLoadProgress>(update =>
++                    SetLoadingProgress(Math.Clamp(update.Percent, 0, 100),
++                        string.IsNullOrWhiteSpace(update.Message) ? $"Exporting {targets.Count} assets…" : update.Message));
++                count = await ExportAssetsRequested.Invoke(exportKind, targets, destination, progress, cancellation.Token);
++            }
++            else
++            {
++                var sourceAssets = targets
++                    .Select(row => row.SourceAsset)
++                    .OfType<AssetStudio.Object>()
++                    .ToArray();
++                if (sourceAssets.Length != targets.Count)
++                    throw new InvalidOperationException("One or more selected rows are not backed by parsed Unity assets.");
++
++                var outputPath = await Task.Run(() =>
++                {
++                    if (sourceAssets.Length == 1)
++                    {
++                        return exportKind switch
++                        {
++                            "Raw" => MobileAssetExporter.ExportRaw(sourceAssets[0]),
++                            "Dump" => MobileAssetExporter.ExportDump(sourceAssets[0]),
++                            _ => MobileAssetExporter.Export(sourceAssets[0])
++                        };
++                    }
++
++                    var kind = exportKind switch
++                    {
++                        "Raw" => MobileExportKind.Raw,
++                        "Dump" => MobileExportKind.Dump,
++                        _ => MobileExportKind.Converted
++                    };
++                    return MobileAssetExporter.ExportArchive(sourceAssets, kind);
++                }, cancellation.Token);
++
++                await Share.Default.RequestAsync(new ShareFileRequest(
++                    $"AssetStudio {exportKind} export", new ShareFile(outputPath)));
++                count = sourceAssets.Length;
++            }
+             StatusLabel.Text = $"Exported {count} item(s) · {exportKind} · {scope}";
+         }
+         catch (OperationCanceledException)
+@@ -940,8 +1068,8 @@
+         });
+         await Navigation.PushModalAsync(new NavigationPage(dialog)
+         {
+-            BarBackgroundColor = Color.FromArgb("#22252B"),
+-            BarTextColor = Color.FromArgb("#F1F3F5")
++            BarBackgroundColor = Color.FromArgb("#E8E8E8"),
++            BarTextColor = Color.FromArgb("#202020")
+         });
+     }
+ 
+@@ -998,7 +1126,7 @@
+         ClassSearch.IsVisible = _browserTab == "Asset Classes";
+         HierarchySearchPanel.IsVisible = _browserTab == "Scene Hierarchy";
+         HierarchyActions.IsVisible = _browserTab == "Scene Hierarchy";
+-        AssetColumnHeaders.IsVisible = _browserTab == "Asset List";
++        AssetColumnHeaders.IsVisible = _compactWorkspace != true && _browserTab == "Asset List";
+         StatusLabel.Text = $"{_browserTab} · {(_browserTab == "Asset List" ? _visibleAssets.Count : _browserTab == "Scene Hierarchy" ? _hierarchy.Count : _visibleClasses.Count)} items";
+     }
+ 
+@@ -1214,6 +1342,66 @@
+         _showingDump = false;
+         RefreshPreviewSurfaceVisibility();
+         StatusLabel.Text = $"{_selectedAssets.Count} selected · Preview: {row.Name}";
++        _ = PresentAssetPreviewAsync(row);
++    }
++
++    private async Task PresentAssetPreviewAsync(AssetRow row)
++    {
++        try
++        {
++            switch (row.SourceAsset)
++            {
++                case AssetStudio.TextAsset text:
++                    ShowTextPreview(row.Name, "TextAsset", Encoding.UTF8.GetString(text.m_Script));
++                    break;
++                case AssetStudio.Texture2D texture:
++                    PreviewDetails.Text = "Decoding texture…";
++                    var imagePath = await Task.Run(() => MobileAssetExporter.Export(texture));
++                    if (_selectedAsset?.Id != row.Id) return;
++                    ShowTexturePreview(row.Name, ImageSource.FromFile(imagePath), texture.m_Width,
++                        texture.m_Height, texture.m_TextureFormat.ToString());
++                    break;
++                case AssetStudio.Mesh mesh:
++                    ShowModelPreview(row.Name,
++                        $"Mesh · {mesh.m_VertexCount:N0} vertices · Open the wireframe preview to inspect it.");
++                    break;
++                case AssetStudio.MonoBehaviour behaviour:
++                    ShowTextPreview(row.Name, "MonoBehaviour dump", behaviour.Dump() ?? string.Empty);
++                    break;
++                case AssetStudio.AudioClip audio:
++                    ShowAudioPreview(row.Name, audio.m_CompressionFormat.ToString(),
++                        "Audio is available for export in its stored format. Playback needs a native iOS audio backend.");
++                    break;
++                case AssetStudio.VideoClip:
++                    ShowUnsupportedPreview(row.Name, "VideoClip",
++                        "Video data can be exported in its stored format.");
++                    break;
++                default:
++                    ShowUnsupportedPreview(row.Name, row.Type,
++                        $"No mobile preview is available for {row.Type}. Use Export to save the asset.");
++                    break;
++            }
++        }
++        catch (Exception ex)
++        {
++            if (_selectedAsset?.Id != row.Id) return;
++            ShowUnsupportedPreview(row.Name, row.Type, $"Preview failed: {ex.Message}");
++        }
++    }
++
++    private async void OnMeshPreviewClicked(object sender, EventArgs e)
++    {
++        if (_selectedAsset?.SourceAsset is not AssetStudio.Mesh mesh)
++            return;
++
++        try
++        {
++            await Navigation.PushModalAsync(new NavigationPage(new MeshPreviewPage(mesh)));
++        }
++        catch (Exception ex)
++        {
++            await DisplayAlert("Mesh preview failed", ex.Message, "OK");
++        }
+     }
+ 
+     // Returns the current multi-selection in the same order reported by CollectionView.
+@@ -1237,8 +1425,8 @@
+     {
+         PreviewScroll.IsVisible = _previewEnabled && !_showingDump;
+         DumpScroll.IsVisible = _previewEnabled && _showingDump;
+-        PreviewTab.BackgroundColor = !_showingDump ? Color.FromArgb("#46566D") : Color.FromArgb("#30353E");
+-        DumpTab.BackgroundColor = _showingDump ? Color.FromArgb("#46566D") : Color.FromArgb("#30353E");
++        PreviewTab.BackgroundColor = !_showingDump ? Color.FromArgb("#C5D8EB") : Color.FromArgb("#E0E0E0");
++        DumpTab.BackgroundColor = _showingDump ? Color.FromArgb("#C5D8EB") : Color.FromArgb("#E0E0E0");
+     }
+ 
+     private void OnHierarchySelectionChanged(object sender, SelectionChangedEventArgs e)
+@@ -1280,10 +1468,27 @@
+         RefreshPreviewSurfaceVisibility();
+     }
+ 
+-    private void OnDumpTabClicked(object sender, EventArgs e)
++    private async void OnDumpTabClicked(object sender, EventArgs e)
+     {
+         _showingDump = true;
+         RefreshPreviewSurfaceVisibility();
++        var row = _selectedAsset;
++        if (_browserTab != "Asset List" || row == null || row.SourceAsset is not AssetStudio.Object asset)
++            return;
++
++        DumpText.Text = "Generating serialized dump…";
++        try
++        {
++            var dump = await Task.Run(() => asset.Dump() ?? string.Empty);
++            if (_selectedAsset?.Id == row.Id)
++                DumpText.Text = dump;
++        }
++        catch (Exception ex)
++        {
++            if (_selectedAsset?.Id != row.Id) return;
++            DumpText.Text = $"Dump failed: {ex.Message}";
++            StatusLabel.Text = $"Dump failed: {ex.Message}";
++        }
+     }
+ 
+     // Native multi-select type filter. The original WinForms menu permits
+@@ -1303,21 +1508,21 @@
+                                         : new HashSet<string>(current, StringComparer.Ordinal);
+             _completed = completed;
+             Title = "Filter Type";
+-            BackgroundColor = Color.FromArgb("#17191D");
+-
+-            var selectAll = new Button { Text = "Select all", BackgroundColor = Color.FromArgb("#303640"), TextColor = Colors.White };
++            BackgroundColor = Color.FromArgb("#FFFFFF");
++
++            var selectAll = new Button { Text = "Select all", BackgroundColor = Color.FromArgb("#E0E0E0"), TextColor = Color.FromArgb("#202020") };
+             selectAll.Clicked += (_, _) => SetAll(true);
+-            var clearAll = new Button { Text = "Clear", BackgroundColor = Color.FromArgb("#303640"), TextColor = Colors.White };
++            var clearAll = new Button { Text = "Clear", BackgroundColor = Color.FromArgb("#E0E0E0"), TextColor = Color.FromArgb("#202020") };
+             clearAll.Clicked += (_, _) => SetAll(false);
+             var list = new VerticalStackLayout { Spacing = 2, Padding = new Thickness(12, 4) };
+             foreach (var type in types)
+             {
+-                var check = new CheckBox { IsChecked = _selected.Contains(type), Color = Color.FromArgb("#65A8FF"), VerticalOptions = LayoutOptions.Center };
++                var check = new CheckBox { IsChecked = _selected.Contains(type), Color = Color.FromArgb("#2878C8"), VerticalOptions = LayoutOptions.Center };
+                 check.CheckedChanged += (_, args) =>
+                 {
+                     if (args.Value) _selected.Add(type); else _selected.Remove(type);
+                 };
+-                var label = new Label { Text = type, TextColor = Color.FromArgb("#E7EAF0"), VerticalTextAlignment = TextAlignment.Center, FontSize = 14 };
++                var label = new Label { Text = type, TextColor = Color.FromArgb("#202020"), VerticalTextAlignment = TextAlignment.Center, FontSize = 14 };
+                 var row = new Grid { ColumnDefinitions = { new ColumnDefinition(GridLength.Auto), new ColumnDefinition(GridLength.Star) }, Padding = new Thickness(4, 3) };
+                 row.Add(check); row.Add(label, 1);
+                 var tap = new TapGestureRecognizer();
+@@ -1328,7 +1533,7 @@
+ 
+             var apply = new Button { Text = "Apply", BackgroundColor = Color.FromArgb("#2878C8"), TextColor = Colors.White };
+             apply.Clicked += async (_, _) => await Finish(true);
+-            var cancel = new Button { Text = "Cancel", BackgroundColor = Color.FromArgb("#303640"), TextColor = Colors.White };
++            var cancel = new Button { Text = "Cancel", BackgroundColor = Color.FromArgb("#E0E0E0"), TextColor = Color.FromArgb("#202020") };
+             cancel.Clicked += async (_, _) => await Finish(false);
+             var top = new Grid { ColumnDefinitions = { new ColumnDefinition(GridLength.Star), new ColumnDefinition(GridLength.Star) }, ColumnSpacing = 8 };
+             top.Add(selectAll); top.Add(clearAll, 1);
+@@ -1370,8 +1575,10 @@
+     // the loader's actual work; this page never estimates it.
+     public sealed record AssetLoadProgress(int Percent, string Message);
+ 
+-    public sealed class AssetRow
+-    {
++    public sealed class AssetRow : BindableObject
++    {
++        private bool _isCompactLayout;
++
+         // Stable UI identity is separate from PathID: PathIDs are only unique
+         // within a serialized file and can legitimately repeat across files.
+         public string Id { get; init; } = Guid.NewGuid().ToString("N");
+@@ -1389,6 +1596,27 @@
+         // It deliberately avoids referencing the WinForms-only AssetItem type.
+         // Keep this reference alive for as long as the row is in the workspace.
+         public object? SourceAsset { get; init; }
++
++        public bool IsCompactLayout
++        {
++            get => _isCompactLayout;
++            set
++            {
++                if (_isCompactLayout == value) return;
++                _isCompactLayout = value;
++                OnPropertyChanged();
++                OnPropertyChanged(nameof(IsDesktopLayout));
++            }
++        }
++
++        public bool IsDesktopLayout => !IsCompactLayout;
++        public string CompactDetails => string.Join(" · ", new[]
++        {
++            Type,
++            Container,
++            string.IsNullOrWhiteSpace(PathId) ? null : $"ID {PathId}",
++            Size
++        }.Where(value => !string.IsNullOrWhiteSpace(value)));
+     }
+ 
+     // Host adapter: create a UI row from the real core AssetStudio object.
+diff --git a/AssetStudio.Mobile/Platforms/iOS/Info.plist b/AssetStudio.Mobile/Platforms/iOS/Info.plist
+--- a/AssetStudio.Mobile/Platforms/iOS/Info.plist
++++ b/AssetStudio.Mobile/Platforms/iOS/Info.plist
+@@ -19,11 +19,14 @@
+ 	</array>
+ 	<key>UISupportedInterfaceOrientations</key>
+ 	<array>
++		<string>UIInterfaceOrientationPortrait</string>
+ 		<string>UIInterfaceOrientationLandscapeLeft</string>
+ 		<string>UIInterfaceOrientationLandscapeRight</string>
+ 	</array>
+ 	<key>UISupportedInterfaceOrientations~ipad</key>
+ 	<array>
++		<string>UIInterfaceOrientationPortrait</string>
++		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+ 		<string>UIInterfaceOrientationLandscapeLeft</string>
+ 		<string>UIInterfaceOrientationLandscapeRight</string>
+ 	</array>
+diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -32,7 +32,9 @@
+ 
+ ## iOS app (in progress)
+ 
+-`AssetStudio.Mobile` is the iPhone front end in the original AssetStudio solution and reuses its Unity asset parser. It can import multiple files, Unity bundles, WebData, and ZIP files; search parsed assets; unpack bundles into a shareable ZIP; and export TextAssets, MonoBehaviours with a serialized type tree, videos, source audio, raw data, PNG textures, and individual meshes as OBJ. Individual Mesh assets can be viewed as an interactive wireframe and supported textures can be previewed.
++`AssetStudio.Mobile` is the iPhone front end in the original AssetStudio solution and reuses its Unity asset parser. It can import multiple files, Unity bundles, WebData, and ZIP files; search parsed assets; unpack bundles into a shareable ZIP; and export TextAssets, MonoBehaviours with a serialized type tree, videos, source audio, raw data, PNG textures, and individual meshes as OBJ. Individual Mesh assets can be viewed as an interactive wireframe and supported textures can be previewed. Exports and extracted bundles are handed to the native iOS share sheet.
++
++The iPhone app supports portrait and landscape. On narrow screens the desktop-style browser and preview switch to full-height **Assets** and **Preview** tabs, and asset rows collapse into compact summaries; wider screens retain the side-by-side workspace.
+ 
+ This is not yet feature parity with the Windows GUI:
+ 
+diff --git a/AssetStudio.Mobile/AppShell.xaml b/AssetStudio.Mobile/AppShell.xaml
+--- a/AssetStudio.Mobile/AppShell.xaml
++++ b/AssetStudio.Mobile/AppShell.xaml
+@@ -4,10 +4,10 @@
+     xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+     xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+     xmlns:local="clr-namespace:AssetStudioMobile"
+-    Title="Home">
++    Title="AssetStudio">
+ 
+     <ShellContent
+-        Title="Home"
++        Title="AssetStudio"
+         ContentTemplate="{DataTemplate local:MainPage}"
+         Route="MainPage" />
+ 
+diff --git a/PORT_FILE_AUDIT.md b/PORT_FILE_AUDIT.md
+--- a/PORT_FILE_AUDIT.md
++++ b/PORT_FILE_AUDIT.md
+@@ -2,7 +2,11 @@
+ 
+ Audit basis: original `AssetStudio-master-original.zip` extracted at `/mnt/data/as_original/AssetStudio-master`, compared with the actual v27 mobile source folder.
+ 
+-## Important finding
++## Current status
++
++This report describes the earlier v27 reconstruction and is historical, not an audit of the current source tree. The current MAUI project has a `.csproj`, references the `AssetStudio` parser, and connects `AssetStudioMobileLoader` to the page. See `AssetStudio.Mobile/AssetStudioMobile.csproj` and `AssetStudio.Mobile/AssetStudioMobileLoader.cs`.
++
++## Historical finding from v27
+ 
+ **None of the original repository projects are currently compiled into the v27 mobile source.** The v27 folder contains reconstructed MAUI page files and iOS drop support, but it has no `.csproj`, `.sln`, project references, or direct `using AssetStudio...` integration. `MainPage.AssetRow.SourceObject` is only an opaque `object` reference. Therefore, the categories below describe what should be reused, adapted, or excluded for the port—not files already integrated.
+ 
+diff --git a/AssetStudio.Mobile/PORT_FILE_AUDIT.md b/AssetStudio.Mobile/PORT_FILE_AUDIT.md
+--- a/AssetStudio.Mobile/PORT_FILE_AUDIT.md
++++ b/AssetStudio.Mobile/PORT_FILE_AUDIT.md
+@@ -2,7 +2,11 @@
+ 
+ Audit basis: original `AssetStudio-master-original.zip` extracted at `/mnt/data/as_original/AssetStudio-master`, compared with the actual v27 mobile source folder.
+ 
+-## Important finding
++## Current status
++
++This report describes the earlier v27 reconstruction and is historical, not an audit of the current source tree. The current MAUI project has a `.csproj`, references the `AssetStudio` parser, and connects `AssetStudioMobileLoader` to the page. See `AssetStudioMobile.csproj` and `AssetStudioMobileLoader.cs`.
++
++## Historical finding from v27
+ 
+ **None of the original repository projects are currently compiled into the v27 mobile source.** The v27 folder contains reconstructed MAUI page files and iOS drop support, but it has no `.csproj`, `.sln`, project references, or direct `using AssetStudio...` integration. `MainPage.AssetRow.SourceObject` is only an opaque `object` reference. Therefore, the categories below describe what should be reused, adapted, or excluded for the port—not files already integrated.
+ 
+diff --git a/AssetStudio.Mobile/README.txt b/AssetStudio.Mobile/README.txt
+--- a/AssetStudio.Mobile/README.txt
++++ b/AssetStudio.Mobile/README.txt
+@@ -1,5 +1,12 @@
+ AssetStudio Mobile GUI — Stage 37 / v27
+ ======================================
++
++HISTORICAL NOTE
++---------------
++The Stage 37/38 limitations below describe an earlier source snapshot. The current
++AssetStudio.Mobile project includes its MAUI project, AssetStudio parser reference,
++and connected mobile loader. For current build instructions and iOS limitations,
++see the repository README.md.
+ 
+ New feature: iOS Files drag-and-drop + persistent source-file library.
+ 
