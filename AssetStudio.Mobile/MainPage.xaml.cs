@@ -62,12 +62,11 @@ public partial class MainPage : ContentPage
     private bool _showingEmptyPreview = true;
     private readonly AssetDocumentLibrary _documentLibrary = new();
     private readonly AssetStudioMobileLoader _assetLoader = new();
-    private bool _dropBridgeAttached;
     private bool? _compactWorkspace;
     private bool _showingCompactPreview;
     private const double WorkspaceDividerWidth = 20;
-    private double _workspaceBrowserRatio = 0.61;
-    private double _workspaceDragStartRatio = 0.61;
+    private double _workspaceBrowserRatio = 0.38;
+    private double _workspaceDragStartRatio = 0.38;
 
     public MainPage()
     {
@@ -101,6 +100,7 @@ public partial class MainPage : ContentPage
         ClassesCollection.ItemsSource = _visibleClasses;
         RefreshBrowserTab();
         DroppedFilesReceived += OnDroppedFilesReceived;
+        DropFailed += OnDropFailed;
         var workspaceSplitter = new PanGestureRecognizer();
         workspaceSplitter.PanUpdated += OnWorkspaceDividerPanUpdated;
         WorkspaceDivider.GestureRecognizers.Add(workspaceSplitter);
@@ -187,8 +187,7 @@ public partial class MainPage : ContentPage
 
         if (e.StatusType == GestureStatus.Completed)
         {
-            var browserPercent = (int)Math.Round(_workspaceBrowserRatio * 100);
-            StatusLabel.Text = $"Asset list {browserPercent}% · Preview {100 - browserPercent}%";
+            StatusLabel.Text = "Ready to go";
         }
     }
 
@@ -230,18 +229,17 @@ public partial class MainPage : ContentPage
     {
         base.OnHandlerChanged();
 #if IOS
-        if (!_dropBridgeAttached && Handler?.PlatformView is UIKit.UIViewController controller)
-        {
-            AssetStudioDropBridge.Attach(controller.View);
-            _dropBridgeAttached = true;
-        }
+        if (Handler?.PlatformView is UIKit.UIViewController controller && controller.View is { } view)
+            AssetStudioDropBridge.Attach(view);
 #endif
     }
 
     // Native iOS UIDropInteraction sends temporary file paths here. They are
     // immediately copied into the app's Documents library before the provider URL expires.
     public static event Action<IReadOnlyList<string>>? DroppedFilesReceived;
+    public static event Action<string>? DropFailed;
     public static void PublishDroppedFiles(IReadOnlyList<string> paths) => DroppedFilesReceived?.Invoke(paths);
+    public static void PublishDropFailure(string message) => DropFailed?.Invoke(message);
 
     private async void OnDroppedFilesReceived(IReadOnlyList<string> paths)
     {
@@ -250,8 +248,9 @@ public partial class MainPage : ContentPage
             var imported = new List<FileResult>();
             foreach (var path in paths)
             {
-                if (File.Exists(path))
-                    imported.Add(await _documentLibrary.ImportPathAsync(path));
+                if (!File.Exists(path))
+                    throw new FileNotFoundException("A dropped file was no longer available.", path);
+                imported.Add(await _documentLibrary.ImportPathAsync(path));
             }
             if (imported.Count == 0) return;
             await LoadPersistentFilesAsync(imported, "Dropped files");
@@ -263,7 +262,16 @@ public partial class MainPage : ContentPage
         }
     }
 
-    private async void OnLibraryClicked(object sender, EventArgs e)
+    private async void OnDropFailed(string message)
+    {
+        StatusLabel.Text = $"Drop failed: {message}";
+        if (_showErrorMessages)
+            await DisplayAlert("Could not import dropped file", message, "OK");
+    }
+
+    private async void OnLibraryClicked(object sender, EventArgs e) => await OpenLibraryAsync();
+
+    private async Task OpenLibraryAsync()
     {
         var entries = _documentLibrary.GetEntries();
         if (entries.Count == 0)
@@ -694,16 +702,22 @@ public partial class MainPage : ContentPage
 
     private async void OnFileMenuClicked(object sender, EventArgs e)
     {
-        var choice = await Choose("File", "Load file", "Load folder", "Extract file", "Extract folder");
+        var choice = await Choose("File", "Load file", "Load multiple files", "Load folder", "Asset Library", "Extract file", "Extract folder");
         if (choice == null) return;
 
         switch (choice)
         {
             case "Load file":
-                await PickAssetFilesAsync();
+                await PickAssetFilesAsync(allowMultiple: false);
+                break;
+            case "Load multiple files":
+                await PickAssetFilesAsync(allowMultiple: true);
                 break;
             case "Load folder":
                 await PickAssetFolderAsync();
+                break;
+            case "Asset Library":
+                await OpenLibraryAsync();
                 break;
             case "Extract file":
                 await ExtractFilesAsync();
@@ -713,9 +727,6 @@ public partial class MainPage : ContentPage
                 break;
         }
     }
-
-    private async void OnOpenFilesClicked(object sender, EventArgs e) =>
-        await PickAssetFilesAsync(allowMultiple: true);
 
     private async Task ExtractFilesAsync()
     {
@@ -892,7 +903,7 @@ public partial class MainPage : ContentPage
         }
     }
 
-    private async Task PickAssetFilesAsync(bool allowMultiple = true)
+    private async Task PickAssetFilesAsync(bool allowMultiple = false)
     {
         SetBusy(true, allowMultiple ? "Choose Unity files…" : "Choose a Unity file…");
         try
@@ -913,17 +924,7 @@ public partial class MainPage : ContentPage
 
             if (selected.Count == 0)
             {
-                SetBusy(false, "No files selected. In Files, select a file before returning to AssetStudio.");
-                return;
-            }
-
-            if (!await DisplayAlert(
-                    "Open selected files?",
-                    $"Open {selected.Count} file(s) in AssetStudio?",
-                    "Open",
-                    "Cancel"))
-            {
-                SetBusy(false, "File opening cancelled.");
+                SetBusy(false, "No files selected.");
                 return;
             }
 

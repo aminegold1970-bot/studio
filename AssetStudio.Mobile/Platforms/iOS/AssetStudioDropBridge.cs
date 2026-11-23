@@ -32,7 +32,12 @@ internal sealed class AssetStudioDropBridge : UIDropInteractionDelegate
 
     public override bool CanHandleSession(UIDropInteraction interaction, IUIDropSession session)
         => session.Items.Any(item => item.ItemProvider.HasItemConformingTo("public.data") ||
-                                     item.ItemProvider.HasItemConformingTo("public.item"));
+                                     item.ItemProvider.HasItemConformingTo("public.item") ||
+                                     item.ItemProvider.HasItemConformingTo("public.file-url") ||
+                                     item.ItemProvider.HasItemConformingTo("public.url"));
+
+    public override UIDropProposal SessionDidUpdate(UIDropInteraction interaction, IUIDropSession session)
+        => new UIDropProposal(UIDropOperation.Copy);
 
     public override void PerformDrop(UIDropInteraction interaction, IUIDropSession session)
     {
@@ -43,33 +48,66 @@ internal sealed class AssetStudioDropBridge : UIDropInteractionDelegate
     private static async Task CopyProvidersAsync(NSItemProvider[] providers)
     {
         var copied = new List<string>();
+        var failures = new List<string>();
         foreach (var provider in providers)
         {
-            var path = await CopyProviderAsync(provider);
-            if (!string.IsNullOrWhiteSpace(path)) copied.Add(path);
+            try
+            {
+                copied.Add(await CopyProviderAsync(provider));
+            }
+            catch (Exception exception)
+            {
+                failures.Add(exception.Message);
+            }
         }
 
         if (copied.Count > 0)
             MainThread.BeginInvokeOnMainThread(() => MainPage.PublishDroppedFiles(copied));
+
+        if (failures.Count > 0 || copied.Count == 0)
+        {
+            var message = failures.Count == 0
+                ? "The dropped item did not provide an accessible file."
+                : string.Join(Environment.NewLine, failures);
+            MainThread.BeginInvokeOnMainThread(() => MainPage.PublishDropFailure(message));
+        }
     }
 
-    private static Task<string?> CopyProviderAsync(NSItemProvider provider)
+    private static Task<string> CopyProviderAsync(NSItemProvider provider)
     {
         var type = provider.RegisteredTypeIdentifiers.FirstOrDefault(id =>
-            provider.HasItemConformingTo(id) && (id == "public.data" || id == "public.item" || id.StartsWith("public.")));
+            provider.HasItemConformingTo(id) &&
+            (id == "public.data" || id == "public.item" || id == "public.file-url" ||
+             id == "public.url" || id.StartsWith("public.", StringComparison.Ordinal)));
         type ??= "public.data";
-        var completion = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completion = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         provider.LoadFileRepresentation(type, (url, error) =>
         {
             try
             {
-                if (error != null || url == null) { completion.TrySetResult(null); return; }
-                var source = url.Path;
-                if (string.IsNullOrEmpty(source) || !File.Exists(source)) { completion.TrySetResult(null); return; }
-                var ext = Path.GetExtension(source);
-                var target = Path.Combine(TemporaryDropDirectory, Guid.NewGuid().ToString("N") + ext);
-                File.Copy(source, target, overwrite: false);
-                completion.TrySetResult(target);
+                if (error != null)
+                    throw new IOException($"iOS could not read the dropped file: {error.LocalizedDescription}");
+                if (url == null || !url.IsFileUrl)
+                    throw new IOException("iOS did not provide a local file for the dropped item.");
+
+                var hasScopedAccess = url.StartAccessingSecurityScopedResource();
+                try
+                {
+                    var source = url.Path;
+                    if (string.IsNullOrEmpty(source) || !File.Exists(source))
+                        throw new FileNotFoundException("The temporary file supplied by iOS is no longer available.");
+
+                    var targetDirectory = Path.Combine(TemporaryDropDirectory, Guid.NewGuid().ToString("N"));
+                    Directory.CreateDirectory(targetDirectory);
+                    var target = Path.Combine(targetDirectory, Path.GetFileName(source));
+                    File.Copy(source, target, overwrite: false);
+                    completion.TrySetResult(target);
+                }
+                finally
+                {
+                    if (hasScopedAccess)
+                        url.StopAccessingSecurityScopedResource();
+                }
             }
             catch (Exception ex) { completion.TrySetException(ex); }
         });

@@ -3,9 +3,7 @@
     <Grid RowDefinitions="Auto,*,Auto" RowSpacing="0" ColumnDefinitions="*">
         <ScrollView Grid.Row="0" Orientation="Horizontal" BackgroundColor="#F0F0F0">
             <HorizontalStackLayout Padding="5,1" Spacing="0">
-                <Button Text="Open files" Clicked="OnOpenFilesClicked" Style="{StaticResource MenuButton}"/>
                 <Button Text="File" Clicked="OnFileMenuClicked" Style="{StaticResource MenuButton}"/>
-                <Button Text="Library" Clicked="OnLibraryClicked" Style="{StaticResource MenuButton}"/>
                 <Button Text="Options" Clicked="OnOptionsMenuClicked" Style="{StaticResource MenuButton}"/>
                 <Button Text="Model" Clicked="OnModelMenuClicked" Style="{StaticResource MenuButton}"/>
                 <Button Text="Export" Clicked="OnExportMenuClicked" Style="{StaticResource MenuButton}"/>
@@ -14,7 +12,7 @@
             </HorizontalStackLayout>
         </ScrollView>
 
-        <Grid x:Name="WorkspaceGrid" Grid.Row="1" ColumnDefinitions="61*,20,39*" RowDefinitions="Auto,*" ColumnSpacing="0" BackgroundColor="#B7B7B7" SizeChanged="OnWorkspaceSizeChanged">
+        <Grid x:Name="WorkspaceGrid" Grid.Row="1" ColumnDefinitions="38*,20,62*" RowDefinitions="Auto,*" ColumnSpacing="0" BackgroundColor="#B7B7B7" SizeChanged="OnWorkspaceSizeChanged">
             <Grid x:Name="CompactWorkspaceTabs" Grid.Row="0" ColumnDefinitions="*,*" Padding="4,2" ColumnSpacing="2" BackgroundColor="#F0F0F0" IsVisible="False">
                 <Button x:Name="CompactAssetsButton" Text="Assets" CommandParameter="Assets" Clicked="OnCompactWorkspaceTabClicked" Style="{StaticResource TabButton}"/>
                 <Button x:Name="CompactPreviewButton" Grid.Column="1" Text="Preview" CommandParameter="Preview" Clicked="OnCompactWorkspaceTabClicked" Style="{StaticResource TabButton}"/>
@@ -25,11 +23,11 @@
             <Button x:Name="ClassesTab" Grid.Column="2" Text="Asset Classes" Clicked="OnBrowserTabClicked" Style="{StaticResource TabButton}"/>
         </Grid>
 
-        <Grid Grid.Row="1" RowDefinitions="Auto,Auto,Auto,Auto" Padding="3,1" BackgroundColor="#F0F0F0">
-            <SearchBar x:Name="AssetSearch" Placeholder="Search" PlaceholderColor="#777777" TextColor="#202020" BackgroundColor="#FFFFFF" HeightRequest="38" TextChanged="OnAssetSearchTextChanged"/>
-            <SearchBar x:Name="ClassSearch" Grid.Row="0" IsVisible="False" Placeholder="Search" PlaceholderColor="#777777" TextColor="#202020" BackgroundColor="#FFFFFF" HeightRequest="38" TextChanged="OnClassSearchTextChanged"/>
+        <Grid Grid.Row="1" RowDefinitions="34,Auto,Auto,Auto" Padding="3,1" BackgroundColor="#F0F0F0">
+            <SearchBar x:Name="AssetSearch" Placeholder="Search" PlaceholderColor="#777777" TextColor="#202020" BackgroundColor="#FFFFFF" HeightRequest="32" FontSize="12" Margin="0" TextChanged="OnAssetSearchTextChanged"/>
+            <SearchBar x:Name="ClassSearch" Grid.Row="0" IsVisible="False" Placeholder="Search" PlaceholderColor="#777777" TextColor="#202020" BackgroundColor="#FFFFFF" HeightRequest="32" FontSize="12" Margin="0" TextChanged="OnClassSearchTextChanged"/>
             <Grid x:Name="HierarchySearchPanel" Grid.Row="0" IsVisible="False" ColumnDefinitions="*,Auto" ColumnSpacing="5">
-                <SearchBar x:Name="HierarchySearch" Placeholder="Search" PlaceholderColor="#777777" TextColor="#202020" BackgroundColor="#FFFFFF" HeightRequest="38" SearchButtonPressed="OnHierarchySearchButtonPressed" TextChanged="OnHierarchySearchTextChanged"/>
+                <SearchBar x:Name="HierarchySearch" Placeholder="Search" PlaceholderColor="#777777" TextColor="#202020" BackgroundColor="#FFFFFF" HeightRequest="32" FontSize="12" Margin="0" SearchButtonPressed="OnHierarchySearchButtonPressed" TextChanged="OnHierarchySearchTextChanged"/>
                 <Button Grid.Column="1" Text="Next" Clicked="OnHierarchySearchNextClicked" Style="{StaticResource TabButton}"/>
             </Grid>
             <HorizontalStackLayout x:Name="HierarchyActions" Grid.Row="1" IsVisible="False" Spacing="5" Padding="0,3">
@@ -48,7 +46,7 @@
         <Grid Grid.Row="2" BackgroundColor="#FFFFFF">
                 <CollectionView x:Name="AssetCollection" SelectionMode="Multiple" SelectionChanged="OnAssetSelectionChanged" BackgroundColor="#FFFFFF">
                     <CollectionView.EmptyView>
-                        <Label x:Name="AssetEmptyLabel" Text="No assets loaded. Use Open files to load Unity assets." TextColor="#555555" HorizontalTextAlignment="Center" VerticalTextAlignment="Center"/>
+                        <Label x:Name="AssetEmptyLabel" Text="No assets loaded. Use File → Load file to load Unity assets." TextColor="#555555" HorizontalTextAlignment="Center" VerticalTextAlignment="Center"/>
                     </CollectionView.EmptyView>
                     <CollectionView.ItemTemplate>
                         <DataTemplate>
