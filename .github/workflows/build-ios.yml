@@ -22,11 +22,11 @@ jobs:
     runs-on: macos-26
 
     steps:
-      # 1. Checkout source
+      # 1. Checkout
       - name: Check out source
         uses: actions/checkout@v4
 
-      # 2. Install .NET 10
+      # 2. Install .NET 10 SDK
       - name: Set up .NET 10
         uses: actions/setup-dotnet@v4
         with:
@@ -64,8 +64,21 @@ jobs:
 
           echo "Workload installation took $((SECONDS - START)) seconds"
 
-      # 6. Restore project dependencies
-      - name: Restore project dependencies
+      # 6. Restore original AssetStudio projects (.NET 6)
+      - name: Restore AssetStudio dependencies
+        run: |
+          START=$SECONDS
+
+          dotnet restore AssetStudio/AssetStudio.csproj
+
+          dotnet restore AssetStudio.PInvoke/AssetStudio.PInvoke.csproj
+
+          dotnet restore Texture2DDecoderWrapper/Texture2DDecoderWrapper.csproj
+
+          echo "AssetStudio restore took $((SECONDS - START)) seconds"
+
+      # 7. Restore mobile project (.NET 10 iOS)
+      - name: Restore mobile dependencies
         run: |
           START=$SECONDS
 
@@ -73,9 +86,9 @@ jobs:
             --runtime ios-arm64 \
             -p:TargetFramework=net10.0-ios
 
-          echo "Restore took $((SECONDS - START)) seconds"
+          echo "Mobile restore took $((SECONDS - START)) seconds"
 
-      # 7. Publish unsigned ARM64 app
+      # 8. Publish unsigned ARM64 app
       - name: Publish unsigned Release app
         run: |
           START=$SECONDS
@@ -91,7 +104,7 @@ jobs:
 
           echo "Publish took $((SECONDS - START)) seconds"
 
-      # 8. Package IPA
+      # 9. Package IPA
       - name: Package unsigned IPA
         shell: bash
         run: |
@@ -130,7 +143,7 @@ jobs:
           echo "IPA size: $(du -h "$ipa_path" | cut -f1)"
           echo "Packaging took $((SECONDS - START)) seconds"
 
-      # 9. Upload IPA
+      # 10. Upload IPA
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
