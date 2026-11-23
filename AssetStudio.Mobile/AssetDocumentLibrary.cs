@@ -75,7 +75,11 @@ public sealed class AssetDocumentLibrary
             .Where(path => File.Exists(path) && !Path.GetFileName(path).StartsWith(".incoming_", StringComparison.Ordinal))
             .Select(path => new FileInfo(path))
             .OrderByDescending(info => info.LastWriteTimeUtc)
-            .Select(info => new LibraryFileEntry(new FileResult(info.FullName), Path.GetFileName(info.FullName), info.Length, info.LastWriteTime))
+            .Select(info => new LibraryFileEntry(
+                new FileResult(info.FullName),
+                GetOriginalName(Path.GetFileName(info.FullName)),
+                info.Length,
+                info.LastWriteTime))
             .ToList();
     }
 
@@ -95,10 +99,28 @@ public sealed class AssetDocumentLibrary
         foreach (var invalid in Path.GetInvalidFileNameChars()) leaf = leaf.Replace(invalid, '_');
         return string.IsNullOrWhiteSpace(leaf) ? "UnityAsset.bin" : leaf;
     }
+
+    private static string GetOriginalName(string storedName)
+    {
+        if (storedName.Length > 48
+            && storedName[14] == '_'
+            && storedName[47] == '_'
+            && Guid.TryParseExact(storedName.Substring(15, 32), "N", out _))
+        {
+            return storedName[48..];
+        }
+
+        return storedName;
+    }
 }
 
 public sealed record LibraryFileEntry(FileResult File, string StoredName, long Size, DateTime Modified)
 {
-    public string DisplaySize => Size < 1024 * 1024 ? $"{Size / 1024d:0.0} KB" : $"{Size / (1024d * 1024d):0.00} MB";
+    public string DisplaySize => Size switch
+    {
+        < 1024 => $"{Size:N0} B",
+        < 1024 * 1024 => $"{Size / 1024d:0.#} KB",
+        _ => $"{Size / (1024d * 1024d):0.##} MB"
+    };
     public string DisplayDate => Modified.ToString("yyyy-MM-dd HH:mm");
 }

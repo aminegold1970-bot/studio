@@ -18,7 +18,10 @@ public sealed class AssetLibraryPage : ContentPage
     };
     private readonly Label _summary = new() { FontSize = 12, TextColor = Color.FromArgb("#666666") };
     private readonly List<LibraryFileEntry> _all = new();
+    private List<LibraryFileEntry> _visible = new();
     private readonly HashSet<string> _selected = new(StringComparer.Ordinal);
+    private HashSet<string> _visiblePaths = new(StringComparer.Ordinal);
+    private bool _updatingSelection;
 
     public AssetLibraryPage(AssetDocumentLibrary library, Func<IReadOnlyList<FileResult>, Task> load)
     {
@@ -27,6 +30,13 @@ public sealed class AssetLibraryPage : ContentPage
         Title = "Asset Library";
         BackgroundColor = Colors.White;
         _items.SelectionMode = SelectionMode.Multiple;
+        _items.EmptyView = new Label
+        {
+            Text = "No saved files match this search.",
+            TextColor = Color.FromArgb("#666666"),
+            HorizontalTextAlignment = TextAlignment.Center,
+            VerticalTextAlignment = TextAlignment.Center
+        };
         _items.ItemTemplate = new DataTemplate(() =>
         {
             var name = new Label { FontSize = 13, TextColor = Color.FromArgb("#202020"), LineBreakMode = LineBreakMode.MiddleTruncation };
@@ -49,8 +59,19 @@ public sealed class AssetLibraryPage : ContentPage
         });
         _items.SelectionChanged += (_, e) =>
         {
-            _selected.Clear();
-            foreach (var item in e.CurrentSelection.OfType<LibraryFileEntry>()) _selected.Add(item.File.FullPath);
+            if (_updatingSelection) return;
+
+            var current = e.CurrentSelection.OfType<LibraryFileEntry>()
+                .Select(item => item.File.FullPath)
+                .ToHashSet(StringComparer.Ordinal);
+            foreach (var item in e.PreviousSelection.OfType<LibraryFileEntry>())
+            {
+                var path = item.File.FullPath;
+                if (_visiblePaths.Contains(path) && !current.Contains(path))
+                    _selected.Remove(path);
+            }
+            foreach (var path in current)
+                _selected.Add(path);
             UpdateSummary();
         };
         _search.TextChanged += (_, _) => ApplyFilter();
@@ -67,8 +88,22 @@ public sealed class AssetLibraryPage : ContentPage
             var targets = _all.Where(entry => _selected.Contains(entry.File.FullPath)).ToList();
             if (targets.Count == 0) { await DisplayAlert("Asset Library", "Select files to delete.", "OK"); return; }
             if (!await DisplayAlert("Delete saved files?", $"Permanently delete {targets.Count} saved file(s)?", "Delete", "Cancel")) return;
-            foreach (var entry in targets) _library.Delete(entry.File);
-            _selected.Clear(); Refresh();
+            var failures = new List<string>();
+            foreach (var entry in targets)
+            {
+                try
+                {
+                    if (!_library.Delete(entry.File))
+                        failures.Add($"{entry.StoredName}: file no longer exists or is outside the library.");
+                }
+                catch (Exception exception)
+                {
+                    failures.Add($"{entry.StoredName}: {exception.Message}");
+                }
+            }
+            Refresh();
+            if (failures.Count > 0)
+                await DisplayAlert("Some files could not be deleted", string.Join(Environment.NewLine, failures), "OK");
         });
         var closeButton = MakeButton("Close", async () => await Navigation.PopModalAsync());
         var actions = new Grid { ColumnDefinitions = { new ColumnDefinition(GridLength.Star), new ColumnDefinition(GridLength.Star), new ColumnDefinition(GridLength.Star) }, ColumnSpacing = 8 };
@@ -104,15 +139,37 @@ public sealed class AssetLibraryPage : ContentPage
     private void Refresh()
     {
         _all.Clear(); _all.AddRange(_library.GetEntries());
+        var existingPaths = _all.Select(entry => entry.File.FullPath).ToHashSet(StringComparer.Ordinal);
+        _selected.RemoveWhere(path => !existingPaths.Contains(path));
         ApplyFilter();
     }
 
     private void ApplyFilter()
     {
         var query = _search.Text?.Trim() ?? string.Empty;
-        _items.ItemsSource = _all.Where(entry => query.Length == 0 || entry.StoredName.Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
+        _visible = _all.Where(entry =>
+                query.Length == 0
+                || entry.StoredName.Contains(query, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        _visiblePaths = _visible.Select(entry => entry.File.FullPath).ToHashSet(StringComparer.Ordinal);
+        _updatingSelection = true;
+        try
+        {
+            _items.ItemsSource = _visible;
+            _items.SelectedItems.Clear();
+            foreach (var entry in _visible)
+            {
+                if (_selected.Contains(entry.File.FullPath))
+                    _items.SelectedItems.Add(entry);
+            }
+        }
+        finally
+        {
+            _updatingSelection = false;
+        }
         UpdateSummary();
     }
 
-    private void UpdateSummary() => _summary.Text = $"{_all.Count} saved file(s) · {_selected.Count} selected";
+    private void UpdateSummary() =>
+        _summary.Text = $"{_all.Count} saved · {_visible.Count} shown · {_selected.Count} selected";
 }

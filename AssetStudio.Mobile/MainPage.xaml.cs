@@ -1,7 +1,8 @@
 using Microsoft.Maui.ApplicationModel.DataTransfer;
 using System.Collections.ObjectModel;
-using System.Linq;
+using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 #if IOS
@@ -13,8 +14,7 @@ using UIKit;
 
 namespace AssetStudioMobile;
 
-// UI-only reconstruction. The host application must populate these collections
-// from its existing AssetStudio services; no sample/fake asset data is inserted.
+// The mobile loader populates this page from parsed Unity assets; no sample data is inserted.
 public partial class MainPage : ContentPage
 {
     // The native audio layer subscribes to these events and performs actual playback.
@@ -320,7 +320,6 @@ public partial class MainPage : ContentPage
                 _allAssets.Add(asset);
             }
             ApplyAssetFilter();
-            StatusLabel.Text = $"{_allAssets.Count} assets";
         }
         if (MainThread.IsMainThread) Apply();
         else MainThread.BeginInvokeOnMainThread(Apply);
@@ -1389,9 +1388,12 @@ public partial class MainPage : ContentPage
             return;
         }
 
-        var dialog = new AssetTypeFilterPage(types, _selectedTypes, selected =>
+        var currentTypes = _selectedTypes == null
+            ? null
+            : _selectedTypes.Where(types.Contains).ToHashSet(StringComparer.Ordinal);
+        var dialog = new AssetTypeFilterPage(types, currentTypes, selected =>
         {
-            _selectedTypes = selected == null || selected.Count == types.Length ? null : selected;
+            _selectedTypes = selected.Count == types.Length ? null : selected;
             ApplyAssetFilter();
         });
         await Navigation.PushModalAsync(CreateModalNavigationPage(dialog));
@@ -1491,7 +1493,12 @@ public partial class MainPage : ContentPage
         HierarchySearchPanel.IsVisible = _browserTab == "Scene Hierarchy";
         HierarchyActions.IsVisible = _browserTab == "Scene Hierarchy";
         AssetColumnHeaders.IsVisible = _compactWorkspace != true && _browserTab == "Asset List";
-        StatusLabel.Text = $"{_browserTab} · {(_browserTab == "Asset List" ? _visibleAssets.Count : _browserTab == "Scene Hierarchy" ? _hierarchy.Count : _visibleClasses.Count)} items";
+        StatusLabel.Text = _browserTab switch
+        {
+            "Asset List" => $"{_visibleAssets.Count} / {_allAssets.Count} assets",
+            "Scene Hierarchy" => $"{_hierarchy.Count} visible / {_hierarchyById.Count} scene objects",
+            _ => $"{_visibleClasses.Count} / {_classes.Count} classes"
+        };
     }
 
     private void OnAssetSearchTextChanged(object sender, TextChangedEventArgs e) => ApplyAssetFilter();
@@ -1504,7 +1511,9 @@ public partial class MainPage : ContentPage
             (_selectedTypes == null || _selectedTypes.Contains(asset.Type)) &&
             (query.Length == 0 ||
              Contains(asset.Name, query) || Contains(asset.Container, query) ||
-             Contains(asset.Type, query) || Contains(asset.PathId, query)));
+             Contains(asset.Type, query) || Contains(asset.PathId, query) ||
+             Contains(asset.Size, query) || Contains(asset.DisplaySize, query) ||
+             Contains(asset.SourceFile, query)));
         filtered = SortAssets(filtered);
         _visibleAssets.Clear();
         foreach (var asset in filtered) _visibleAssets.Add(asset);
@@ -1514,6 +1523,9 @@ public partial class MainPage : ContentPage
             AssetCollection.SelectedItems.Clear();
             ClearSelectedAsset();
         }
+        AssetEmptyLabel.Text = _allAssets.Count == 0
+            ? "No assets loaded. Use Open files to load Unity assets."
+            : "No assets match the current search and filters.";
         if (StatusLabel != null && _browserTab == "Asset List")
             StatusLabel.Text = $"{_visibleAssets.Count} / {_allAssets.Count} assets" +
                 (_selectedTypes == null ? " · All types" : $" · {_selectedTypes.Count} types selected");
@@ -1522,23 +1534,24 @@ public partial class MainPage : ContentPage
 
     private IEnumerable<AssetRow> SortAssets(IEnumerable<AssetRow> source)
     {
-        Func<AssetRow, object> key = _sortColumn switch
+        return _sortColumn switch
         {
-            0 => x => x.Name ?? "",
-            1 => x => x.Container ?? "",
-            2 => x => x.Type ?? "",
-            3 => x => long.TryParse(x.PathId, out var id) ? id : long.MinValue,
-            4 => x => ParseSize(x.Size),
-            _ => x => x.Name ?? ""
+            1 => _reverseSort
+                ? source.OrderByDescending(x => x.Container, StringComparer.OrdinalIgnoreCase)
+                : source.OrderBy(x => x.Container, StringComparer.OrdinalIgnoreCase),
+            2 => _reverseSort
+                ? source.OrderByDescending(x => x.Type, StringComparer.OrdinalIgnoreCase)
+                : source.OrderBy(x => x.Type, StringComparer.OrdinalIgnoreCase),
+            3 => _reverseSort
+                ? source.OrderByDescending(x => long.TryParse(x.PathId, out var id) ? id : long.MinValue)
+                : source.OrderBy(x => long.TryParse(x.PathId, out var id) ? id : long.MinValue),
+            4 => _reverseSort
+                ? source.OrderByDescending(x => ParseSize(x.Size))
+                : source.OrderBy(x => ParseSize(x.Size)),
+            _ => _reverseSort
+                ? source.OrderByDescending(x => x.Name, StringComparer.OrdinalIgnoreCase)
+                : source.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
         };
-        IOrderedEnumerable<AssetRow> ordered = _sortColumn switch
-        {
-            3 => _reverseSort ? source.OrderByDescending(x => (long)key(x)) : source.OrderBy(x => (long)key(x)),
-            4 => _reverseSort ? source.OrderByDescending(x => (long)key(x)) : source.OrderBy(x => (long)key(x)),
-            _ => _reverseSort ? source.OrderByDescending(x => (string)key(x), StringComparer.OrdinalIgnoreCase)
-                              : source.OrderBy(x => (string)key(x), StringComparer.OrdinalIgnoreCase)
-        };
-        return ordered;
     }
 
     private static long ParseSize(string? value)
@@ -1570,7 +1583,11 @@ public partial class MainPage : ContentPage
         _hierarchySearchResults.Clear();
         _nextHierarchySearchResult = 0;
         var query = e.NewTextValue?.Trim() ?? string.Empty;
-        if (query.Length == 0) return;
+        if (query.Length == 0)
+        {
+            StatusLabel.Text = $"{_hierarchy.Count} visible / {_hierarchyById.Count} scene objects";
+            return;
+        }
         foreach (var root in _hierarchyRoots) CollectHierarchyMatches(root, query);
         StatusLabel.Text = _hierarchySearchResults.Count == 0
             ? "No matching scene objects"
@@ -2051,9 +2068,14 @@ public partial class MainPage : ContentPage
     {
         var query = ClassSearch?.Text?.Trim() ?? string.Empty;
         var filtered = _classes.Where(item => query.Length == 0 ||
-            Contains(item.Name, query) || Contains(item.Id, query) || Contains(item.Version, query));
+            Contains(item.Name, query) || Contains(item.Id, query) ||
+            Contains(item.Version, query) || Contains(item.Summary, query) ||
+            Contains(item.StructureText, query));
         _visibleClasses.Clear();
         foreach (var item in filtered) _visibleClasses.Add(item);
+        ClassEmptyLabel.Text = _classes.Count == 0
+            ? "No asset classes were loaded."
+            : "No classes match the current search.";
         if (StatusLabel != null && _browserTab == "Asset Classes")
             StatusLabel.Text = $"{_visibleClasses.Count} / {_classes.Count} classes";
     }
@@ -2109,40 +2131,86 @@ public partial class MainPage : ContentPage
     private sealed class AssetTypeFilterPage : ContentPage
     {
         private readonly HashSet<string> _selected;
-        private readonly string[] _allTypes;
-        private readonly Action<HashSet<string>?> _completed;
+        private readonly List<TypeFilterRow> _allRows;
+        private readonly Action<HashSet<string>> _completed;
+        private readonly SearchBar _search = new()
+        {
+            Placeholder = "Search asset types…",
+            FontSize = 14,
+            TextColor = Color.FromArgb("#202020"),
+            PlaceholderColor = Color.FromArgb("#777777"),
+            BackgroundColor = Colors.White
+        };
+        private readonly CollectionView _items = new() { SelectionMode = SelectionMode.None };
+        private readonly Label _summary = new() { FontSize = 12, TextColor = Color.FromArgb("#666666") };
+        private bool _updatingRows;
         private bool _finished;
 
-        public AssetTypeFilterPage(string[] types, HashSet<string>? current, Action<HashSet<string>?> completed)
+        public AssetTypeFilterPage(string[] types, HashSet<string>? current, Action<HashSet<string>> completed)
         {
-            _allTypes = types;
             _selected = current == null ? new HashSet<string>(types, StringComparer.Ordinal)
                                         : new HashSet<string>(current, StringComparer.Ordinal);
             _completed = completed;
             Title = "Filter Type";
             BackgroundColor = Color.FromArgb("#FFFFFF");
 
-            var selectAll = new Button { Text = "Select all", BackgroundColor = Color.FromArgb("#E0E0E0"), TextColor = Color.FromArgb("#202020") };
-            selectAll.Clicked += (_, _) => SetAll(true);
-            var clearAll = new Button { Text = "Clear", BackgroundColor = Color.FromArgb("#E0E0E0"), TextColor = Color.FromArgb("#202020") };
-            clearAll.Clicked += (_, _) => SetAll(false);
-            var list = new VerticalStackLayout { Spacing = 2, Padding = new Thickness(12, 4) };
-            foreach (var type in types)
+            _allRows = types.Select(type => new TypeFilterRow(type, _selected.Contains(type))).ToList();
+            foreach (var row in _allRows)
             {
-                var check = new CheckBox { IsChecked = _selected.Contains(type), Color = Color.FromArgb("#2878C8"), VerticalOptions = LayoutOptions.Center };
-                check.CheckedChanged += (_, args) =>
+                row.SelectionChanged += changed =>
                 {
-                    if (args.Value) _selected.Add(type); else _selected.Remove(type);
+                    if (_updatingRows) return;
+                    if (changed.IsSelected) _selected.Add(changed.Type);
+                    else _selected.Remove(changed.Type);
+                    UpdateSummary();
                 };
-                var label = new Label { Text = type, TextColor = Color.FromArgb("#202020"), VerticalTextAlignment = TextAlignment.Center, FontSize = 14 };
-                var row = new Grid { ColumnDefinitions = { new ColumnDefinition(GridLength.Auto), new ColumnDefinition(GridLength.Star) }, Padding = new Thickness(4, 3) };
-                row.Add(check); row.Add(label, 1);
-                var tap = new TapGestureRecognizer();
-                tap.Tapped += (_, _) => check.IsChecked = !check.IsChecked;
-                row.GestureRecognizers.Add(tap);
-                list.Add(row);
             }
 
+            _items.ItemTemplate = new DataTemplate(() =>
+            {
+                var check = new CheckBox { Color = Color.FromArgb("#2878C8"), VerticalOptions = LayoutOptions.Center };
+                check.SetBinding(CheckBox.IsCheckedProperty,
+                    new Binding(nameof(TypeFilterRow.IsSelected), BindingMode.TwoWay));
+                var label = new Label
+                {
+                    TextColor = Color.FromArgb("#202020"),
+                    VerticalTextAlignment = TextAlignment.Center,
+                    FontSize = 14
+                };
+                label.SetBinding(Label.TextProperty, nameof(TypeFilterRow.Type));
+                var row = new Grid
+                {
+                    ColumnDefinitions =
+                    {
+                        new ColumnDefinition(GridLength.Auto),
+                        new ColumnDefinition(GridLength.Star)
+                    },
+                    Padding = new Thickness(4, 3)
+                };
+                row.Add(check);
+                row.Add(label, 1);
+                var tap = new TapGestureRecognizer();
+                tap.Tapped += (_, _) =>
+                {
+                    if (label.BindingContext is TypeFilterRow item)
+                        item.IsSelected = !item.IsSelected;
+                };
+                label.GestureRecognizers.Add(tap);
+                return row;
+            });
+            _items.EmptyView = new Label
+            {
+                Text = "No asset types match this search.",
+                TextColor = Color.FromArgb("#666666"),
+                HorizontalTextAlignment = TextAlignment.Center,
+                VerticalTextAlignment = TextAlignment.Center
+            };
+            _search.TextChanged += (_, _) => ApplyFilter();
+
+            var selectAll = new Button { Text = "Select all", BackgroundColor = Color.FromArgb("#E0E0E0"), TextColor = Color.FromArgb("#202020") };
+            selectAll.Clicked += (_, _) => SetAll(true);
+            var clearAll = new Button { Text = "Clear all", BackgroundColor = Color.FromArgb("#E0E0E0"), TextColor = Color.FromArgb("#202020") };
+            clearAll.Clicked += (_, _) => SetAll(false);
             var apply = new Button { Text = "Apply", BackgroundColor = Color.FromArgb("#E2E2E2"), TextColor = Color.FromArgb("#202020") };
             apply.Clicked += async (_, _) => await Finish(true);
             var cancel = new Button { Text = "Cancel", BackgroundColor = Color.FromArgb("#E0E0E0"), TextColor = Color.FromArgb("#202020") };
@@ -2151,26 +2219,85 @@ public partial class MainPage : ContentPage
             top.Add(selectAll); top.Add(clearAll, 1);
             var bottom = new Grid { ColumnDefinitions = { new ColumnDefinition(GridLength.Star), new ColumnDefinition(GridLength.Star) }, ColumnSpacing = 8, Padding = 12 };
             bottom.Add(cancel); bottom.Add(apply, 1);
-            Content = new Grid { RowDefinitions = { new RowDefinition(GridLength.Auto), new RowDefinition(GridLength.Star), new RowDefinition(GridLength.Auto) },
-                Children = { new VerticalStackLayout { Padding = 12, Children = { top } }, CreateRow(new ScrollView { Content = list }, 1), CreateRow(bottom, 2) } };
-        }
-
-        private static View CreateRow(View view, int row)
-        {
-            Grid.SetRow(view, row);
-            return view;
+            Content = new Grid
+            {
+                Padding = new Thickness(12, 8),
+                RowSpacing = 8,
+                RowDefinitions =
+                {
+                    new RowDefinition(GridLength.Auto),
+                    new RowDefinition(GridLength.Auto),
+                    new RowDefinition(GridLength.Auto),
+                    new RowDefinition(GridLength.Auto),
+                    new RowDefinition(GridLength.Star),
+                    new RowDefinition(GridLength.Auto)
+                },
+                Children =
+                {
+                    new Label { Text = "Filter asset types", FontSize = 16, FontAttributes = FontAttributes.Bold, TextColor = Color.FromArgb("#202020") },
+                    _search,
+                    top,
+                    _summary,
+                    _items,
+                    bottom
+                }
+            };
+            Grid.SetRow(_search, 1);
+            Grid.SetRow(top, 2);
+            Grid.SetRow(_summary, 3);
+            Grid.SetRow(_items, 4);
+            Grid.SetRow(bottom, 5);
+            ApplyFilter();
         }
 
         private void SetAll(bool enabled)
         {
+            _updatingRows = true;
+            foreach (var row in _allRows)
+                row.IsSelected = enabled;
+            _updatingRows = false;
             _selected.Clear();
-            if (enabled) foreach (var type in _allTypes) _selected.Add(type);
-            // Rebuild to synchronize visible checkbox states without relying on
-            // an implicit BindingContext or stale checkbox references.
-            if (Content is Grid grid && grid.Children.Count > 1 && grid.Children[1] is ScrollView scroll && scroll.Content is VerticalStackLayout rows)
+            if (enabled)
+                foreach (var row in _allRows)
+                    _selected.Add(row.Type);
+            UpdateSummary();
+        }
+
+        private void ApplyFilter()
+        {
+            var query = _search.Text?.Trim() ?? string.Empty;
+            _items.ItemsSource = _allRows.Where(row =>
+                query.Length == 0 || Contains(row.Type, query)).ToList();
+            UpdateSummary();
+        }
+
+        private void UpdateSummary() =>
+            _summary.Text = $"{_selected.Count} of {_allRows.Count} types selected · " +
+                $"{_items.ItemsSource?.Cast<TypeFilterRow>().Count() ?? 0} shown";
+
+        private sealed class TypeFilterRow : BindableObject
+        {
+            private bool _isSelected;
+
+            public TypeFilterRow(string type, bool isSelected)
             {
-                foreach (var row in rows.Children.OfType<Grid>())
-                    if (row.Children.FirstOrDefault() is CheckBox check) check.IsChecked = enabled;
+                Type = type;
+                _isSelected = isSelected;
+            }
+
+            public string Type { get; }
+            public event Action<TypeFilterRow>? SelectionChanged;
+
+            public bool IsSelected
+            {
+                get => _isSelected;
+                set
+                {
+                    if (_isSelected == value) return;
+                    _isSelected = value;
+                    OnPropertyChanged();
+                    SelectionChanged?.Invoke(this);
+                }
             }
         }
 
@@ -2178,7 +2305,8 @@ public partial class MainPage : ContentPage
         {
             if (_finished) return;
             _finished = true;
-            _completed(apply ? new HashSet<string>(_selected, StringComparer.Ordinal) : null);
+            if (apply)
+                _completed(new HashSet<string>(_selected, StringComparer.Ordinal));
             await Navigation.PopModalAsync();
         }
     }
@@ -2203,6 +2331,7 @@ public partial class MainPage : ContentPage
         public int TypeId { get; init; }
         public string PathId { get; init; } = "";
         public string Size { get; init; } = "";
+        public string DisplaySize => FormatByteSize(Size);
         // Original serialized-file identity used by AssetStudio XML inventory export.
         public string SourceFile { get; init; } = "";
 
@@ -2229,13 +2358,29 @@ public partial class MainPage : ContentPage
             Type,
             Container,
             string.IsNullOrWhiteSpace(PathId) ? null : $"ID {PathId}",
-            Size
+            DisplaySize
         }.Where(value => !string.IsNullOrWhiteSpace(value)));
     }
 
-    // Host adapter: create a UI row from the real core AssetStudio object.
-    // The host supplies metadata readers because this MAUI-only project does
-    // not reference AssetStudio assemblies or their version-specific APIs.
+    private static string FormatByteSize(string value)
+    {
+        if (!long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var bytes))
+            return value;
+        if (bytes < 1024)
+            return $"{bytes:N0} B";
+
+        var amount = (double)bytes;
+        var units = new[] { "KB", "MB", "GB", "TB" };
+        foreach (var unit in units)
+        {
+            amount /= 1024;
+            if (amount < 1024 || unit == units[^1])
+                return $"{amount.ToString("0.#", CultureInfo.CurrentCulture)} {unit}";
+        }
+        return $"{bytes:N0} B";
+    }
+
+    // Adapt a parsed core object into the row shape shared by the mobile UI.
     public static AssetRow CreateAssetRow(
         object sourceAsset,
         string name,
