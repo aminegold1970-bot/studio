@@ -63,8 +63,7 @@ public partial class MainPage : ContentPage
     private readonly AssetDocumentLibrary _documentLibrary = new();
     private readonly AssetStudioMobileLoader _assetLoader = new();
     private bool? _compactWorkspace;
-    private bool _showingCompactPreview;
-    private const double WorkspaceDividerWidth = 20;
+    private const double WorkspaceDividerWidth = 10;
     private double _workspaceBrowserRatio = 0.38;
     private double _workspaceDragStartRatio = 0.38;
 
@@ -118,56 +117,41 @@ public partial class MainPage : ContentPage
             return;
 
         _compactWorkspace = compact;
-        CompactWorkspaceTabs.IsVisible = compact;
-        AssetColumnHeaders.IsVisible = !compact && _browserTab == "Asset List";
-        if (compact)
+        ApplyWorkspacePaneRatio();
+        WorkspaceDivider.WidthRequest = WorkspaceDividerWidth;
+        WorkspaceDivider.HeightRequest = -1;
+        WorkspaceDivider.IsVisible = true;
+
+        HierarchyTab.Text = compact ? "Scene\nHierarchy" : "Scene Hierarchy";
+        AssetListTab.Text = compact ? "Asset\nList" : "Asset List";
+        ClassesTab.Text = compact ? "Asset\nClasses" : "Asset Classes";
+        foreach (var tab in new[] { HierarchyTab, AssetListTab, ClassesTab })
         {
-            _showingCompactPreview = false;
-            WorkspaceGrid.ColumnDefinitions = new ColumnDefinitionCollection { new ColumnDefinition(GridLength.Star) };
-            WorkspaceGrid.RowDefinitions = new RowDefinitionCollection
-            {
-                new RowDefinition(GridLength.Auto),
-                new RowDefinition(GridLength.Star)
-            };
-            Grid.SetRow(CompactWorkspaceTabs, 0);
-            Grid.SetColumn(CompactWorkspaceTabs, 0);
-            Grid.SetRow(BrowserPane, 1);
-            Grid.SetColumn(BrowserPane, 0);
-            Grid.SetRow(WorkspaceDivider, 1);
-            Grid.SetColumn(WorkspaceDivider, 0);
-            Grid.SetRow(PreviewPane, 1);
-            Grid.SetColumn(PreviewPane, 0);
-            WorkspaceDivider.WidthRequest = -1;
-            WorkspaceDivider.HeightRequest = 1;
-            WorkspaceDivider.IsVisible = false;
-            RefreshCompactWorkspacePane();
+            tab.FontSize = compact ? 8 : 10;
+            tab.HeightRequest = compact ? 34 : 27;
+            tab.Padding = compact ? new Thickness(0, 1) : new Thickness(5, 2);
         }
-        else
+        AssetSearch.HeightRequest = compact ? 28 : 32;
+        ClassSearch.HeightRequest = compact ? 28 : 32;
+        HierarchySearch.HeightRequest = compact ? 28 : 32;
+
+        if (MenuScroll.Content is HorizontalStackLayout menu)
         {
-            ApplyWorkspacePaneRatio();
-            WorkspaceGrid.RowDefinitions = new RowDefinitionCollection { new RowDefinition(GridLength.Star) };
-            Grid.SetRow(BrowserPane, 0);
-            Grid.SetColumn(BrowserPane, 0);
-            Grid.SetRow(WorkspaceDivider, 0);
-            Grid.SetColumn(WorkspaceDivider, 1);
-            Grid.SetRow(PreviewPane, 0);
-            Grid.SetColumn(PreviewPane, 2);
-            WorkspaceDivider.WidthRequest = WorkspaceDividerWidth;
-            WorkspaceDivider.HeightRequest = -1;
-            WorkspaceDivider.IsVisible = true;
-            BrowserPane.IsVisible = true;
-            PreviewPane.IsVisible = true;
+            foreach (var child in menu.Children.OfType<Button>())
+            {
+                child.FontSize = compact ? 9 : 11;
+                child.HeightRequest = compact ? 24 : 27;
+                child.Padding = compact ? new Thickness(5, 1) : new Thickness(8, 2);
+            }
         }
 
+        AssetColumnHeaders.IsVisible = !compact && _browserTab == "Asset List";
         foreach (var asset in _allAssets)
             asset.IsCompactLayout = compact;
     }
 
     private void OnWorkspaceDividerPanUpdated(object? sender, PanUpdatedEventArgs e)
     {
-        if (_compactWorkspace == true)
-            return;
-
         if (e.StatusType == GestureStatus.Started)
         {
             _workspaceDragStartRatio = _workspaceBrowserRatio;
@@ -199,30 +183,6 @@ public partial class MainPage : ContentPage
             new(new GridLength(WorkspaceDividerWidth, GridUnitType.Absolute)),
             new(new GridLength(1 - _workspaceBrowserRatio, GridUnitType.Star))
         };
-    }
-
-    private void OnCompactWorkspaceTabClicked(object? sender, EventArgs e)
-    {
-        if (sender is not Button button)
-            return;
-
-        _showingCompactPreview = Equals(button.CommandParameter, "Preview");
-        RefreshCompactWorkspacePane();
-    }
-
-    private void RefreshCompactWorkspacePane()
-    {
-        if (_compactWorkspace != true)
-            return;
-
-        BrowserPane.IsVisible = !_showingCompactPreview;
-        PreviewPane.IsVisible = _showingCompactPreview;
-        CompactAssetsButton.BackgroundColor = _showingCompactPreview
-            ? Color.FromArgb("#E2E2E2")
-            : Color.FromArgb("#FFFFFF");
-        CompactPreviewButton.BackgroundColor = _showingCompactPreview
-            ? Color.FromArgb("#FFFFFF")
-            : Color.FromArgb("#E2E2E2");
     }
 
     protected override void OnHandlerChanged()
@@ -1500,18 +1460,15 @@ public partial class MainPage : ContentPage
     private void OnBrowserTabClicked(object sender, EventArgs e)
     {
         if (sender is not Button button) return;
-        _browserTab = button.Text;
-        HierarchyTab.BackgroundColor = _browserTab == HierarchyTab.Text ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
-        AssetListTab.BackgroundColor = _browserTab == AssetListTab.Text ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
-        ClassesTab.BackgroundColor = _browserTab == ClassesTab.Text ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
+        _browserTab = button.CommandParameter as string ?? "Asset List";
         RefreshBrowserTab();
     }
 
     private void RefreshBrowserTab()
     {
-        HierarchyTab.BackgroundColor = _browserTab == HierarchyTab.Text ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
-        AssetListTab.BackgroundColor = _browserTab == AssetListTab.Text ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
-        ClassesTab.BackgroundColor = _browserTab == ClassesTab.Text ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
+        HierarchyTab.BackgroundColor = _browserTab == "Scene Hierarchy" ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
+        AssetListTab.BackgroundColor = _browserTab == "Asset List" ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
+        ClassesTab.BackgroundColor = _browserTab == "Asset Classes" ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
         AssetCollection.IsVisible = _browserTab == "Asset List";
         HierarchyCollection.IsVisible = _browserTab == "Scene Hierarchy";
         ClassesCollection.IsVisible = _browserTab == "Asset Classes";
