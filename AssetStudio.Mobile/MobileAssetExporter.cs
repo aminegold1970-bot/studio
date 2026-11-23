@@ -305,6 +305,7 @@ internal static class MobileAssetExporter
 
         foreach (var material in sceneMeshes
             .SelectMany(item => item.Materials)
+            .OfType<Material>()
             .Distinct())
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -608,7 +609,6 @@ internal static class MobileAssetExporter
                 var materials = renderer?.m_Materials?
                     .Select(materialPointer =>
                         materialPointer.TryGet(out var material) ? material : null)
-                    .OfType<Material>()
                     .ToArray() ?? Array.Empty<Material>();
                 var objectName = string.IsNullOrWhiteSpace(gameObject.m_Name)
                     ? string.IsNullOrWhiteSpace(mesh.m_Name) ? "Mesh" : mesh.m_Name
@@ -1073,7 +1073,7 @@ internal static class MobileAssetExporter
         Mesh Mesh,
         NumericsMatrix4x4 WorldTransform,
         string Name,
-        Material[] Materials,
+        Material?[] Materials,
         NumericsMatrix4x4[]? SkinTransforms,
         NumericsMatrix4x4[]? SkinNormalTransforms,
         NumericsVector3[]? BlendShapePositionDeltas,
@@ -1885,7 +1885,7 @@ internal static class MobileAssetExporter
         Mesh mesh,
         NumericsMatrix4x4 worldTransform,
         CancellationToken cancellationToken,
-        IReadOnlyList<Material>? submeshMaterials = null,
+        IReadOnlyList<Material?>? submeshMaterials = null,
         IReadOnlyDictionary<Material, ObjMaterialInfo>? materialMap = null,
         NumericsMatrix4x4[]? skinTransforms = null,
         NumericsMatrix4x4[]? skinNormalTransforms = null,
@@ -2011,13 +2011,16 @@ internal static class MobileAssetExporter
             }
         }
 
-        var firstFace = 0;
+        var firstIndex = 0;
         var submeshIndex = 0;
         foreach (var submesh in mesh.m_SubMeshes)
         {
-            if (firstFace > mesh.m_Indices.Count
-                || submesh.indexCount > (uint)(mesh.m_Indices.Count - firstFace)
-                || submesh.indexCount % 3 != 0)
+            if (submesh.indexCount > int.MaxValue)
+                throw new InvalidDataException("The mesh contains an oversized triangle index range.");
+            var submeshIndexCount = (int)submesh.indexCount;
+            if (firstIndex > mesh.m_Indices.Count
+                || submeshIndexCount > mesh.m_Indices.Count - firstIndex
+                || submeshIndexCount % 3 != 0)
             {
                 throw new InvalidDataException("The mesh contains an invalid triangle index range.");
             }
@@ -2025,21 +2028,21 @@ internal static class MobileAssetExporter
             if (materialMap is { Count: > 0 } && submeshMaterials != null)
             {
                 var materialName = submeshIndex < submeshMaterials.Count
-                    && materialMap.TryGetValue(submeshMaterials[submeshIndex], out var materialInfo)
+                    && submeshMaterials[submeshIndex] is { } material
+                    && materialMap.TryGetValue(material, out var materialInfo)
                         ? materialInfo.Name
                         : "AssetStudio_Default";
                 builder.Append("usemtl ").AppendLine(materialName);
             }
 
-            var faceEnd = firstFace + checked((int)(submesh.indexCount / 3));
-            for (var face = firstFace; face < faceEnd; face++)
+            var endIndex = checked(firstIndex + submeshIndexCount);
+            for (var indexOffset = firstIndex; indexOffset < endIndex; indexOffset += 3)
             {
-                if ((face & 1023) == 0)
+                if ((indexOffset & 3071) == 0)
                     cancellationToken.ThrowIfCancellationRequested();
-                var faceOffset = face * 3;
-                var index0 = checked((int)mesh.m_Indices[faceOffset]);
-                var index1 = checked((int)mesh.m_Indices[faceOffset + 1]);
-                var index2 = checked((int)mesh.m_Indices[faceOffset + 2]);
+                var index0 = checked((int)mesh.m_Indices[indexOffset]);
+                var index1 = checked((int)mesh.m_Indices[indexOffset + 1]);
+                var index2 = checked((int)mesh.m_Indices[indexOffset + 2]);
                 var indices = reverseFaceWinding
                     ? new[] { index2, index1, index0 }
                     : new[] { index0, index1, index2 };
@@ -2069,7 +2072,7 @@ internal static class MobileAssetExporter
                 builder.AppendLine();
                 hasFaces = true;
             }
-            firstFace = faceEnd;
+            firstIndex = endIndex;
             submeshIndex++;
         }
 

@@ -5,10 +5,12 @@ using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
-#if IOS
+#if IOS || MACCATALYST
 using AVFoundation;
-using CoreText;
 using Foundation;
+#endif
+#if IOS
+using CoreText;
 using UIKit;
 #endif
 
@@ -57,7 +59,7 @@ public partial class MainPage : ContentPage
     private readonly List<HierarchyRow> _hierarchySearchResults = new();
     private int _nextHierarchySearchResult;
     private AssetRow? _selectedAsset;
-#if IOS || ANDROID
+#if IOS || MACCATALYST || ANDROID
     private AssetStudio.AudioClip? _selectedAudioClip;
 #endif
     private bool _isPickingAssetFiles;
@@ -1993,7 +1995,7 @@ public partial class MainPage : ContentPage
 
     private void OnAssetSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-#if IOS || ANDROID
+#if IOS || MACCATALYST || ANDROID
         StopPreviewAudio();
 #endif
         _selectedAssets.Clear();
@@ -2069,7 +2071,7 @@ public partial class MainPage : ContentPage
                     }
                     break;
                 case AssetStudio.AudioClip audio:
-#if IOS || ANDROID
+#if IOS || MACCATALYST || ANDROID
                     _selectedAudioClip = audio;
 #endif
                     ShowAudioPreview(row.Name, audio.m_CompressionFormat.ToString(),
@@ -2136,7 +2138,6 @@ public partial class MainPage : ContentPage
     }
 
 #if IOS
-    private AVAudioPlayer? _audioPlayer;
     private string? _registeredPreviewFontPath;
 
     private async Task ApplyEmbeddedFontPreviewAsync(AssetStudio.Font font, AssetRow row)
@@ -2176,7 +2177,10 @@ public partial class MainPage : ContentPage
         if (unregisterError != null)
             StatusLabel.Text = $"Could not unregister previous font preview: {unregisterError.LocalizedDescription}";
     }
+#endif
 
+#if IOS || MACCATALYST
+    private AVAudioPlayer? _audioPlayer;
     private async void OnAudioPlaybackRequested(object? sender, EventArgs e)
     {
         var clip = _selectedAudioClip;
@@ -2387,7 +2391,7 @@ public partial class MainPage : ContentPage
 
     private void ClearSelectedAsset()
     {
-#if IOS || ANDROID
+#if IOS || MACCATALYST || ANDROID
         StopPreviewAudio();
 #endif
         _selectedAsset = null;
