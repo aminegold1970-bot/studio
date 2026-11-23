@@ -12,14 +12,14 @@
 
         <Label x:Name="StatusLabel"
                Grid.Row="1"
-               Text="Import a Unity asset file or AssetBundle to get started."
+               Text="Copy Unity files to Files > On My iPhone > AssetStudio, then select one below."
                LineBreakMode="WordWrap"
                TextColor="Gray" />
 
         <Grid Grid.Row="2" ColumnDefinitions="1.2*,*,*,*" ColumnSpacing="6">
             <Button x:Name="ImportButton"
-                    Text="Import"
-                    Clicked="OnImportClicked"
+                    Text="Refresh"
+                    Clicked="OnRefreshDocumentsClicked"
                     Grid.Column="0" />
             <Button x:Name="ExportButton"
                     Text="Export"
@@ -40,6 +40,7 @@
 
         <ScrollView Grid.Row="3" Orientation="Horizontal">
             <HorizontalStackLayout Spacing="6">
+                <Button Text="Files" CommandParameter="Files" Clicked="OnSectionClicked" />
                 <Button Text="Scene" CommandParameter="Scene" Clicked="OnSectionClicked" />
                 <Button Text="Assets" CommandParameter="Assets" Clicked="OnSectionClicked" />
                 <Button Text="Classes" CommandParameter="Classes" Clicked="OnSectionClicked" />
@@ -60,6 +61,40 @@
         </Grid>
 
         <Grid Grid.Row="5">
+            <Grid x:Name="DocumentsPanel" IsVisible="False" RowDefinitions="Auto,*">
+                <Label x:Name="DocumentsHelp"
+                       Padding="8"
+                       Text="Files are read from this app's Documents folder. Copy Unity files to Files > On My iPhone > AssetStudio."
+                       LineBreakMode="WordWrap"
+                       TextColor="Gray" />
+                <CollectionView x:Name="DocumentsList"
+                                Grid.Row="1"
+                                SelectionMode="Single"
+                                SelectionChanged="OnDocumentSelected">
+                    <CollectionView.EmptyView>
+                        <Label Text="No files in AssetStudio Documents. Copy a Unity asset file or AssetBundle here, then tap Refresh."
+                               Padding="16"
+                               HorizontalOptions="Center"
+                               VerticalOptions="Center"
+                               TextColor="Gray" />
+                    </CollectionView.EmptyView>
+                    <CollectionView.ItemTemplate>
+                        <DataTemplate>
+                            <Grid Padding="8" RowDefinitions="Auto,Auto">
+                                <Label Text="{Binding Name}"
+                                       FontAttributes="Bold"
+                                       LineBreakMode="TailTruncation" />
+                                <Label Grid.Row="1"
+                                       Text="{Binding Metadata}"
+                                       FontSize="11"
+                                       TextColor="Gray"
+                                       LineBreakMode="TailTruncation" />
+                            </Grid>
+                        </DataTemplate>
+                    </CollectionView.ItemTemplate>
+                </CollectionView>
+            </Grid>
+
             <CollectionView x:Name="AssetList"
                             SelectionMode="Single"
                             SelectionChanged="OnAssetSelected">

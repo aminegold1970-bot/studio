@@ -1,4 +1,5 @@
 using AssetStudio;
+using System.Text;
 
 namespace AssetStudioMobile;
 
@@ -7,6 +8,7 @@ public partial class MainPage : ContentPage
     private readonly List<AssetListItem> _assets = new();
     private readonly List<HierarchyListItem> _hierarchy = new();
     private readonly List<ClassListItem> _classes = new();
+    private readonly List<DocumentFileItem> _documentFiles = new();
     private readonly List<string> _extractablePaths = new();
     private AssetListItem? _selectedAsset;
     private bool _isLoading;
@@ -19,9 +21,25 @@ public partial class MainPage : ContentPage
         AssetList.ItemsSource = _assets;
         HierarchyList.ItemsSource = _hierarchy;
         ClassList.ItemsSource = _classes;
+        DocumentsList.ItemsSource = _documentFiles;
+        SetActiveSection("Files");
     }
 
-    private async void OnImportClicked(object? sender, EventArgs e)
+    protected override async void OnAppearing()
+    {
+        base.OnAppearing();
+        try
+        {
+            RefreshDocuments();
+        }
+        catch (Exception exception)
+        {
+            StatusLabel.Text = "Unable to read the app's Documents folder.";
+            await DisplayAlertAsync("Documents unavailable", exception.Message, "OK");
+        }
+    }
+
+    private async void OnRefreshDocumentsClicked(object? sender, EventArgs e)
     {
         if (_isLoading)
         {
@@ -30,36 +48,40 @@ public partial class MainPage : ContentPage
 
         try
         {
-            var file = await FilePicker.Default.PickAsync(new PickOptions
-            {
-                PickerTitle = "Select a Unity asset file or an AssetBundle"
-            });
+            RefreshDocuments();
+            StatusLabel.Text = _documentFiles.Count == 0
+                ? "No files found in AssetStudio Documents. Copy files there using the iPhone Files app."
+                : $"Found {_documentFiles.Count:N0} file(s) in AssetStudio Documents.";
+        }
+        catch (Exception exception)
+        {
+            await DisplayAlertAsync("Documents unavailable", exception.Message, "OK");
+            StatusLabel.Text = "Unable to read the app's Documents folder.";
+        }
+    }
 
-            if (file is null)
+    private async void OnDocumentSelected(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_isLoading || e.CurrentSelection.FirstOrDefault() is not DocumentFileItem file)
+        {
+            return;
+        }
+
+        DocumentsList.SelectedItem = null;
+        await LoadDocumentAsync(file.Path);
+    }
+
+    private async Task LoadDocumentAsync(string path)
+    {
+        try
+        {
+            if (!File.Exists(path))
             {
-                return;
+                RefreshDocuments();
+                throw new FileNotFoundException("The selected file no longer exists.", path);
             }
 
-            SetLoading(true, "Copying selected files…");
-            var importDirectory = Path.Combine(FileSystem.CacheDirectory, "imports", Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(importDirectory);
-
-            var paths = new List<string>();
-            var fileName = Path.GetFileName(file.FileName);
-            if (string.IsNullOrWhiteSpace(fileName))
-            {
-                throw new InvalidOperationException("The selected file has no name.");
-            }
-
-            var destination = Path.Combine(importDirectory, fileName);
-            await using (var source = await file.OpenReadAsync())
-            await using (var target = File.Create(destination))
-            {
-                await source.CopyToAsync(target);
-            }
-            paths.Add(destination);
-
-            SetLoading(true, "Loading assets…");
+            SetLoading(true, $"Loading {Path.GetFileName(path)}…");
             var manager = new AssetsManager();
             var logger = new MobileLogger();
             var previousLogger = Logger.Default;
@@ -70,7 +92,7 @@ public partial class MainPage : ContentPage
                     Logger.Default = logger;
                     try
                     {
-                        manager.LoadFiles(paths.ToArray());
+                        manager.LoadFiles(new[] { path });
                     }
                     finally
                     {
@@ -99,11 +121,15 @@ public partial class MainPage : ContentPage
             TypeFilter.SelectedIndex = 0;
 
             _extractablePaths.Clear();
-            _extractablePaths.AddRange(paths.Where(IsExtractableArchive));
+            if (IsExtractableArchive(path))
+            {
+                _extractablePaths.Add(path);
+            }
             _selectedAsset = null;
             SearchBar.Text = string.Empty;
             UpdateSelection();
             ApplyFilters();
+            SetActiveSection(items.Count > 0 ? "Assets" : "Files");
 
             StatusLabel.Text = items.Count > 0
                 ? $"Loaded {items.Count:N0} assets from {manager.assetsFileList.Count:N0} serialized file(s)."
@@ -112,12 +138,32 @@ public partial class MainPage : ContentPage
         catch (Exception exception)
         {
             await DisplayAlertAsync("Import failed", exception.Message, "OK");
-            StatusLabel.Text = "Import failed.";
+            StatusLabel.Text = "Import failed. Choose a Unity asset file or AssetBundle.";
         }
         finally
         {
             SetLoading(false);
         }
+    }
+
+    private void RefreshDocuments()
+    {
+        var documentsDirectory = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+        if (string.IsNullOrWhiteSpace(documentsDirectory))
+        {
+            throw new InvalidOperationException("The app's Documents folder could not be located.");
+        }
+
+        Directory.CreateDirectory(documentsDirectory);
+        _documentFiles.Clear();
+        _documentFiles.AddRange(Directory.EnumerateFiles(documentsDirectory)
+            .Select(path => new DocumentFileItem(path))
+            .OrderBy(file => file.Name, StringComparer.OrdinalIgnoreCase));
+        DocumentsList.ItemsSource = _documentFiles.ToList();
+        DocumentsHelp.Text = _documentFiles.Count == 0
+            ? "No files are in AssetStudio Documents. In Files, copy a Unity file to On My iPhone > AssetStudio, then tap Refresh."
+            : "Tap a file to load it. Files are read from On My iPhone > AssetStudio.";
+        ApplyFilters();
     }
 
     private void OnSearchTextChanged(object? sender, TextChangedEventArgs e)
@@ -160,6 +206,7 @@ public partial class MainPage : ContentPage
 
     private void SetActiveSection(string section)
     {
+        DocumentsPanel.IsVisible = section == "Files";
         AssetList.IsVisible = section == "Assets";
         HierarchyList.IsVisible = section == "Scene";
         ClassList.IsVisible = section == "Classes";
@@ -168,6 +215,7 @@ public partial class MainPage : ContentPage
         TypeFilter.IsVisible = section == "Assets";
         SearchBar.Placeholder = section switch
         {
+            "Files" => "Search documents",
             "Scene" => "Search GameObjects",
             "Classes" => "Search class structures",
             _ => "Search assets"
@@ -186,6 +234,10 @@ public partial class MainPage : ContentPage
                 || asset.SourceFile.Contains(query, StringComparison.OrdinalIgnoreCase))).ToList();
         AssetList.ItemsSource = visibleAssets;
 
+        DocumentsList.ItemsSource = _documentFiles.Where(item =>
+            string.IsNullOrEmpty(query)
+            || item.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
+            || item.Metadata.Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
         HierarchyList.ItemsSource = _hierarchy.Where(item =>
             string.IsNullOrEmpty(query)
             || item.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
@@ -264,7 +316,9 @@ public partial class MainPage : ContentPage
                 SetActiveSection("Preview");
                 PreviewText.Text = selected.Asset switch
                 {
-                    TextAsset textAsset => textAsset.m_Script,
+                    TextAsset textAsset => textAsset.m_Script is { Length: > 0 } script
+                        ? Encoding.UTF8.GetString(script)
+                        : string.Empty,
                     AudioClip => "Audio playback is not available in this build. Use Export to share the stored audio data.",
                     VideoClip => "Video playback is not available in this build. Use Export to share the stored video data.",
                     _ => selected.Asset.Dump() ?? "No preview is available for this asset."
@@ -338,6 +392,7 @@ public partial class MainPage : ContentPage
     {
         _isLoading = isLoading;
         ImportButton.IsEnabled = !isLoading;
+        DocumentsList.IsEnabled = !isLoading;
         ExportButton.IsEnabled = !isLoading && _selectedAsset is not null;
         ExtractButton.IsEnabled = !isLoading && _extractablePaths.Count > 0;
         PreviewButton.IsEnabled = !isLoading && _selectedAsset is not null;
@@ -459,6 +514,21 @@ public partial class MainPage : ContentPage
     {
         using var reader = new FileReader(path);
         return reader.FileType is FileType.BundleFile or FileType.WebFile or FileType.ZipFile;
+    }
+
+    private sealed class DocumentFileItem
+    {
+        public DocumentFileItem(string path)
+        {
+            Path = path;
+            var file = new FileInfo(path);
+            Name = file.Name;
+            Metadata = $"{file.Extension.ToUpperInvariant()} • {file.Length:N0} bytes";
+        }
+
+        public string Name { get; }
+        public string Metadata { get; }
+        public string Path { get; }
     }
 
     private sealed class AssetListItem
