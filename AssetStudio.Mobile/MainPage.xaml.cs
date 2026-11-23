@@ -1263,7 +1263,11 @@ public partial class MainPage : ContentPage
             if (exportFbx)
             {
                 outputPath = await Task.Run(
-                    () => MobileFbxExporter.ExportMeshes(meshes, cancellation.Token),
+                    () => sceneObjects == null
+                        ? MobileFbxExporter.ExportMeshes(meshes, cancellation.Token)
+                        : MobileFbxExporter.ExportSceneMeshes(
+                            MobileAssetExporter.GetSceneMeshGeometries(sceneObjects, cancellation.Token),
+                            cancellation.Token),
                     cancellation.Token);
             }
             else if (sceneObjects != null)
@@ -1293,16 +1297,29 @@ public partial class MainPage : ContentPage
                 rawFallbackCount = result.RawFallbackCount;
             }
             cancellation.Token.ThrowIfCancellationRequested();
-            await Share.Default.RequestAsync(new ShareFileRequest(
-                exportFbx
-                    ? "AssetStudio static FBX model"
-                    : merge ? "AssetStudio merged OBJ model" : "AssetStudio split OBJ models",
-                new ShareFile(outputPath)));
-            StatusLabel.Text = exportFbx
-                ? $"Exported {meshes.Count} mesh(es) as static FBX; transforms, materials, skins and animations are not included"
-                : rawFallbackCount == 0
-                ? $"Exported {meshes.Count} mesh(es) as OBJ; materials and animations are not included"
-                : $"Exported {meshes.Count} mesh(es); {rawFallbackCount} used raw fallback (see ZIP report)";
+            var shareTitle = exportFbx
+                ? "AssetStudio static FBX model"
+                : sceneObjects != null
+                    ? "AssetStudio scene OBJ model archive"
+                    : merge ? "AssetStudio merged OBJ model" : "AssetStudio split OBJ models";
+            await Share.Default.RequestAsync(new ShareFileRequest(shareTitle, new ShareFile(outputPath)));
+            if (exportFbx)
+            {
+                StatusLabel.Text = sceneObjects == null
+                    ? $"Exported {meshes.Count} mesh(es) as static FBX; transforms, materials, skins and animations are not included"
+                    : $"Exported {meshes.Count} mesh(es) as static FBX with scene transforms; materials, skins and animations are not included";
+            }
+            else if (sceneObjects != null)
+            {
+                StatusLabel.Text =
+                    $"Exported {meshes.Count} scene mesh(es) as static OBJ with diffuse materials and base textures; skinning and animations are not included";
+            }
+            else
+            {
+                StatusLabel.Text = rawFallbackCount == 0
+                    ? $"Exported {meshes.Count} mesh(es) as OBJ; materials and animations are not included"
+                    : $"Exported {meshes.Count} mesh(es); {rawFallbackCount} used raw fallback (see ZIP report)";
+            }
         }
         catch (OperationCanceledException)
         {

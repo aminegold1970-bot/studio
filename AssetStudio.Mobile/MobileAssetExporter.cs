@@ -163,10 +163,7 @@ internal static class MobileAssetExporter
         if (sceneMeshes.Count == 0)
             throw new InvalidOperationException("The selected scene objects contain no exportable meshes.");
 
-        var objectFiles = sceneMeshes.Select(item => (
-            item.Name,
-            Contents: ExportObj(item.Mesh, item.WorldTransform, cancellationToken)));
-        return WriteMergedObj(objectFiles, "MergedSceneObjects", cancellationToken);
+        return WriteSceneObjArchive(sceneMeshes, mergeObjects: true, cancellationToken);
     }
 
     public static string ExportSceneObjectsArchive(
@@ -177,26 +174,83 @@ internal static class MobileAssetExporter
         if (sceneMeshes.Count == 0)
             throw new InvalidOperationException("The selected scene objects contain no exportable meshes.");
 
+        return WriteSceneObjArchive(sceneMeshes, mergeObjects: false, cancellationToken);
+    }
+
+    private static string WriteSceneObjArchive(
+        IReadOnlyList<SceneMeshGeometry> sceneMeshes,
+        bool mergeObjects,
+        CancellationToken cancellationToken)
+    {
+        var entryNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        entryNames.Add("materials.mtl");
+        var objectEntryNames = mergeObjects
+            ? new[] { GetUniqueArchiveEntryName(entryNames, "MergedSceneObjects", ".obj") }
+            : sceneMeshes.Select(item => GetUniqueArchiveEntryName(
+                entryNames,
+                SanitizeFileName(item.Name),
+                ".obj")).ToArray();
+        var materialBundle = BuildObjMaterialBundle(sceneMeshes, entryNames, cancellationToken);
         Directory.CreateDirectory(FileSystem.CacheDirectory);
         var archivePath = Path.Combine(
             FileSystem.CacheDirectory,
-            $"AssetStudio_SceneObjects_{Guid.NewGuid():N}.zip");
+            $"AssetStudio_{(mergeObjects ? "MergedSceneObjects" : "SceneObjects")}_{Guid.NewGuid():N}.zip");
         try
         {
-            var entryNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             using (var archive = new ZipArchive(File.Create(archivePath), ZipArchiveMode.Create))
             {
-                foreach (var item in sceneMeshes)
+                foreach (var texture in materialBundle.Textures)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    var entryName = GetUniqueArchiveEntryName(
-                        entryNames,
-                        SanitizeFileName(item.Name),
-                        ".obj");
-                    var entry = archive.CreateEntry(entryName, CompressionLevel.Fastest);
-                    using var writer = new StreamWriter(entry.Open(), new UTF8Encoding(false));
-                    writer.Write(ExportObj(item.Mesh, item.WorldTransform, cancellationToken));
+                    WriteArchiveEntry(archive, texture.Name, texture.Data);
                 }
+
+                if (materialBundle.Materials.Count > 0)
+                {
+                    WriteArchiveEntry(
+                        archive,
+                        "materials.mtl",
+                        Encoding.UTF8.GetBytes(materialBundle.MaterialLibrary));
+                }
+
+                if (mergeObjects)
+                {
+                    var objectFiles = sceneMeshes.Select(item => (
+                        item.Name,
+                        Contents: ExportObj(
+                            item.Mesh,
+                            item.WorldTransform,
+                            cancellationToken,
+                            item.Materials,
+                            materialBundle.Materials)));
+                    var contents = BuildMergedObjContents(
+                        objectFiles,
+                        materialBundle.Materials.Count > 0,
+                        cancellationToken);
+                    WriteArchiveEntry(
+                        archive,
+                        objectEntryNames[0],
+                        Encoding.UTF8.GetBytes(contents));
+                }
+                else
+                {
+                    for (var index = 0; index < sceneMeshes.Count; index++)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var item = sceneMeshes[index];
+                        var contents = ExportObj(
+                            item.Mesh,
+                            item.WorldTransform,
+                            cancellationToken,
+                            item.Materials,
+                            materialBundle.Materials);
+                        var entry = archive.CreateEntry(objectEntryNames[index], CompressionLevel.Fastest);
+                        using var writer = new StreamWriter(entry.Open(), new UTF8Encoding(false));
+                        writer.Write(contents);
+                    }
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -210,13 +264,113 @@ internal static class MobileAssetExporter
         }
     }
 
+    private static void WriteArchiveEntry(
+        ZipArchive archive,
+        string entryName,
+        byte[] data)
+    {
+        var entry = archive.CreateEntry(entryName, CompressionLevel.Fastest);
+        using var output = entry.Open();
+        output.Write(data, 0, data.Length);
+    }
+
+    private static ObjMaterialBundle BuildObjMaterialBundle(
+        IEnumerable<SceneMeshGeometry> sceneMeshes,
+        HashSet<string> usedArchiveNames,
+        CancellationToken cancellationToken)
+    {
+        var materialMap = new Dictionary<Material, ObjMaterialInfo>();
+        var textures = new Dictionary<Texture2D, (string Name, byte[] Data)>();
+        var materialNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var library = new StringBuilder();
+        var materialIndex = 0;
+
+        foreach (var material in sceneMeshes
+            .SelectMany(item => item.Materials)
+            .Distinct())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var safeName = SanitizeObjIdentifier(
+                $"{material.m_Name}_{material.m_PathID}",
+                materialIndex++);
+            var materialName = GetUniqueArchiveEntryName(materialNames, safeName, string.Empty);
+            var diffuse = new AssetStudio.Color(0.8f, 0.8f, 0.8f, 1);
+            foreach (var property in material.m_SavedProperties.m_Colors)
+            {
+                if (property.Key is "_Color" or "_BaseColor")
+                {
+                    diffuse = property.Value;
+                    break;
+                }
+            }
+
+            if (!float.IsFinite(diffuse.R) || !float.IsFinite(diffuse.G)
+                || !float.IsFinite(diffuse.B) || !float.IsFinite(diffuse.A))
+            {
+                throw new InvalidDataException($"Material '{material.m_Name}' contains a non-finite diffuse color.");
+            }
+
+            string? diffuseTextureName = null;
+            var textureEnvironment = material.m_SavedProperties.m_TexEnvs
+                .FirstOrDefault(property => property.Key is "_MainTex" or "_BaseMap");
+            if (textureEnvironment.Value?.m_Texture.TryGet<Texture2D>(out var texture) == true)
+            {
+                if (!textures.TryGetValue(texture, out var texturePayload))
+                {
+                    var (data, extension) = ExportTexture(texture, cancellationToken);
+                    var textureBaseName = SanitizeObjIdentifier(
+                        string.IsNullOrWhiteSpace(texture.m_Name) ? "Texture" : texture.m_Name,
+                        textures.Count);
+                    var textureName = GetUniqueArchiveEntryName(
+                        usedArchiveNames,
+                        $"{textureBaseName}_{texture.m_PathID}",
+                        extension);
+                    texturePayload = (textureName, data);
+                    textures.Add(texture, texturePayload);
+                }
+                diffuseTextureName = texturePayload.Name;
+            }
+
+            library.Append("newmtl ").AppendLine(materialName)
+                .AppendLine("Ka 0.2 0.2 0.2")
+                .Append("Kd ").Append(diffuse.R.ToString("R", CultureInfo.InvariantCulture)).Append(' ')
+                .Append(diffuse.G.ToString("R", CultureInfo.InvariantCulture)).Append(' ')
+                .Append(diffuse.B.ToString("R", CultureInfo.InvariantCulture)).AppendLine()
+                .Append("d ").Append(diffuse.A.ToString("R", CultureInfo.InvariantCulture)).AppendLine();
+            if (diffuseTextureName != null)
+                library.Append("map_Kd ").AppendLine(diffuseTextureName);
+            library.AppendLine();
+            materialMap.Add(material, new ObjMaterialInfo(materialName));
+        }
+
+        return new ObjMaterialBundle(
+            materialMap,
+            library.ToString(),
+            textures.Values.Select(texture => new ObjTextureEntry(texture.Name, texture.Data)).ToList());
+    }
+
     private static string WriteMergedObj(
         IEnumerable<(string Name, string Contents)> objectFiles,
         string outputName,
         CancellationToken cancellationToken)
     {
+        var contents = BuildMergedObjContents(objectFiles, includeMaterialLibrary: false, cancellationToken);
+        return WriteOutputFile(
+            outputName,
+            Encoding.UTF8.GetBytes(contents),
+            ".obj",
+            cancellationToken);
+    }
+
+    private static string BuildMergedObjContents(
+        IEnumerable<(string Name, string Contents)> objectFiles,
+        bool includeMaterialLibrary,
+        CancellationToken cancellationToken)
+    {
         var builder = new StringBuilder();
         builder.AppendLine("# Merged by AssetStudio Mobile");
+        if (includeMaterialLibrary)
+            builder.AppendLine("mtllib materials.mtl");
         var vertexOffset = 0;
         var uvOffset = 0;
         var normalOffset = 0;
@@ -249,6 +403,10 @@ internal static class MobileAssetExporter
                     builder.AppendLine(line);
                     normals++;
                 }
+                else if (line.StartsWith("usemtl ", StringComparison.Ordinal))
+                {
+                    builder.AppendLine(line);
+                }
                 else if (line.StartsWith("f ", StringComparison.Ordinal))
                 {
                     builder.Append("f");
@@ -278,11 +436,7 @@ internal static class MobileAssetExporter
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        return WriteOutputFile(
-            outputName,
-            Encoding.UTF8.GetBytes(builder.ToString()),
-            ".obj",
-            cancellationToken);
+        return builder.ToString();
     }
 
     private static string SanitizeObjGroupName(string name, int fallbackIndex)
@@ -292,7 +446,16 @@ internal static class MobileAssetExporter
         return string.IsNullOrWhiteSpace(groupName) ? $"object_{fallbackIndex}" : groupName;
     }
 
-    private static List<SceneMeshGeometry> GetSceneMeshGeometries(
+    private static string SanitizeObjIdentifier(string name, int fallbackIndex)
+    {
+        var identifier = string.Concat(name.Select(character =>
+            char.IsAsciiLetterOrDigit(character) || character is '_' or '-' or '.'
+                ? character
+                : '_'));
+        return string.IsNullOrWhiteSpace(identifier) ? $"material_{fallbackIndex}" : identifier;
+    }
+
+    internal static List<SceneMeshGeometry> GetSceneMeshGeometries(
         IEnumerable<GameObject> gameObjects,
         CancellationToken cancellationToken)
     {
@@ -316,21 +479,37 @@ internal static class MobileAssetExporter
                 if (!pointer.TryGet(out var component))
                     continue;
 
-                Mesh? mesh = component switch
+                Mesh? mesh;
+                Renderer? renderer;
+                switch (component)
                 {
-                    MeshFilter meshFilter when meshFilter.m_Mesh.TryGet(out var value) => value,
-                    SkinnedMeshRenderer renderer when renderer.m_Mesh.TryGet(out var value) => value,
-                    _ => null
-                };
+                    case MeshFilter meshFilter when meshFilter.m_Mesh.TryGet(out var value):
+                        mesh = value;
+                        renderer = gameObject.m_MeshRenderer;
+                        break;
+                    case SkinnedMeshRenderer skinnedMeshRenderer
+                        when skinnedMeshRenderer.m_Mesh.TryGet(out var value):
+                        mesh = value;
+                        renderer = skinnedMeshRenderer;
+                        break;
+                    default:
+                        continue;
+                }
+
                 if (mesh == null)
                     continue;
 
+                var materials = renderer?.m_Materials?
+                    .Select(materialPointer =>
+                        materialPointer.TryGet(out var material) ? material : null)
+                    .OfType<Material>()
+                    .ToArray() ?? Array.Empty<Material>();
                 var objectName = string.IsNullOrWhiteSpace(gameObject.m_Name)
                     ? string.IsNullOrWhiteSpace(mesh.m_Name) ? "Mesh" : mesh.m_Name
                     : string.IsNullOrWhiteSpace(mesh.m_Name)
                         ? gameObject.m_Name
                         : $"{gameObject.m_Name}_{mesh.m_Name}";
-                geometries.Add(new SceneMeshGeometry(mesh, worldTransform, objectName));
+                geometries.Add(new SceneMeshGeometry(mesh, worldTransform, objectName, materials));
             }
         }
 
@@ -384,10 +563,11 @@ internal static class MobileAssetExporter
         }
     }
 
-    private readonly record struct SceneMeshGeometry(
+    internal readonly record struct SceneMeshGeometry(
         Mesh Mesh,
         NumericsMatrix4x4 WorldTransform,
-        string Name);
+        string Name,
+        Material[] Materials);
 
     private static string WriteAssetFile(
         AssetStudio.Object asset,
@@ -1194,7 +1374,9 @@ internal static class MobileAssetExporter
     private static string ExportObj(
         Mesh mesh,
         NumericsMatrix4x4 worldTransform,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyList<Material>? submeshMaterials = null,
+        IReadOnlyDictionary<Material, ObjMaterialInfo>? materialMap = null)
     {
         var positions = mesh.m_Vertices;
         if (positions is null || mesh.m_VertexCount <= 0
@@ -1225,6 +1407,8 @@ internal static class MobileAssetExporter
         var reverseFaceWinding = determinant >= 0;
         var builder = new StringBuilder(mesh.m_VertexCount * 48);
         builder.AppendLine("# Exported by AssetStudio Mobile");
+        if (materialMap is { Count: > 0 })
+            builder.AppendLine("mtllib materials.mtl");
         var hasFaces = false;
 
         for (var i = 0; i < mesh.m_VertexCount; i++)
@@ -1282,6 +1466,7 @@ internal static class MobileAssetExporter
         }
 
         var firstFace = 0;
+        var submeshIndex = 0;
         foreach (var submesh in mesh.m_SubMeshes)
         {
             if (firstFace > mesh.m_Indices.Count
@@ -1289,6 +1474,14 @@ internal static class MobileAssetExporter
                 || submesh.indexCount % 3 != 0)
             {
                 throw new InvalidDataException("The mesh contains an invalid triangle index range.");
+            }
+
+            if (submeshMaterials != null
+                && submeshIndex < submeshMaterials.Count
+                && materialMap != null
+                && materialMap.TryGetValue(submeshMaterials[submeshIndex], out var materialInfo))
+            {
+                builder.Append("usemtl ").AppendLine(materialInfo.Name);
             }
 
             var faceEnd = firstFace + checked((int)(submesh.indexCount / 3));
@@ -1330,6 +1523,7 @@ internal static class MobileAssetExporter
                 hasFaces = true;
             }
             firstFace = faceEnd;
+            submeshIndex++;
         }
 
         if (!hasFaces)
@@ -1362,3 +1556,12 @@ internal sealed record MobileArchiveReportEntry(
     string? Warning);
 
 internal sealed record ExportPayload(byte[] Data, string Extension, bool UsedRawFallback, string? Warning);
+
+internal sealed record ObjMaterialInfo(string Name);
+
+internal sealed record ObjTextureEntry(string Name, byte[] Data);
+
+internal sealed record ObjMaterialBundle(
+    Dictionary<AssetStudio.Material, ObjMaterialInfo> Materials,
+    string MaterialLibrary,
+    List<ObjTextureEntry> Textures);

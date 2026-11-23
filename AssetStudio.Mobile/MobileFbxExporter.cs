@@ -3,6 +3,8 @@ using AssetStudio;
 using Foundation;
 using FbxSharp;
 using ModelIO;
+using NumericsMatrix4x4 = System.Numerics.Matrix4x4;
+using NumericsVector3 = System.Numerics.Vector3;
 
 namespace AssetStudioMobile;
 
@@ -15,6 +17,35 @@ internal static class MobileFbxExporter
         if (meshes.Count == 0)
             throw new InvalidOperationException("No meshes were selected for FBX export.");
 
+        return ExportGeometry(
+            meshes.Select(mesh => new MobileAssetExporter.SceneMeshGeometry(
+                mesh,
+                NumericsMatrix4x4.Identity,
+                string.IsNullOrWhiteSpace(mesh.m_Name) ? "Mesh" : mesh.m_Name,
+                Array.Empty<Material>())),
+            cancellationToken);
+    }
+
+    public static string ExportSceneMeshes(
+        IEnumerable<MobileAssetExporter.SceneMeshGeometry> sourceMeshes,
+        CancellationToken cancellationToken = default)
+    {
+        var meshes = sourceMeshes?.ToList()
+            ?? throw new ArgumentNullException(nameof(sourceMeshes));
+        if (meshes.Count == 0)
+            throw new InvalidOperationException("The selected scene objects contain no exportable meshes.");
+
+        return ExportGeometry(meshes, cancellationToken);
+    }
+
+    private static string ExportGeometry(
+        IEnumerable<MobileAssetExporter.SceneMeshGeometry> sourceMeshes,
+        CancellationToken cancellationToken)
+    {
+        var meshes = sourceMeshes.ToList();
+        if (meshes.Count == 0)
+            throw new InvalidOperationException("No meshes were selected for FBX export.");
+
         var outputDirectory = Path.Combine(FileSystem.CacheDirectory, $"AssetStudio_FBX_{Guid.NewGuid():N}");
         Directory.CreateDirectory(outputDirectory);
         var outputPath = Path.Combine(outputDirectory, "AssetStudio.fbx");
@@ -23,10 +54,15 @@ internal static class MobileFbxExporter
         {
             using var allocator = new MDLMeshBufferDataAllocator();
             using var asset = new MDLAsset(allocator);
-            foreach (var mesh in meshes)
+            foreach (var geometry in meshes)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                asset.AddObject(CreateModelIoMesh(mesh, allocator, cancellationToken));
+                asset.AddObject(CreateModelIoMesh(
+                    geometry.Mesh,
+                    geometry.WorldTransform,
+                    geometry.Name,
+                    allocator,
+                    cancellationToken));
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -52,6 +88,8 @@ internal static class MobileFbxExporter
 
     private static MDLMesh CreateModelIoMesh(
         Mesh source,
+        NumericsMatrix4x4 worldTransform,
+        string objectName,
         MDLMeshBufferDataAllocator allocator,
         CancellationToken cancellationToken)
     {
@@ -65,14 +103,28 @@ internal static class MobileFbxExporter
             throw new NotSupportedException($"Mesh '{source.m_Name}' uses an unsupported vertex layout.");
 
         var normals = source.m_Normals;
-        var hasNormals = normals is { Length: > 0 }
+        var hasNormalTransform = NumericsMatrix4x4.Invert(worldTransform, out var inverseTransform);
+        var hasNormals = hasNormalTransform
+            && normals is { Length: > 0 }
             && normals.Length % vertexCount == 0
             && normals.Length / vertexCount == 3;
+        var colors = source.m_Colors;
+        var colorStride = colors is { Length: > 0 } && colors.Length % vertexCount == 0
+            ? colors.Length / vertexCount
+            : 0;
+        var hasColors = colorStride is 3 or 4;
+        var normalTransform = hasNormals
+            ? NumericsMatrix4x4.Transpose(inverseTransform)
+            : NumericsMatrix4x4.Identity;
+        var determinant = worldTransform.GetDeterminant();
+        if (!float.IsFinite(determinant))
+            throw new InvalidDataException($"Mesh '{source.m_Name}' has an invalid world transform.");
+        var reverseFaceWinding = determinant >= 0;
         var uvs = source.GetUV(0);
         var hasUvs = uvs is { Length: > 0 }
             && uvs.Length % vertexCount == 0
             && uvs.Length / vertexCount == 2;
-        var componentsPerVertex = 3 + (hasNormals ? 3 : 0) + (hasUvs ? 2 : 0);
+        var componentsPerVertex = 3 + (hasNormals ? 3 : 0) + (hasColors ? 4 : 0) + (hasUvs ? 2 : 0);
         var vertexData = new float[checked(vertexCount * componentsPerVertex)];
         for (var index = 0; index < vertexCount; index++)
         {
@@ -81,16 +133,49 @@ internal static class MobileFbxExporter
 
             var sourceOffset = index * positionStride;
             var targetOffset = index * componentsPerVertex;
-            vertexData[targetOffset] = -positions[sourceOffset];
-            vertexData[targetOffset + 1] = positions[sourceOffset + 1];
-            vertexData[targetOffset + 2] = positions[sourceOffset + 2];
+            var position = NumericsVector3.Transform(
+                new NumericsVector3(
+                    -positions[sourceOffset],
+                    positions[sourceOffset + 1],
+                    positions[sourceOffset + 2]),
+                worldTransform);
+            if (!float.IsFinite(position.X) || !float.IsFinite(position.Y) || !float.IsFinite(position.Z))
+                throw new InvalidDataException($"Mesh '{source.m_Name}' has a non-finite transformed vertex.");
+            vertexData[targetOffset] = position.X;
+            vertexData[targetOffset + 1] = position.Y;
+            vertexData[targetOffset + 2] = position.Z;
             var attributeOffset = targetOffset + 3;
             if (hasNormals)
             {
-                vertexData[attributeOffset] = -normals![index * 3];
-                vertexData[attributeOffset + 1] = normals[index * 3 + 1];
-                vertexData[attributeOffset + 2] = normals[index * 3 + 2];
+                var normal = NumericsVector3.TransformNormal(
+                    new NumericsVector3(
+                        -normals![index * 3],
+                        normals[index * 3 + 1],
+                        normals[index * 3 + 2]),
+                    normalTransform);
+                var lengthSquared = normal.LengthSquared();
+                if (!float.IsFinite(lengthSquared))
+                    throw new InvalidDataException($"Mesh '{source.m_Name}' has a non-finite transformed normal.");
+                if (lengthSquared > 1e-12f)
+                    normal = NumericsVector3.Normalize(normal);
+                vertexData[attributeOffset] = normal.X;
+                vertexData[attributeOffset + 1] = normal.Y;
+                vertexData[attributeOffset + 2] = normal.Z;
                 attributeOffset += 3;
+            }
+            if (hasColors)
+            {
+                var colorOffset = index * colorStride;
+                for (var channel = 0; channel < colorStride; channel++)
+                {
+                    var value = colors![colorOffset + channel];
+                    if (!float.IsFinite(value))
+                        throw new InvalidDataException($"Mesh '{source.m_Name}' contains a non-finite vertex color.");
+                    vertexData[attributeOffset + channel] = value;
+                }
+                if (colorStride == 3)
+                    vertexData[attributeOffset + 3] = 1;
+                attributeOffset += 4;
             }
             if (hasUvs)
                 Array.Copy(uvs!, index * 2, vertexData, attributeOffset, 2);
@@ -110,12 +195,22 @@ internal static class MobileFbxExporter
                 (nuint)(3 * sizeof(float)),
                 0));
         }
+        var nextAttributeOffset = 3 + (hasNormals ? 3 : 0);
+        if (hasColors)
+        {
+            descriptor.AddOrReplaceAttribute(new MDLVertexAttribute(
+                MDLVertexAttributes.Color,
+                MDLVertexFormat.Float4,
+                (nuint)(nextAttributeOffset * sizeof(float)),
+                0));
+            nextAttributeOffset += 4;
+        }
         if (hasUvs)
         {
             descriptor.AddOrReplaceAttribute(new MDLVertexAttribute(
                 MDLVertexAttributes.TextureCoordinate,
                 MDLVertexFormat.Float2,
-                (nuint)((3 + (hasNormals ? 3 : 0)) * sizeof(float)),
+                (nuint)(nextAttributeOffset * sizeof(float)),
                 0));
         }
         descriptor.SetPackedOffsets();
@@ -151,7 +246,8 @@ internal static class MobileFbxExporter
             {
                 if ((index & 2047) == 0)
                     cancellationToken.ThrowIfCancellationRequested();
-                var triangleIndex = index - index % 3 + (2 - index % 3);
+                var triangleIndex = index - index % 3
+                    + (reverseFaceWinding ? 2 - index % 3 : index % 3);
                 var vertexIndex = indexValues[indexOffset + triangleIndex];
                 if (vertexIndex >= vertexCount)
                     throw new InvalidDataException($"Mesh '{source.m_Name}' contains an out-of-range vertex index.");
@@ -176,7 +272,7 @@ internal static class MobileFbxExporter
 
         var result = new MDLMesh(vertexBuffer, (nuint)vertexCount, descriptor, submeshes.ToArray())
         {
-            Name = string.IsNullOrWhiteSpace(source.m_Name) ? "Mesh" : source.m_Name
+            Name = string.IsNullOrWhiteSpace(objectName) ? "Mesh" : objectName
         };
         return result;
     }
@@ -189,6 +285,11 @@ namespace AssetStudioMobile;
 internal static class MobileFbxExporter
 {
     public static string ExportMeshes(IEnumerable<Mesh> sourceMeshes, CancellationToken cancellationToken = default) =>
+        throw new PlatformNotSupportedException("FBX export is available only in the iOS app.");
+
+    public static string ExportSceneMeshes(
+        IEnumerable<MobileAssetExporter.SceneMeshGeometry> sourceMeshes,
+        CancellationToken cancellationToken = default) =>
         throw new PlatformNotSupportedException("FBX export is available only in the iOS app.");
 }
 #endif
