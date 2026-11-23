@@ -56,7 +56,11 @@ jobs:
         run: xcodebuild -version
 
       - name: Restore iOS app and referenced projects
-        run: dotnet restore AssetStudio.Mobile/AssetStudioMobile.csproj --runtime ios-arm64 -p:BuildIosOnly=true
+        run: |
+          dotnet restore AssetStudio.Mobile/AssetStudioMobile.csproj --runtime ios-arm64 -p:TargetFramework=net10.0-ios
+          dotnet restore AssetStudio/AssetStudio.csproj
+          dotnet restore AssetStudio.PInvoke/AssetStudio.PInvoke.csproj
+          dotnet restore Texture2DDecoderWrapper/Texture2DDecoderWrapper.csproj
 
       - name: Publish unsigned Release app for ARM64
         run: >-
@@ -65,7 +69,6 @@ jobs:
           --framework net10.0-ios
           --runtime ios-arm64
           --no-restore
-          -p:BuildIosOnly=true
           -p:EnableCodeSigning=false
           -p:ArchiveOnBuild=false
           -p:BuildIpa=false
