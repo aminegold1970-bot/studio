@@ -1,4 +1,4 @@
-name: Build AssetStudio
+name: Build AssetStudio Core
 
 on:
   push:
@@ -20,30 +20,37 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Setup .NET
+      - name: Setup .NET SDK
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: |
-            6.0.x
-            10.0.x
+          dotnet-version: '6.0.x'
 
-      - name: Display .NET information
+      - name: Display SDK information
         run: dotnet --info
 
-      - name: Clear NuGet cache
-        run: dotnet nuget locals all --clear
+      - name: Verify project files
+        run: |
+          test -f AssetStudio/AssetStudio.csproj
+          test -f AssetStudio.PInvoke/AssetStudio.PInvoke.csproj
+          test -f Texture2DDecoderWrapper/Texture2DDecoderWrapper.csproj
 
-      - name: Restore AssetStudio
-        run: dotnet restore AssetStudio.sln
+      - name: Restore AssetStudio Core
+        run: |
+          dotnet restore AssetStudio/AssetStudio.csproj \
+            -p:EnableWindowsTargeting=true
 
-      - name: Build AssetStudio
-        run: dotnet build AssetStudio.sln --configuration Release --no-restore
+      - name: Build AssetStudio Core
+        run: |
+          dotnet build AssetStudio/AssetStudio.csproj \
+            --configuration Release \
+            --no-restore \
+            -p:EnableWindowsTargeting=true
 
-      - name: Upload build artifacts
-        if: success()
+      - name: Upload AssetStudio Core
         uses: actions/upload-artifact@v4
+        if: success()
         with:
-          name: AssetStudio-Build
+          name: AssetStudio-Core-macOS
           path: |
             AssetStudio/bin/Release/**
             AssetStudio.PInvoke/bin/Release/**
