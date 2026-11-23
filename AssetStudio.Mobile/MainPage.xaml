@@ -2,224 +2,123 @@
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              x:Class="AssetStudioMobile.MainPage"
-             Title="AssetStudio">
-    <Grid Padding="12" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*,Auto" RowSpacing="8">
-        <Label Grid.Row="0"
-               Text="AssetStudio"
-               FontSize="26"
-               FontAttributes="Bold"
-               SemanticProperties.HeadingLevel="Level1" />
-
-        <Label x:Name="StatusLabel"
-               Grid.Row="1"
-               Text="Copy Unity files to Files > On My iPhone > AssetStudio, then select one below."
-               LineBreakMode="WordWrap"
-               TextColor="Gray" />
-
-        <ScrollView Grid.Row="2" Orientation="Horizontal">
-            <HorizontalStackLayout Spacing="6">
-                <Button Text="File" Clicked="OnFileMenuClicked" />
-                <Button Text="Options" Clicked="OnOptionsMenuClicked" />
-                <Button Text="Model" Clicked="OnModelMenuClicked" />
-                <Button Text="Export" Clicked="OnExportMenuClicked" />
-                <Button Text="Filter Type" Clicked="OnFilterMenuClicked" />
-                <Button Text="Debug" Clicked="OnDebugMenuClicked" />
+             Title="AssetStudio" BackgroundColor="#17191D">
+    <Grid RowDefinitions="Auto,Auto,Auto,*,Auto" RowSpacing="0">
+        <ScrollView Grid.Row="0" Orientation="Horizontal" BackgroundColor="#22252B">
+            <HorizontalStackLayout Padding="5,4" Spacing="3">
+                <Button Text="File" Clicked="OnFileMenuClicked" Style="{StaticResource MenuButton}"/>
+                <Button Text="Options" Clicked="OnOptionsMenuClicked" Style="{StaticResource MenuButton}"/>
+                <Button Text="Model" Clicked="OnModelMenuClicked" Style="{StaticResource MenuButton}"/>
+                <Button Text="Export" Clicked="OnExportMenuClicked" Style="{StaticResource MenuButton}"/>
+                <Button Text="Filter Type" Clicked="OnFilterMenuClicked" Style="{StaticResource MenuButton}"/>
+                <Button Text="Debug" Clicked="OnDebugMenuClicked" Style="{StaticResource MenuButton}"/>
             </HorizontalStackLayout>
         </ScrollView>
 
-        <Grid Grid.Row="3" ColumnDefinitions="1.2*,*,*,*" ColumnSpacing="6">
-            <Button x:Name="ImportButton"
-                    Text="Refresh"
-                    Clicked="OnRefreshDocumentsClicked"
-                    Grid.Column="0" />
-            <Button x:Name="ExportButton"
-                    Text="Export"
-                    Clicked="OnExportClicked"
-                    IsEnabled="False"
-                    Grid.Column="1" />
-            <Button x:Name="ExtractButton"
-                    Text="Unpack"
-                    Clicked="OnExtractClicked"
-                    IsEnabled="False"
-                    Grid.Column="2" />
-            <Button x:Name="PreviewButton"
-                    Text="View"
-                    Clicked="OnPreviewClicked"
-                    IsEnabled="False"
-                    Grid.Column="3" />
+        <Grid Grid.Row="1" ColumnDefinitions="*,*,*" Padding="6,5" ColumnSpacing="4" BackgroundColor="#1D2025">
+            <Button x:Name="HierarchyTab" Grid.Column="0" Text="Scene Hierarchy" Clicked="OnBrowserTabClicked" Style="{StaticResource TabButton}"/>
+            <Button x:Name="AssetListTab" Grid.Column="1" Text="Asset List" Clicked="OnBrowserTabClicked" Style="{StaticResource TabButton}"/>
+            <Button x:Name="ClassesTab" Grid.Column="2" Text="Asset Classes" Clicked="OnBrowserTabClicked" Style="{StaticResource TabButton}"/>
         </Grid>
 
-        <ScrollView Grid.Row="4" Orientation="Horizontal">
-            <HorizontalStackLayout Spacing="6">
-                <Button Text="Files" CommandParameter="Files" Clicked="OnSectionClicked" />
-                <Button Text="Scene" CommandParameter="Scene" Clicked="OnSectionClicked" />
-                <Button Text="Assets" CommandParameter="Assets" Clicked="OnSectionClicked" />
-                <Button Text="Classes" CommandParameter="Classes" Clicked="OnSectionClicked" />
-                <Button Text="Preview" CommandParameter="Preview" Clicked="OnSectionClicked" />
-                <Button Text="Dump" CommandParameter="Dump" Clicked="OnSectionClicked" />
-            </HorizontalStackLayout>
-        </ScrollView>
-
-        <Grid Grid.Row="5" ColumnDefinitions="*,Auto" ColumnSpacing="8">
-            <SearchBar x:Name="SearchBar"
-                       Placeholder="Search assets"
-                       TextChanged="OnSearchTextChanged" />
-            <Picker x:Name="TypeFilter"
-                    Grid.Column="1"
-                    Title="All types"
-                    WidthRequest="130"
-                    SelectedIndexChanged="OnTypeFilterChanged" />
+        <Grid Grid.Row="2" RowDefinitions="Auto,Auto" Padding="7,3" BackgroundColor="#1D2025">
+            <SearchBar x:Name="AssetSearch" Placeholder="Filter assets" PlaceholderColor="#9298A2"
+                       TextColor="#F1F3F5" BackgroundColor="#292D34" HeightRequest="42"
+                       TextChanged="OnAssetSearchTextChanged"/>
+            <Grid x:Name="AssetColumnHeaders" Grid.Row="1" ColumnDefinitions="2*,1.25*,1.1*,1.1*,.7*" Padding="3,3" ColumnSpacing="2">
+                <Button Text="Name" Clicked="OnSortName" Style="{StaticResource HeaderButton}"/>
+                <Button Grid.Column="1" Text="Container" Clicked="OnSortContainer" Style="{StaticResource HeaderButton}"/>
+                <Button Grid.Column="2" Text="Type" Clicked="OnSortType" Style="{StaticResource HeaderButton}"/>
+                <Button Grid.Column="3" Text="PathID" Clicked="OnSortPathId" Style="{StaticResource HeaderButton}"/>
+                <Button Grid.Column="4" Text="Size" Clicked="OnSortSize" Style="{StaticResource HeaderButton}"/>
+            </Grid>
         </Grid>
 
-        <Grid Grid.Row="6">
-            <Grid x:Name="DocumentsPanel" IsVisible="False" RowDefinitions="Auto,*">
-                <Label x:Name="DocumentsHelp"
-                       Padding="8"
-                       Text="Files are read from this app's Documents folder. Copy Unity files to Files > On My iPhone > AssetStudio."
-                       LineBreakMode="WordWrap"
-                       TextColor="Gray" />
-                <CollectionView x:Name="DocumentsList"
-                                Grid.Row="1"
-                                SelectionMode="Single"
-                                SelectionChanged="OnDocumentSelected">
+        <Grid Grid.Row="3" RowDefinitions="2*,Auto,3*" BackgroundColor="#17191D">
+            <Grid Grid.Row="0">
+                <CollectionView x:Name="AssetCollection" SelectionMode="Single"
+                                SelectionChanged="OnAssetSelectionChanged" BackgroundColor="#17191D">
                     <CollectionView.EmptyView>
-                        <Label Text="No files in AssetStudio Documents. Copy a Unity asset file or AssetBundle here, then tap Refresh."
-                               Padding="16"
-                               HorizontalOptions="Center"
-                               VerticalOptions="Center"
-                               TextColor="Gray" />
+                        <Label Text="No assets loaded" TextColor="#AEB6C2" HorizontalTextAlignment="Center"
+                               VerticalTextAlignment="Center"/>
                     </CollectionView.EmptyView>
                     <CollectionView.ItemTemplate>
                         <DataTemplate>
-                            <Grid Padding="8" RowDefinitions="Auto,Auto">
-                                <Label Text="{Binding Name}"
-                                       FontAttributes="Bold"
-                                       LineBreakMode="TailTruncation" />
-                                <Label Grid.Row="1"
-                                       Text="{Binding Metadata}"
-                                       FontSize="11"
-                                       TextColor="Gray"
-                                       LineBreakMode="TailTruncation" />
+                            <Grid ColumnDefinitions="2*,1.25*,1.1*,1.1*,.7*" Padding="7,9" ColumnSpacing="5">
+                                <Label Text="{Binding Name}" TextColor="#E7EAF0" FontSize="12" LineBreakMode="TailTruncation"/>
+                                <Label Grid.Column="1" Text="{Binding Container}" TextColor="#AEB6C2" FontSize="11" LineBreakMode="TailTruncation"/>
+                                <Label Grid.Column="2" Text="{Binding Type}" TextColor="#AEB6C2" FontSize="11" LineBreakMode="TailTruncation"/>
+                                <Label Grid.Column="3" Text="{Binding PathId}" TextColor="#AEB6C2" FontSize="11"/>
+                                <Label Grid.Column="4" Text="{Binding Size}" TextColor="#AEB6C2" FontSize="11"/>
+                            </Grid>
+                        </DataTemplate>
+                    </CollectionView.ItemTemplate>
+                </CollectionView>
+                <CollectionView x:Name="HierarchyCollection" IsVisible="False" SelectionMode="None"
+                                BackgroundColor="#17191D">
+                    <CollectionView.EmptyView><Label Text="No scene hierarchy loaded" TextColor="#AEB6C2" HorizontalTextAlignment="Center" VerticalTextAlignment="Center"/></CollectionView.EmptyView>
+                    <CollectionView.ItemTemplate>
+                        <DataTemplate>
+                            <Grid ColumnDefinitions="Auto,*" Padding="{Binding IndentPadding}" ColumnSpacing="8">
+                                <CheckBox IsChecked="{Binding IsChecked, Mode=TwoWay}" CheckedChanged="OnHierarchyCheckChanged" Color="#8B78D6"/>
+                                <Label Grid.Column="1" Text="{Binding DisplayName}" TextColor="#E7EAF0" VerticalTextAlignment="Center" FontSize="13"/>
+                            </Grid>
+                        </DataTemplate>
+                    </CollectionView.ItemTemplate>
+                </CollectionView>
+                <CollectionView x:Name="ClassesCollection" IsVisible="False" SelectionMode="Single"
+                                SelectionChanged="OnClassSelectionChanged" BackgroundColor="#17191D">
+                    <CollectionView.EmptyView><Label Text="No asset classes loaded" TextColor="#AEB6C2" HorizontalTextAlignment="Center" VerticalTextAlignment="Center"/></CollectionView.EmptyView>
+                    <CollectionView.ItemTemplate>
+                        <DataTemplate>
+                            <Grid ColumnDefinitions="*,Auto" Padding="10,9">
+                                <Label Text="{Binding Name}" TextColor="#E7EAF0" FontSize="13"/>
+                                <Label Grid.Column="1" Text="{Binding Id}" TextColor="#AEB6C2" FontSize="12"/>
                             </Grid>
                         </DataTemplate>
                     </CollectionView.ItemTemplate>
                 </CollectionView>
             </Grid>
-
-            <CollectionView x:Name="AssetList"
-                            SelectionMode="Single"
-                            SelectionChanged="OnAssetSelected">
-                <CollectionView.EmptyView>
-                    <Label Text="No assets to display."
-                           HorizontalOptions="Center"
-                           VerticalOptions="Center"
-                           TextColor="Gray" />
-                </CollectionView.EmptyView>
-                <CollectionView.ItemTemplate>
-                    <DataTemplate>
-                        <Grid Padding="8" RowDefinitions="Auto,Auto,Auto">
-                            <Label Text="{Binding Name}"
-                                   FontAttributes="Bold"
-                                   LineBreakMode="TailTruncation" />
-                            <Label Grid.Row="1"
-                                   Text="{Binding Type}"
-                                   FontSize="12"
-                                   TextColor="Gray" />
-                            <Label Grid.Row="2"
-                                   Text="{Binding Metadata}"
-                                   FontSize="11"
-                                   TextColor="Gray"
-                                   IsVisible="{Binding MetadataVisible}"
-                                   LineBreakMode="TailTruncation" />
-                        </Grid>
-                    </DataTemplate>
-                </CollectionView.ItemTemplate>
-            </CollectionView>
-
-            <CollectionView x:Name="HierarchyList"
-                            IsVisible="False"
-                            SelectionMode="Single"
-                            SelectionChanged="OnHierarchySelected">
-                <CollectionView.EmptyView>
-                    <Label Text="No GameObjects were found."
-                           HorizontalOptions="Center"
-                           VerticalOptions="Center"
-                           TextColor="Gray" />
-                </CollectionView.EmptyView>
-                <CollectionView.ItemTemplate>
-                    <DataTemplate>
-                        <Grid Padding="6" ColumnDefinitions="*,Auto">
-                            <Label Text="{Binding Name}"
-                                   Margin="{Binding Indent}"
-                                   FontAttributes="Bold"
-                                   LineBreakMode="TailTruncation" />
-                            <Label Grid.Column="1"
-                                   Text="{Binding Type}"
-                                   FontSize="11"
-                                   TextColor="Gray"
-                                   VerticalOptions="Center" />
-                        </Grid>
-                    </DataTemplate>
-                </CollectionView.ItemTemplate>
-            </CollectionView>
-
-            <CollectionView x:Name="ClassList"
-                            IsVisible="False"
-                            SelectionMode="Single"
-                            SelectionChanged="OnClassSelected">
-                <CollectionView.EmptyView>
-                    <Label Text="No serialized class structures were found."
-                           HorizontalOptions="Center"
-                           VerticalOptions="Center"
-                           TextColor="Gray" />
-                </CollectionView.EmptyView>
-                <CollectionView.ItemTemplate>
-                    <DataTemplate>
-                        <Grid Padding="8" RowDefinitions="Auto,Auto">
-                            <Label Text="{Binding Name}"
-                                   FontAttributes="Bold"
-                                   LineBreakMode="TailTruncation" />
-                            <Label Grid.Row="1"
-                                   Text="{Binding Metadata}"
-                                   FontSize="11"
-                                   TextColor="Gray" />
-                        </Grid>
-                    </DataTemplate>
-                </CollectionView.ItemTemplate>
-            </CollectionView>
-
-            <ScrollView x:Name="PreviewPanel" IsVisible="False">
-                <VerticalStackLayout Padding="8" Spacing="12">
-                    <Label Text="Asset preview"
-                           FontSize="20"
-                           FontAttributes="Bold" />
-                    <Label x:Name="PreviewSummary"
-                           Text="Select an asset to inspect or preview it."
-                           LineBreakMode="WordWrap" />
-                    <Label x:Name="PreviewText"
-                           IsVisible="False"
-                           FontFamily="monospace"
-                           LineBreakMode="WordWrap" />
-                    <Button Text="Open full preview"
-                            Clicked="OnPreviewClicked"
-                            IsEnabled="False"
-                            x:Name="PreviewPanelButton" />
-                </VerticalStackLayout>
-            </ScrollView>
-
-            <ScrollView x:Name="DumpPanel" IsVisible="False">
-                <Label x:Name="DumpText"
-                       Padding="8"
-                       Text="Select an asset to view its serialized dump."
-                       FontFamily="monospace"
-                       LineBreakMode="WordWrap" />
-            </ScrollView>
+            <BoxView Grid.Row="1" HeightRequest="1" Color="#3B414B"/>
+            <Grid Grid.Row="2" RowDefinitions="Auto,*" BackgroundColor="#1D2025">
+                <Grid ColumnDefinitions="*,*" Padding="6" ColumnSpacing="5">
+                    <Button x:Name="PreviewTab" Text="Preview" Clicked="OnPreviewTabClicked" Style="{StaticResource TabButton}"/>
+                    <Button x:Name="DumpTab" Grid.Column="1" Text="Dump" Clicked="OnDumpTabClicked" Style="{StaticResource TabButton}"/>
+                </Grid>
+                <ScrollView x:Name="PreviewScroll" Grid.Row="1" Padding="12">
+                    <VerticalStackLayout Spacing="7">
+                        <Label x:Name="PreviewTitle" Text="Preview" TextColor="#E7EAF0" FontSize="16" FontAttributes="Bold"/>
+                        <Label x:Name="PreviewDetails" Text="Select an asset to inspect it." TextColor="#AEB6C2" FontSize="12"/>
+                    </VerticalStackLayout>
+                </ScrollView>
+                <ScrollView x:Name="DumpScroll" Grid.Row="1" Padding="12" IsVisible="False">
+                    <Label x:Name="DumpText" Text="Select an asset to view its dump." TextColor="#D5DAE2" FontFamily="monospace" FontSize="11"/>
+                </ScrollView>
+            </Grid>
         </Grid>
 
-        <Label x:Name="SelectionLabel"
-               Grid.Row="7"
-               Text="No asset selected."
-               FontSize="12"
-               TextColor="Gray" />
+        <Grid Grid.Row="4" ColumnDefinitions="*,Auto" Padding="9,6" BackgroundColor="#22252B">
+            <Label x:Name="StatusLabel" Text="Ready to go" TextColor="#B9C0CA" FontSize="12" VerticalTextAlignment="Center"/>
+            <ActivityIndicator x:Name="BusyIndicator" Grid.Column="1" IsRunning="False" IsVisible="False" HeightRequest="20"/>
+        </Grid>
     </Grid>
+    <ContentPage.Resources>
+        <ResourceDictionary>
+            <Style x:Key="MenuButton" TargetType="Button">
+                <Setter Property="Padding" Value="10,5"/><Setter Property="CornerRadius" Value="4"/>
+                <Setter Property="FontSize" Value="12"/><Setter Property="TextColor" Value="#E7EAF0"/>
+                <Setter Property="BackgroundColor" Value="#30353E"/><Setter Property="HeightRequest" Value="33"/>
+            </Style>
+            <Style x:Key="HeaderButton" TargetType="Button">
+                <Setter Property="Padding" Value="2,3"/><Setter Property="CornerRadius" Value="2"/>
+                <Setter Property="FontSize" Value="10"/><Setter Property="TextColor" Value="#B9C0CA"/>
+                <Setter Property="BackgroundColor" Value="Transparent"/><Setter Property="HeightRequest" Value="27"/>
+            </Style>
+            <Style x:Key="TabButton" TargetType="Button">
+                <Setter Property="Padding" Value="3,6"/><Setter Property="CornerRadius" Value="4"/>
+                <Setter Property="FontSize" Value="11"/><Setter Property="TextColor" Value="#E7EAF0"/>
+                <Setter Property="BackgroundColor" Value="#30353E"/><Setter Property="HeightRequest" Value="35"/>
+            </Style>
+        </ResourceDictionary>
+    </ContentPage.Resources>
 </ContentPage>
