@@ -124,10 +124,10 @@
                         <Border x:Name="FontPreviewFrame" IsVisible="False" BackgroundColor="#F4F4F4" Stroke="#C8C8C8" StrokeThickness="1" Padding="10">
                             <VerticalStackLayout Spacing="7">
                                 <Label Text="Font specimen" TextColor="#333333" FontSize="11"/>
-                                <Label Text="The quick brown fox jumps over the lazy dog." TextColor="#111111" FontSize="12"/>
-                                <Label Text="The quick brown fox jumps over the lazy dog." TextColor="#111111" FontSize="18"/>
-                                <Label Text="The quick brown fox jumps over the lazy dog." TextColor="#111111" FontSize="26"/>
-                                <Label Text="0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ" TextColor="#111111" FontSize="15"/>
+                                <Label x:Name="FontSpecimenSmall" Text="The quick brown fox jumps over the lazy dog." TextColor="#111111" FontSize="12"/>
+                                <Label x:Name="FontSpecimenMedium" Text="The quick brown fox jumps over the lazy dog." TextColor="#111111" FontSize="18"/>
+                                <Label x:Name="FontSpecimenLarge" Text="The quick brown fox jumps over the lazy dog." TextColor="#111111" FontSize="26"/>
+                                <Label x:Name="FontSpecimenCharacters" Text="0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ" TextColor="#111111" FontSize="15"/>
                             </VerticalStackLayout>
                         </Border>
                         <Border x:Name="AudioPreviewFrame" IsVisible="False" BackgroundColor="#F7F7F7" Stroke="#C8C8C8" StrokeThickness="1" Padding="8">

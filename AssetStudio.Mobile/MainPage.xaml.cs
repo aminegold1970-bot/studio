@@ -6,7 +6,9 @@ using System.Security.Cryptography;
 using System.Text;
 #if IOS
 using AVFoundation;
+using CoreText;
 using Foundation;
+using UIKit;
 #endif
 
 namespace AssetStudioMobile;
@@ -577,6 +579,9 @@ public partial class MainPage : ContentPage
 
     private void ResetPreviewSurface()
     {
+#if IOS
+        UnregisterEmbeddedPreviewFont();
+#endif
         ImagePreviewFrame.IsVisible = false;
         MetadataFrame.IsVisible = false;
         _metadataRows.Clear();
@@ -587,6 +592,10 @@ public partial class MainPage : ContentPage
         OpenMeshPreviewButton.IsVisible = false;
         AssetImagePreview.Source = null;
         AssetTextPreview.Text = string.Empty;
+        FontSpecimenSmall.FontFamily = null;
+        FontSpecimenMedium.FontFamily = null;
+        FontSpecimenLarge.FontFamily = null;
+        FontSpecimenCharacters.FontFamily = null;
         AudioPreviewInfo.Text = string.Empty;
         AudioPlaybackStatus.Text = "Stopped";
         AudioFrequency.Text = "— Hz";
@@ -1695,7 +1704,20 @@ public partial class MainPage : ContentPage
                         $"Mesh · {mesh.m_VertexCount:N0} vertices · Open the wireframe preview to inspect it.");
                     break;
                 case AssetStudio.MonoBehaviour behaviour:
-                    ShowTextPreview(row.Name, "MonoBehaviour dump", behaviour.Dump() ?? string.Empty);
+                    var behaviourData = await Task.Run(() => behaviour.ToType());
+                    if (_selectedAsset?.Id != row.Id) return;
+                    if (behaviourData != null)
+                    {
+                        var json = Newtonsoft.Json.JsonConvert.SerializeObject(
+                            behaviourData, Newtonsoft.Json.Formatting.Indented);
+                        ShowTextPreview(row.Name, "MonoBehaviour", json);
+                    }
+                    else
+                    {
+                        ShowTextPreview(row.Name, "MonoBehaviour dump",
+                            behaviour.Dump() ?? string.Empty,
+                            "No serialized type tree is available for this asset; showing the raw dump.");
+                    }
                     break;
                 case AssetStudio.AudioClip audio:
 #if IOS
@@ -1707,11 +1729,18 @@ public partial class MainPage : ContentPage
                 case AssetStudio.Font font:
                     ShowFontPreview(row.Name,
                         font.m_FontData is { Length: > 0 }
-                            ? $"Embedded font data · {font.m_FontData.Length:N0} bytes. Export to open or install the original font."
+                            ? $"Embedded font data · {font.m_FontData.Length:N0} bytes."
                             : "This font has no embedded data to preview or export.");
+#if IOS
+                    if (font.m_FontData is { Length: > 0 })
+                        await ApplyEmbeddedFontPreviewAsync(font, row);
+#endif
                     break;
-                case AssetStudio.Shader shader when shader.m_Script is { Length: > 0 }:
-                    ShowTextPreview(row.Name, "Shader source", Encoding.UTF8.GetString(shader.m_Script));
+                case AssetStudio.Shader shader:
+                    var shaderSource = await Task.Run(() => AssetStudio.ShaderConverter.Convert(shader));
+                    if (_selectedAsset?.Id != row.Id) return;
+                    ShowTextPreview(row.Name, "Shader source",
+                        shaderSource.Replace("\n", "\r\n").Replace("\0", ""));
                     break;
                 case AssetStudio.Sprite sprite:
                     PreviewDetails.Text = "Cropped sprite preview; packed tight-mesh transparency and separate alpha textures are not applied.";
@@ -1760,6 +1789,45 @@ public partial class MainPage : ContentPage
 #if IOS
     private AssetStudio.AudioClip? _selectedAudioClip;
     private AVAudioPlayer? _audioPlayer;
+    private string? _registeredPreviewFontPath;
+
+    private async Task ApplyEmbeddedFontPreviewAsync(AssetStudio.Font font, AssetRow row)
+    {
+        var path = await Task.Run(() => MobileAssetExporter.Export(font));
+        if (_selectedAsset?.Id != row.Id) return;
+
+        var url = NSUrl.FromFilename(path);
+        var registrationError = CTFontManager.RegisterFontsForUrl(url, CTFontManagerScope.Process);
+        if (registrationError != null)
+            throw new InvalidDataException(
+                $"iOS could not register the embedded font: {registrationError.LocalizedDescription}");
+        _registeredPreviewFontPath = path;
+
+        var descriptor = CTFontManager.GetFonts(url).FirstOrDefault()
+            ?? throw new InvalidDataException("The embedded font contains no readable font face.");
+        var attributes = descriptor.GetAttributes();
+        var fontName = attributes.Name ?? attributes.FamilyName;
+        if (string.IsNullOrWhiteSpace(fontName) || UIFont.FromName(fontName, 12f) == null)
+            throw new InvalidDataException("iOS registered the font but could not resolve its family name.");
+
+        FontSpecimenSmall.FontFamily = fontName;
+        FontSpecimenMedium.FontFamily = fontName;
+        FontSpecimenLarge.FontFamily = fontName;
+        FontSpecimenCharacters.FontFamily = fontName;
+        PreviewDetails.Text += $"\nRendering embedded font: {fontName}";
+    }
+
+    private void UnregisterEmbeddedPreviewFont()
+    {
+        if (_registeredPreviewFontPath is not { } path)
+            return;
+
+        _registeredPreviewFontPath = null;
+        var unregisterError = CTFontManager.UnregisterFontsForUrl(
+            NSUrl.FromFilename(path), CTFontManagerScope.Process);
+        if (unregisterError != null)
+            StatusLabel.Text = $"Could not unregister previous font preview: {unregisterError.LocalizedDescription}";
+    }
 
     private async void OnAudioPlaybackRequested(object? sender, EventArgs e)
     {

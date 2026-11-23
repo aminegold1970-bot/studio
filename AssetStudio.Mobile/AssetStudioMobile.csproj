@@ -78,6 +78,10 @@
 
 	<ItemGroup>
 		<Compile Include="..\AssetStudioUtility\Texture2DConverter.cs" Link="Texture2DConverter.cs" />
+		<Compile Include="..\AssetStudioUtility\ShaderConverter.cs" Link="ShaderConverter.cs" />
+		<Compile Include="..\AssetStudioUtility\SpirVShaderConverter.cs" Link="SpirVShaderConverter.cs" />
+		<Compile Include="..\AssetStudioUtility\CSspv\*.cs" Link="CSspv\%(Filename)%(Extension)" />
+		<Compile Include="..\AssetStudioUtility\Smolv\*.cs" Link="Smolv\%(Filename)%(Extension)" />
 	</ItemGroup>
 
 </Project>
