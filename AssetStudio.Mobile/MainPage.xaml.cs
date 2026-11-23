@@ -6,6 +6,7 @@ namespace AssetStudioMobile;
 public partial class MainPage : ContentPage
 {
     private readonly List<AssetListItem> _assets = new();
+    private readonly List<AssetListItem> _visibleAssets = new();
     private readonly List<HierarchyListItem> _hierarchy = new();
     private readonly List<ClassListItem> _classes = new();
     private readonly List<DocumentFileItem> _documentFiles = new();
@@ -14,6 +15,10 @@ public partial class MainPage : ContentPage
     private bool _isLoading;
     private string _searchText = string.Empty;
     private string _selectedType = "All";
+    private string _unityVersion = string.Empty;
+    private bool _showAllAssets = true;
+    private bool _showAssetInfo = true;
+    private bool _previewEnabled = true;
 
     public MainPage()
     {
@@ -60,6 +65,242 @@ public partial class MainPage : ContentPage
         }
     }
 
+    private async void OnFileMenuClicked(object? sender, EventArgs e)
+    {
+        var refresh = "Refresh Documents";
+        var showFiles = "Show Documents";
+        var unpack = "Unpack loaded bundle";
+        var action = await DisplayActionSheetAsync("File", "Cancel", null, refresh, showFiles, unpack);
+        if (action == refresh)
+        {
+            OnRefreshDocumentsClicked(sender, e);
+        }
+        else if (action == showFiles)
+        {
+            SetActiveSection("Files");
+        }
+        else if (action == unpack)
+        {
+            OnExtractClicked(sender, e);
+        }
+    }
+
+    private async void OnOptionsMenuClicked(object? sender, EventArgs e)
+    {
+        const string toggleAll = "Toggle display all assets";
+        const string toggleInfo = "Toggle asset information";
+        const string togglePreview = "Toggle preview";
+        const string setVersion = "Specify Unity version";
+        var action = await DisplayActionSheetAsync(
+            "Options",
+            "Cancel",
+            null,
+            toggleAll,
+            toggleInfo,
+            togglePreview,
+            setVersion);
+        if (action == toggleAll)
+        {
+            _showAllAssets = !_showAllAssets;
+            ApplyFilters();
+            StatusLabel.Text = _showAllAssets
+                ? "Showing all loaded asset types."
+                : "Showing assets with a mobile conversion.";
+        }
+        else if (action == toggleInfo)
+        {
+            _showAssetInfo = !_showAssetInfo;
+            ApplyFilters();
+            StatusLabel.Text = _showAssetInfo
+                ? "Asset source and size details are visible."
+                : "Asset source and size details are hidden.";
+        }
+        else if (action == togglePreview)
+        {
+            _previewEnabled = !_previewEnabled;
+            if (!_previewEnabled && PreviewPanel.IsVisible)
+            {
+                SetActiveSection("Assets");
+            }
+            UpdateSelection();
+            StatusLabel.Text = _previewEnabled ? "Asset previews are enabled." : "Asset previews are disabled.";
+        }
+        else if (action == setVersion)
+        {
+            var version = await DisplayPromptAsync(
+                "Unity version",
+                "Enter the version to use when loading files, or leave empty for auto-detection.",
+                "Save",
+                "Cancel",
+                "Example: 2022.3.0f1",
+                40,
+                Keyboard.Default,
+                _unityVersion);
+            if (version is not null)
+            {
+                _unityVersion = version.Trim();
+                StatusLabel.Text = string.IsNullOrEmpty(_unityVersion)
+                    ? "Unity version override cleared; auto-detection will be used on the next load."
+                    : $"Unity version override set to {_unityVersion}; reload a file to apply it.";
+            }
+        }
+    }
+
+    private async void OnModelMenuClicked(object? sender, EventArgs e)
+    {
+        const string preview = "Preview selected model";
+        const string exportSelected = "Export selected mesh as OBJ";
+        const string exportVisible = "Export visible meshes as OBJ";
+        const string fbx = "FBX / animation export";
+        var action = await DisplayActionSheetAsync("Model", "Cancel", null, preview, exportSelected, exportVisible, fbx);
+        if (action == preview)
+        {
+            OnPreviewClicked(sender, e);
+        }
+        else if (action == exportSelected)
+        {
+            if (_selectedAsset?.Asset is Mesh)
+            {
+                await ShareAssetAsync(_selectedAsset, MobileExportKind.Converted);
+            }
+            else
+            {
+                await DisplayAlertAsync("No mesh selected", "Select a Mesh asset first. OBJ export is available for meshes; FBX and animation export are not supported on iOS.", "OK");
+            }
+        }
+        else if (action == exportVisible)
+        {
+            await ShareAssetArchiveAsync(
+                _visibleAssets.Where(asset => asset.Asset is Mesh),
+                MobileExportKind.Converted,
+                "visible mesh");
+        }
+        else if (action == fbx)
+        {
+            await DisplayAlertAsync(
+                "FBX / animation export unavailable",
+                "The desktop exporter depends on Windows-native Autodesk/FBX components. This iOS build supports mesh preview and OBJ export instead.",
+                "OK");
+        }
+    }
+
+    private async void OnExportMenuClicked(object? sender, EventArgs e)
+    {
+        const string selectedConverted = "Export selected (converted)";
+        const string selectedRaw = "Export selected (raw)";
+        const string selectedDump = "Dump selected";
+        const string visibleConverted = "Export filtered assets (converted)";
+        const string visibleRaw = "Export filtered assets (raw)";
+        const string visibleDump = "Dump filtered assets";
+        const string allConverted = "Export all assets (converted)";
+        const string allRaw = "Export all assets (raw)";
+        const string allDump = "Dump all assets";
+        var action = await DisplayActionSheetAsync(
+            "Export",
+            "Cancel",
+            null,
+            selectedConverted,
+            selectedRaw,
+            selectedDump,
+            visibleConverted,
+            visibleRaw,
+            visibleDump,
+            allConverted,
+            allRaw,
+            allDump);
+        switch (action)
+        {
+            case selectedConverted:
+                if (_selectedAsset is not null)
+                {
+                    await ShareAssetAsync(_selectedAsset, MobileExportKind.Converted);
+                }
+                else
+                {
+                    await DisplayAlertAsync("No asset selected", "Select an asset first.", "OK");
+                }
+                break;
+            case selectedRaw:
+                if (_selectedAsset is not null)
+                {
+                    await ShareAssetAsync(_selectedAsset, MobileExportKind.Raw);
+                }
+                else
+                {
+                    await DisplayAlertAsync("No asset selected", "Select an asset first.", "OK");
+                }
+                break;
+            case selectedDump:
+                if (_selectedAsset is not null)
+                {
+                    await ShareAssetAsync(_selectedAsset, MobileExportKind.Dump);
+                }
+                else
+                {
+                    await DisplayAlertAsync("No asset selected", "Select an asset first.", "OK");
+                }
+                break;
+            case visibleConverted:
+                await ShareAssetArchiveAsync(_visibleAssets, MobileExportKind.Converted, "filtered asset");
+                break;
+            case visibleRaw:
+                await ShareAssetArchiveAsync(_visibleAssets, MobileExportKind.Raw, "filtered asset");
+                break;
+            case visibleDump:
+                await ShareAssetArchiveAsync(_visibleAssets, MobileExportKind.Dump, "filtered asset");
+                break;
+            case allConverted:
+                await ShareAssetArchiveAsync(_assets, MobileExportKind.Converted, "asset");
+                break;
+            case allRaw:
+                await ShareAssetArchiveAsync(_assets, MobileExportKind.Raw, "asset");
+                break;
+            case allDump:
+                await ShareAssetArchiveAsync(_assets, MobileExportKind.Dump, "asset");
+                break;
+        }
+    }
+
+    private async void OnFilterMenuClicked(object? sender, EventArgs e)
+    {
+        var types = TypeFilter.ItemsSource?.Cast<string>().ToArray() ?? new[] { "All" };
+        var action = await DisplayActionSheetAsync("Filter Type", "Cancel", null, types);
+        if (action is not null && action != "Cancel")
+        {
+            TypeFilter.SelectedItem = action;
+            SetActiveSection("Assets");
+        }
+    }
+
+    private async void OnDebugMenuClicked(object? sender, EventArgs e)
+    {
+        const string exportClasses = "Export class structures";
+        const string dumpSelected = "Export selected asset dump";
+        var action = await DisplayActionSheetAsync("Debug", "Cancel", null, exportClasses, dumpSelected);
+        if (action == exportClasses)
+        {
+            if (_classes.Count == 0)
+            {
+                await DisplayAlertAsync("No class structures", "Load a Unity file containing serialized type information first.", "OK");
+                return;
+            }
+
+            var content = string.Join(
+                Environment.NewLine + Environment.NewLine,
+                _classes.Select(item => $"// {item.Name} • {item.Version} • class ID {item.TypeId}{Environment.NewLine}{item.Definition}"));
+            await ShareTextAsync("AssetStudioClasses.txt", content);
+        }
+        else if (action == dumpSelected)
+        {
+            if (_selectedAsset is null)
+            {
+                await DisplayAlertAsync("No asset selected", "Select an asset first.", "OK");
+                return;
+            }
+            await ShareAssetAsync(_selectedAsset, MobileExportKind.Dump);
+        }
+    }
+
     private async void OnDocumentSelected(object? sender, SelectionChangedEventArgs e)
     {
         if (_isLoading || e.CurrentSelection.FirstOrDefault() is not DocumentFileItem file)
@@ -83,6 +324,7 @@ public partial class MainPage : ContentPage
 
             SetLoading(true, $"Loading {Path.GetFileName(path)}…");
             var manager = new AssetsManager();
+            manager.SpecifyUnityVersion = _unityVersion;
             var logger = new MobileLogger();
             var previousLogger = Logger.Default;
             try
@@ -227,12 +469,19 @@ public partial class MainPage : ContentPage
     {
         var query = _searchText;
         var visibleAssets = _assets.Where(asset =>
-            (_selectedType == "All" || asset.Type == _selectedType)
+            (_showAllAssets || asset.IsExportable)
+            && (_selectedType == "All" || asset.Type == _selectedType)
             && (string.IsNullOrEmpty(query)
                 || asset.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
                 || asset.Type.Contains(query, StringComparison.OrdinalIgnoreCase)
                 || asset.SourceFile.Contains(query, StringComparison.OrdinalIgnoreCase))).ToList();
-        AssetList.ItemsSource = visibleAssets;
+        _visibleAssets.Clear();
+        _visibleAssets.AddRange(visibleAssets);
+        foreach (var asset in _assets)
+        {
+            asset.MetadataVisible = _showAssetInfo;
+        }
+        AssetList.ItemsSource = _visibleAssets.ToList();
 
         DocumentsList.ItemsSource = _documentFiles.Where(item =>
             string.IsNullOrEmpty(query)
@@ -275,8 +524,8 @@ public partial class MainPage : ContentPage
     private void UpdateSelection()
     {
         ExportButton.IsEnabled = _selectedAsset is not null && !_isLoading;
-        PreviewButton.IsEnabled = _selectedAsset is not null && !_isLoading;
-        PreviewPanelButton.IsEnabled = !_isLoading && (_selectedAsset?.Asset is Mesh or Texture2D);
+        PreviewButton.IsEnabled = _previewEnabled && _selectedAsset is not null && !_isLoading;
+        PreviewPanelButton.IsEnabled = _previewEnabled && !_isLoading && (_selectedAsset?.Asset is Mesh or Texture2D);
         SelectionLabel.Text = _selectedAsset is null
             ? "No asset selected."
             : $"{_selectedAsset.Name} • {_selectedAsset.Type} • path ID {_selectedAsset.PathId}";
@@ -363,8 +612,17 @@ public partial class MainPage : ContentPage
 
     private async void OnExportClicked(object? sender, EventArgs e)
     {
-        var selected = _selectedAsset;
-        if (selected is null || _isLoading)
+        if (_selectedAsset is null || _isLoading)
+        {
+            return;
+        }
+
+        await ShareAssetAsync(_selectedAsset, MobileExportKind.Converted);
+    }
+
+    private async Task ShareAssetAsync(AssetListItem selected, MobileExportKind kind)
+    {
+        if (_isLoading)
         {
             return;
         }
@@ -372,10 +630,76 @@ public partial class MainPage : ContentPage
         try
         {
             SetLoading(true, "Preparing asset…");
-            var filePath = await Task.Run(() => MobileAssetExporter.Export(selected.Asset));
-
+            var filePath = await Task.Run(() => kind switch
+            {
+                MobileExportKind.Raw => MobileAssetExporter.ExportRaw(selected.Asset),
+                MobileExportKind.Dump => MobileAssetExporter.ExportDump(selected.Asset),
+                _ => MobileAssetExporter.Export(selected.Asset)
+            });
             await Share.Default.RequestAsync(new ShareFileRequest(
                 $"Share {Path.GetFileName(filePath)}",
+                new ShareFile(filePath)));
+        }
+        catch (Exception exception)
+        {
+            await DisplayAlertAsync("Export failed", exception.Message, "OK");
+        }
+        finally
+        {
+            SetLoading(false);
+        }
+    }
+
+    private async Task ShareAssetArchiveAsync(
+        IEnumerable<AssetListItem> source,
+        MobileExportKind kind,
+        string description)
+    {
+        var assets = source.ToList();
+        if (assets.Count == 0)
+        {
+            await DisplayAlertAsync("Nothing to export", "The current selection contains no assets.", "OK");
+            return;
+        }
+        if (_isLoading)
+        {
+            return;
+        }
+
+        try
+        {
+            SetLoading(true, $"Preparing {assets.Count:N0} {description}(s)…");
+            var filePath = await Task.Run(() => MobileAssetExporter.ExportArchive(
+                assets.Select(item => item.Asset).ToList(),
+                kind));
+            await Share.Default.RequestAsync(new ShareFileRequest(
+                $"Share {Path.GetFileName(filePath)}",
+                new ShareFile(filePath)));
+        }
+        catch (Exception exception)
+        {
+            await DisplayAlertAsync("Export failed", exception.Message, "OK");
+        }
+        finally
+        {
+            SetLoading(false);
+        }
+    }
+
+    private async Task ShareTextAsync(string fileName, string content)
+    {
+        if (_isLoading)
+        {
+            return;
+        }
+
+        try
+        {
+            SetLoading(true, "Preparing export…");
+            var filePath = Path.Combine(FileSystem.CacheDirectory, $"{Guid.NewGuid():N}_{fileName}");
+            await File.WriteAllTextAsync(filePath, content, Encoding.UTF8);
+            await Share.Default.RequestAsync(new ShareFileRequest(
+                $"Share {fileName}",
                 new ShareFile(filePath)));
         }
         catch (Exception exception)
@@ -395,8 +719,8 @@ public partial class MainPage : ContentPage
         DocumentsList.IsEnabled = !isLoading;
         ExportButton.IsEnabled = !isLoading && _selectedAsset is not null;
         ExtractButton.IsEnabled = !isLoading && _extractablePaths.Count > 0;
-        PreviewButton.IsEnabled = !isLoading && _selectedAsset is not null;
-        PreviewPanelButton.IsEnabled = !isLoading && (_selectedAsset?.Asset is Mesh or Texture2D);
+        PreviewButton.IsEnabled = _previewEnabled && !isLoading && _selectedAsset is not null;
+        PreviewPanelButton.IsEnabled = _previewEnabled && !isLoading && (_selectedAsset?.Asset is Mesh or Texture2D);
         if (status is not null)
         {
             StatusLabel.Text = status;
@@ -550,6 +874,8 @@ public partial class MainPage : ContentPage
         public string SourceFile { get; }
         public long Size { get; }
         public string Metadata => $"{SourceFile} • ID {PathId} • {Size:N0} bytes";
+        public bool MetadataVisible { get; set; } = true;
+        public bool IsExportable => Asset is Texture2D or TextAsset or AudioClip or VideoClip or MonoBehaviour or Mesh;
 
         private static string GetAssetName(AssetStudio.Object asset, string type, string pathId)
         {

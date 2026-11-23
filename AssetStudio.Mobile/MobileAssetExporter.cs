@@ -24,6 +24,67 @@ internal static class MobileAssetExporter
             _ => (asset.GetRawData(), ".bin")
         };
 
+        return WriteAssetFile(asset, data, extension);
+    }
+
+    public static string ExportRaw(AssetStudio.Object asset) =>
+        WriteAssetFile(asset, asset.GetRawData(), ".bin");
+
+    public static string ExportDump(AssetStudio.Object asset) =>
+        WriteAssetFile(asset, Encoding.UTF8.GetBytes(asset.Dump() ?? string.Empty), ".txt");
+
+    public static string ExportArchive(IEnumerable<AssetStudio.Object> assets, MobileExportKind kind)
+    {
+        var archivePath = Path.Combine(FileSystem.CacheDirectory, $"AssetStudio_{Guid.NewGuid():N}.zip");
+        var temporaryFiles = new List<string>();
+        try
+        {
+            using (var archive = new ZipArchive(File.Create(archivePath), ZipArchiveMode.Create))
+            {
+                var index = 0;
+                foreach (var asset in assets)
+                {
+                    var filePath = kind switch
+                    {
+                        MobileExportKind.Raw => ExportRaw(asset),
+                        MobileExportKind.Dump => ExportDump(asset),
+                        _ => Export(asset)
+                    };
+                    temporaryFiles.Add(filePath);
+                    var entry = archive.CreateEntry(
+                        $"{index++:D5}_{Path.GetFileName(filePath)}",
+                        CompressionLevel.Optimal);
+                    using (var input = File.OpenRead(filePath))
+                    using (var output = entry.Open())
+                    {
+                        input.CopyTo(output);
+                    }
+                    File.Delete(filePath);
+                    temporaryFiles.Remove(filePath);
+                }
+            }
+
+            return archivePath;
+        }
+        catch
+        {
+            foreach (var filePath in temporaryFiles)
+            {
+                if (File.Exists(filePath))
+                {
+                    File.Delete(filePath);
+                }
+            }
+            if (File.Exists(archivePath))
+            {
+                File.Delete(archivePath);
+            }
+            throw;
+        }
+    }
+
+    private static string WriteAssetFile(AssetStudio.Object asset, byte[] data, string extension)
+    {
         var name = asset is NamedObject named && !string.IsNullOrWhiteSpace(named.m_Name)
             ? named.m_Name
             : asset.type.ToString();
@@ -312,4 +373,11 @@ internal static class MobileAssetExporter
         }
         return builder.ToString();
     }
+}
+
+internal enum MobileExportKind
+{
+    Converted,
+    Raw,
+    Dump
 }
