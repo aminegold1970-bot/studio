@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   build-ios:
-    runs-on: macos-26
+    runs-on: macos-15
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -83,3 +83,4 @@ jobs:
           path: artifacts/AssetStudioMobile-unsigned.ipa
           if-no-files-found: error
           retention-days: 30
+
