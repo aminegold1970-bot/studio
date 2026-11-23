@@ -3,11 +3,7 @@ using System.Security.Cryptography;
 
 namespace AssetStudioMobile;
 
-/// <summary>
-/// Persistent copy of user-selected Unity source files. Files are kept in the
-/// app's Documents/AssetStudio/Library directory so they remain available on
-/// later launches and can be inspected through the iOS Files app.
-/// </summary>
+/// <summary>Persistent, content-deduplicated store of original Unity source files.</summary>
 public sealed class AssetDocumentLibrary
 {
     public string LibraryPath { get; } = Path.Combine(
@@ -34,20 +30,63 @@ public sealed class AssetDocumentLibrary
     {
         Directory.CreateDirectory(LibraryPath);
         var safeName = SanitizeFileName(originalName);
-        var destination = Path.Combine(LibraryPath, $"{DateTime.UtcNow:yyyyMMddHHmmss}_{Guid.NewGuid():N}_{safeName}");
-        await using (var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, useAsync: true))
-            await input.CopyToAsync(output, 81920, cancellationToken);
-        return new FileResult(destination);
+        var staging = Path.Combine(LibraryPath, $".incoming_{Guid.NewGuid():N}.tmp");
+        try
+        {
+            await using (var output = new FileStream(staging, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, useAsync: true))
+                await input.CopyToAsync(output, 81920, cancellationToken);
+
+            var incomingHash = await ComputeSha256Async(staging, cancellationToken);
+            foreach (var existing in Directory.EnumerateFiles(LibraryPath).Where(File.Exists))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (Path.GetFileName(existing).StartsWith(".incoming_", StringComparison.Ordinal)) continue;
+                if (new FileInfo(existing).Length != new FileInfo(staging).Length) continue;
+                if (string.Equals(incomingHash, await ComputeSha256Async(existing, cancellationToken), StringComparison.Ordinal))
+                {
+                    File.Delete(staging);
+                    return new FileResult(existing);
+                }
+            }
+
+            var destination = Path.Combine(LibraryPath, $"{DateTime.UtcNow:yyyyMMddHHmmss}_{Guid.NewGuid():N}_{safeName}");
+            File.Move(staging, destination);
+            return new FileResult(destination);
+        }
+        catch
+        {
+            if (File.Exists(staging)) File.Delete(staging);
+            throw;
+        }
     }
 
-    public IReadOnlyList<FileResult> GetSavedFiles()
+    private static async Task<string> ComputeSha256Async(string path, CancellationToken token)
+    {
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true);
+        using var sha = SHA256.Create();
+        var hash = await sha.ComputeHashAsync(stream, token);
+        return Convert.ToHexString(hash);
+    }
+
+    public IReadOnlyList<LibraryFileEntry> GetEntries()
     {
         Directory.CreateDirectory(LibraryPath);
         return Directory.EnumerateFiles(LibraryPath)
-            .Where(File.Exists)
-            .OrderByDescending(File.GetLastWriteTimeUtc)
-            .Select(path => new FileResult(path))
+            .Where(path => File.Exists(path) && !Path.GetFileName(path).StartsWith(".incoming_", StringComparison.Ordinal))
+            .Select(path => new FileInfo(path))
+            .OrderByDescending(info => info.LastWriteTimeUtc)
+            .Select(info => new LibraryFileEntry(new FileResult(info.FullName), Path.GetFileName(info.FullName), info.Length, info.LastWriteTime))
             .ToList();
+    }
+
+    public bool Delete(FileResult file)
+    {
+        if (file == null || string.IsNullOrWhiteSpace(file.FullPath)) return false;
+        var full = Path.GetFullPath(file.FullPath);
+        var root = Path.GetFullPath(LibraryPath) + Path.DirectorySeparatorChar;
+        if (!full.StartsWith(root, StringComparison.Ordinal) || !File.Exists(full)) return false;
+        File.Delete(full);
+        return true;
     }
 
     private static string SanitizeFileName(string name)
@@ -56,4 +95,10 @@ public sealed class AssetDocumentLibrary
         foreach (var invalid in Path.GetInvalidFileNameChars()) leaf = leaf.Replace(invalid, '_');
         return string.IsNullOrWhiteSpace(leaf) ? "UnityAsset.bin" : leaf;
     }
+}
+
+public sealed record LibraryFileEntry(FileResult File, string StoredName, long Size, DateTime Modified)
+{
+    public string DisplaySize => Size < 1024 * 1024 ? $"{Size / 1024d:0.0} KB" : $"{Size / (1024d * 1024d):0.00} MB";
+    public string DisplayDate => Modified.ToString("yyyy-MM-dd HH:mm");
 }

@@ -1,4 +1,4 @@
-AssetStudio Mobile GUI — Stage 36 / v26
+AssetStudio Mobile GUI — Stage 37 / v27
 ======================================
 
 New feature: iOS Files drag-and-drop + persistent source-file library.
@@ -47,7 +47,8 @@ FILES
 -----
 MainPage.xaml                         Updated toolbar and drop hint.
 MainPage.xaml.cs                     Persistent import, reload library, drop dispatch.
-AssetDocumentLibrary.cs              Copies source files into Documents and enumerates them.
+AssetDocumentLibrary.cs              Copies, hashes, deduplicates, lists, and safely deletes source files.
+AssetLibraryPage.cs                   Searchable multi-select library manager with load/delete actions.
 Platforms/iOS/AssetStudioDropBridge.cs Native UIDropInteraction implementation.
 Platforms/iOS/InfoPlist-settings.txt  Info.plist keys to preserve/merge.
 
@@ -67,7 +68,7 @@ SECURITY / STORAGE
 ------------------
 - Files are copied into the app sandbox; the original Files.app item is not modified.
 - The app can read its saved copies on subsequent launches.
-- There is currently no delete/cleanup UI. Users can manage the library through Files.app
+- The library manager now supports confirmed deletion. Users can also manage the library through Files.app
   under On My iPhone -> AssetStudio (if exposed by iOS).
 - Large bundles consume device storage. The app does not yet impose a quota.
 
@@ -80,7 +81,11 @@ VALIDATION PERFORMED
 
 PROGRESS
 --------
-GUI reconstruction estimate: approximately 65% (unchanged; this stage is primarily
-file workflow and native integration, not a major visual GUI completion).
+GUI reconstruction estimate: approximately 70% (rough estimate; library management UI was added).
 File workflow source implementation: added, but host parser hookup and device testing
 remain unverified. Do not treat this as a working rebuilt IPA.
+
+
+STAGE 38 — ORIGINAL REPOSITORY PORT AUDIT
+----------------------------------------
+Added PORT_FILE_AUDIT.md. It compares the original 243-file source tree with the current v27 mobile source. Key finding: none of the original projects are currently compiled/referenced by the mobile source folder; the parser and utility code must be integrated. The report classifies core parser files to reuse, utilities to adapt, and Windows Forms/Windows native projects not to use unchanged.

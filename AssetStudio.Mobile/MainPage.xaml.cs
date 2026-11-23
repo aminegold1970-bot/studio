@@ -116,17 +116,14 @@ public partial class MainPage : ContentPage
 
     private async void OnLibraryClicked(object sender, EventArgs e)
     {
-        var files = _documentLibrary.GetSavedFiles();
-        if (files.Count == 0)
+        var entries = _documentLibrary.GetEntries();
+        if (entries.Count == 0)
         {
             await DisplayAlert("Asset Library", "No saved source files yet. Drop files here or use File → Load file; imported files are kept in Documents/AssetStudio/Library.", "OK");
             return;
         }
-        var names = files.Select(f => Path.GetFileName(f.FullPath)).ToArray();
-        var choice = await DisplayActionSheet($"Saved source files ({files.Count})", "Cancel", null, names);
-        if (string.IsNullOrWhiteSpace(choice) || choice == "Cancel") return;
-        var selected = files.Where(f => Path.GetFileName(f.FullPath) == choice).ToList();
-        if (selected.Count > 0) await LoadPersistentFilesAsync(selected, "Saved library");
+        await Navigation.PushModalAsync(new NavigationPage(new AssetLibraryPage(_documentLibrary,
+            files => LoadPersistentFilesAsync(files, "Saved library"))));
     }
 
     private async Task LoadPersistentFilesAsync(IReadOnlyList<FileResult> selected, string sourceLabel)
