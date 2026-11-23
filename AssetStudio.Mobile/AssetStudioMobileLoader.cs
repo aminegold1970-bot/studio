@@ -8,6 +8,8 @@ public sealed class AssetStudioMobileLoader : IDisposable
     private readonly AssetsManager _manager = new();
     private bool _disposed;
 
+    public string? SpecifyUnityVersion { get; set; }
+
     public async Task LoadFilesAsync(
         IReadOnlyList<FileResult> selected,
         IProgress<MainPage.AssetLoadProgress> progress,
@@ -32,6 +34,7 @@ public sealed class AssetStudioMobileLoader : IDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
             _manager.Clear();
+            _manager.SpecifyUnityVersion = SpecifyUnityVersion ?? string.Empty;
             _manager.LoadFiles(paths);
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -159,7 +162,8 @@ public sealed class AssetStudioMobileLoader : IDisposable
                     ParentId = parentId,
                     DisplayName = string.IsNullOrWhiteSpace(gameObject.m_Name)
                         ? $"GameObject #{gameObject.m_PathID}"
-                        : gameObject.m_Name
+                        : gameObject.m_Name,
+                    SourceAsset = gameObject
                 });
                 if (rowsByObject.TryGetValue(gameObject, out var gameObjectRow))
                     gameObjectRow.HierarchyNodeId = gameObjectId;

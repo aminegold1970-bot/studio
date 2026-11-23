@@ -4,6 +4,10 @@ using System.Linq;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
+#if IOS
+using AVFoundation;
+using Foundation;
+#endif
 
 namespace AssetStudioMobile;
 
@@ -70,6 +74,12 @@ public partial class MainPage : ContentPage
             SetClasses(classes);
         };
         AssetFilesSelected += _assetLoader.LoadFilesAsync;
+        AudioPlayRequested += OnAudioPlaybackRequested;
+        AudioPauseRequested += OnAudioPauseRequested;
+        AudioStopRequested += OnAudioStopRequested;
+        AudioLoopChanged += OnAudioLoopChanged;
+        AudioSeekRequested += OnAudioSeekRequested;
+        AudioVolumeChanged += OnAudioVolumeChanged;
         BindableLayout.SetItemsSource(MetadataHost, _metadataRows);
         BindableLayout.SetItemTemplate(MetadataHost, new DataTemplate(() =>
         {
@@ -128,9 +138,9 @@ public partial class MainPage : ContentPage
         {
             WorkspaceGrid.ColumnDefinitions = new ColumnDefinitionCollection
             {
-                new ColumnDefinition(new GridLength(38, GridUnitType.Star)),
+                new ColumnDefinition(new GridLength(75, GridUnitType.Star)),
                 new ColumnDefinition(new GridLength(1)),
-                new ColumnDefinition(new GridLength(62, GridUnitType.Star))
+                new ColumnDefinition(new GridLength(25, GridUnitType.Star))
             };
             WorkspaceGrid.RowDefinitions = new RowDefinitionCollection { new RowDefinition(GridLength.Star) };
             Grid.SetRow(BrowserPane, 0);
@@ -225,6 +235,8 @@ public partial class MainPage : ContentPage
 
     private async Task LoadPersistentFilesAsync(IReadOnlyList<FileResult> selected, string sourceLabel)
     {
+        _lastLoadedFiles = selected.ToList();
+        _lastLoadSourceLabel = sourceLabel;
         if (AssetFilesSelected == null)
         {
             StatusLabel.Text = "Files are safely saved, but the AssetStudio Unity loader is not connected";
@@ -965,36 +977,166 @@ public partial class MainPage : ContentPage
                 MetadataFrame.IsVisible = _displayAssetInformation && _metadataRows.Count > 0;
                 StatusLabel.Text = $"Asset information: {(_displayAssetInformation ? "Shown" : "Hidden")}";
                 break;
+            case "Specify Unity version":
+                await SpecifyUnityVersionAsync();
+                break;
+            case "Export options":
+                await ChooseDefaultExportKindAsync();
+                break;
             default: ReportUnwired(choice); break;
         }
     }
 
+    private async Task SpecifyUnityVersionAsync()
+    {
+        var version = await DisplayPromptAsync(
+            "Specify Unity version",
+            "Enter a version such as 2021.3.12f1. Leave empty to clear the override.",
+            "Apply",
+            "Cancel",
+            maxLength: 32,
+            keyboard: Keyboard.Default,
+            initialValue: _assetLoader.SpecifyUnityVersion ?? string.Empty);
+        if (version == null)
+            return;
+
+        _assetLoader.SpecifyUnityVersion = version.Trim();
+        if (_lastLoadedFiles.Count == 0)
+        {
+            StatusLabel.Text = string.IsNullOrEmpty(_assetLoader.SpecifyUnityVersion)
+                ? "Unity version override cleared"
+                : $"Unity version override set to {_assetLoader.SpecifyUnityVersion}; it will be used for the next load";
+            return;
+        }
+
+        await LoadPersistentFilesAsync(_lastLoadedFiles, _lastLoadSourceLabel);
+    }
+
+    private async Task ChooseDefaultExportKindAsync()
+    {
+        var choice = await Choose("Default export format", "Converted", "Raw", "Dump");
+        if (choice == null)
+            return;
+
+        _defaultExportKind = choice switch
+        {
+            "Raw" => "Raw",
+            "Dump" => "Dump",
+            _ => "Convert"
+        };
+        StatusLabel.Text = $"Default export format: {choice}";
+    }
+
     private async void OnModelMenuClicked(object sender, EventArgs e)
     {
-        var choice = await Choose("Model", "Export all objects (split)", "Export selected objects (split)",
-            "Export selected objects (split) + selected AnimationClips", "Export selected objects (merge)",
-            "Export selected objects (merge) + selected AnimationClips");
-        if (choice != null) ReportUnwired(choice);
+        var choice = await Choose("Model",
+            "Export all meshes (split OBJ)",
+            "Export all meshes (merged OBJ)",
+            "Export checked scene objects (split OBJ)",
+            "Export checked scene objects (merged OBJ)");
+        if (choice == null)
+            return;
+
+        var exportAll = choice.StartsWith("Export all", StringComparison.Ordinal);
+        var merge = choice.Contains("merged", StringComparison.Ordinal);
+        var meshes = exportAll
+            ? _allAssets.Select(row => row.SourceAsset).OfType<AssetStudio.Mesh>().Distinct().ToList()
+            : GetCheckedSceneObjects()
+                .SelectMany(GetMeshes)
+                .Distinct()
+                .ToList();
+        if (meshes.Count == 0)
+        {
+            StatusLabel.Text = exportAll
+                ? "No meshes are loaded"
+                : "Check scene objects in Scene Hierarchy before exporting their meshes";
+            return;
+        }
+
+        try
+        {
+            SetBusy(true, $"Preparing {meshes.Count} mesh(es)…");
+            var outputPath = await Task.Run(() => merge
+                ? MobileAssetExporter.ExportMergedMeshes(meshes)
+                : MobileAssetExporter.ExportArchive(meshes, MobileExportKind.Converted));
+            await Share.Default.RequestAsync(new ShareFileRequest(
+                merge ? "AssetStudio merged OBJ model" : "AssetStudio split OBJ models",
+                new ShareFile(outputPath)));
+            StatusLabel.Text = $"Exported {meshes.Count} mesh(es) as OBJ; materials and animations are not included";
+        }
+        catch (Exception ex)
+        {
+            StatusLabel.Text = $"Model export failed: {ex.Message}";
+            if (_showErrorMessages)
+                await DisplayAlert("Model export failed", ex.Message, "OK");
+        }
+        finally
+        {
+            SetBusy(false, StatusLabel.Text);
+        }
+    }
+
+    private IEnumerable<AssetStudio.GameObject> GetCheckedSceneObjects()
+    {
+        var checkedObjects = _hierarchyById.Values
+            .Where(node => node.IsChecked)
+            .Select(node => node.SourceAsset)
+            .OfType<AssetStudio.GameObject>()
+            .Distinct()
+            .ToList();
+        if (checkedObjects.Count > 0)
+            return checkedObjects;
+
+        return _selectedAssets
+            .Select(row => row.SourceAsset)
+            .OfType<AssetStudio.GameObject>()
+            .Distinct();
+    }
+
+    private static IEnumerable<AssetStudio.Mesh> GetMeshes(AssetStudio.GameObject gameObject)
+    {
+        foreach (var pointer in gameObject.m_Components)
+        {
+            if (!pointer.TryGet(out var component))
+                continue;
+            switch (component)
+            {
+                case AssetStudio.MeshFilter meshFilter when meshFilter.m_Mesh.TryGet(out var mesh):
+                    yield return mesh;
+                    break;
+                case AssetStudio.SkinnedMeshRenderer renderer when renderer.m_Mesh.TryGet(out var mesh):
+                    yield return mesh;
+                    break;
+            }
+        }
     }
 
     private async void OnExportMenuClicked(object sender, EventArgs e)
     {
         var choice = await Choose("Export", "All assets", "Selected assets", "Filtered assets",
-            "Animator + selected AnimationClips", "Raw", "Dump", "Asset list to XML");
+            "Animator + selected AnimationClips (raw)", "Raw", "Dump", "Asset list to XML");
         if (choice == null) return;
 
-        var exportKind = "Convert";
+        var exportKind = _defaultExportKind;
         var scope = choice;
+        if (choice == "Animator + selected AnimationClips (raw)")
+        {
+            var animatorAndClips = _selectedAssets
+                .Where(row => row.SourceAsset is AssetStudio.Animator or AssetStudio.AnimationClip)
+                .ToList();
+            if (!animatorAndClips.Any(row => row.SourceAsset is AssetStudio.Animator))
+            {
+                StatusLabel.Text = "Select an Animator and any AnimationClips to export them as raw Unity data";
+                return;
+            }
+            await RunAssetExportAsync("Raw", "Selected assets", animatorAndClips);
+            return;
+        }
         if (choice is "Raw" or "Dump" or "Asset list to XML")
         {
             scope = await Choose(choice, "All assets", "Selected assets", "Filtered assets");
             if (scope == null) return;
             exportKind = choice;
-        }
-        if (choice == "Animator + selected AnimationClips")
-        {
-            ReportUnwired(choice);
-            return;
         }
         if (choice == "Asset list to XML")
         {
@@ -1006,12 +1148,6 @@ public partial class MainPage : ContentPage
 
     private async Task RunAssetListXmlExportAsync(string scope)
     {
-        if (ExportAssetListXmlRequested == null || AssetFolderPickerRequested == null)
-        {
-            ReportUnwired("Asset list to XML export");
-            return;
-        }
-
         IReadOnlyList<AssetRow> targets = scope switch
         {
             "All assets" => _allAssets.ToList(),
@@ -1025,9 +1161,6 @@ public partial class MainPage : ContentPage
             return;
         }
 
-        var destination = await AssetFolderPickerRequested.Invoke();
-        if (string.IsNullOrWhiteSpace(destination)) return;
-
         var snapshot = targets.Select(row => new AssetListExportRow(
             row.Name, row.Container, row.Type, row.TypeId, row.PathId, row.SourceFile, row.Size, row.SourceAsset))
             .ToList();
@@ -1038,7 +1171,23 @@ public partial class MainPage : ContentPage
             var progress = new Progress<AssetLoadProgress>(update =>
                 SetLoadingProgress(Math.Clamp(update.Percent, 0, 100),
                     string.IsNullOrWhiteSpace(update.Message) ? "Exporting XML asset list…" : update.Message));
-            var count = await ExportAssetListXmlRequested.Invoke(snapshot, destination, progress, cancellation.Token);
+            int count;
+            if (ExportAssetListXmlRequested != null)
+            {
+                if (AssetFolderPickerRequested == null)
+                    throw new InvalidOperationException("The connected XML exporter requires a destination folder picker.");
+                var destination = await AssetFolderPickerRequested.Invoke();
+                if (string.IsNullOrWhiteSpace(destination)) return;
+                count = await ExportAssetListXmlRequested.Invoke(snapshot, destination, progress, cancellation.Token);
+            }
+            else
+            {
+                var outputPath = await Task.Run(
+                    () => MobileAssetExporter.ExportAssetListXml(snapshot), cancellation.Token);
+                await Share.Default.RequestAsync(new ShareFileRequest(
+                    "AssetStudio asset list", new ShareFile(outputPath)));
+                count = snapshot.Count;
+            }
             StatusLabel.Text = $"Exported XML asset list · {count} item(s) · {scope}";
         }
         catch (OperationCanceledException)
@@ -1056,9 +1205,12 @@ public partial class MainPage : ContentPage
         }
     }
 
-    private async Task RunAssetExportAsync(string exportKind, string scope)
+    private async Task RunAssetExportAsync(
+        string exportKind,
+        string scope,
+        IReadOnlyList<AssetRow>? explicitTargets = null)
     {
-        IReadOnlyList<AssetRow> targets = scope switch
+        IReadOnlyList<AssetRow> targets = explicitTargets ?? scope switch
         {
             "All assets" => _allAssets.ToList(),
             "Selected assets" => _selectedAssets.ToList(),
@@ -1165,7 +1317,38 @@ public partial class MainPage : ContentPage
             _showErrorMessages = !_showErrorMessages;
             StatusLabel.Text = $"Show error message: {(_showErrorMessages ? "On" : "Off")}";
         }
-        else if (choice != null) ReportUnwired(choice);
+        else if (choice == "Export class structures")
+            await ExportClassStructuresAsync();
+        else if (choice != null)
+            ReportUnwired(choice);
+    }
+
+    private async Task ExportClassStructuresAsync()
+    {
+        if (_classes.Count == 0)
+        {
+            StatusLabel.Text = "No class structures are loaded";
+            return;
+        }
+
+        try
+        {
+            SetBusy(true, $"Exporting {_classes.Count} class structures…");
+            var outputPath = await Task.Run(() => MobileAssetExporter.ExportClassStructuresXml(_classes));
+            await Share.Default.RequestAsync(new ShareFileRequest(
+                "AssetStudio class structures", new ShareFile(outputPath)));
+            StatusLabel.Text = $"Exported {_classes.Count} class structures as XML";
+        }
+        catch (Exception ex)
+        {
+            StatusLabel.Text = $"Class export failed: {ex.Message}";
+            if (_showErrorMessages)
+                await DisplayAlert("Class export failed", ex.Message, "OK");
+        }
+        finally
+        {
+            SetBusy(false, StatusLabel.Text);
+        }
     }
 
     private async Task<string?> Choose(string title, params string[] options)
@@ -1178,6 +1361,9 @@ public partial class MainPage : ContentPage
         StatusLabel.Text = $"{action} — requires connection to the host asset service";
 
     private HashSet<string>? _selectedTypes;
+    private IReadOnlyList<FileResult> _lastLoadedFiles = Array.Empty<FileResult>();
+    private string _lastLoadSourceLabel = "Loaded files";
+    private string _defaultExportKind = "Convert";
 
     private async Task ShowMenu(string title, params string[] options)
     {
@@ -1425,8 +1611,7 @@ public partial class MainPage : ContentPage
 
         if (action == "Export selected assets")
         {
-            AssetContextActionRequested?.Invoke("Export selected assets", targets);
-            StatusLabel.Text = $"Export request: {targets.Count} selected asset(s)";
+            await RunAssetExportAsync("Convert", "Selected assets", targets);
             return;
         }
 
@@ -1455,6 +1640,9 @@ public partial class MainPage : ContentPage
 
     private void OnAssetSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+#if IOS
+        StopPreviewAudio();
+#endif
         _selectedAssets.Clear();
         _selectedAssets.AddRange(e.CurrentSelection.OfType<AssetRow>());
         var row = _selectedAssets.LastOrDefault();
@@ -1470,8 +1658,16 @@ public partial class MainPage : ContentPage
         PreviewTitle.Text = row.Name;
         PreviewKind.Text = row.Type;
         PreviewDetails.Text = $"Container: {row.Container}\nType: {row.Type}\nPathID: {row.PathId}\nSize: {row.Size}\n\nDecoded preview data has not been supplied by the host asset service.";
-        DumpText.Text = "Serialized dump is not connected.\n\nSelected asset:\n" +
-                        $"Name: {row.Name}\nContainer: {row.Container}\nType: {row.Type}\nPathID: {row.PathId}\nSize: {row.Size}";
+        try
+        {
+            DumpText.Text = row.SourceAsset is AssetStudio.Object source
+                ? source.Dump() ?? string.Empty
+                : "No parsed asset data is available for this row.";
+        }
+        catch (Exception ex)
+        {
+            DumpText.Text = $"Could not create serialized dump: {ex.Message}";
+        }
         _showingDump = false;
         RefreshPreviewSurfaceVisibility();
         StatusLabel.Text = $"{_selectedAssets.Count} selected · Preview: {row.Name}";
@@ -1502,12 +1698,36 @@ public partial class MainPage : ContentPage
                     ShowTextPreview(row.Name, "MonoBehaviour dump", behaviour.Dump() ?? string.Empty);
                     break;
                 case AssetStudio.AudioClip audio:
+#if IOS
+                    _selectedAudioClip = audio;
+#endif
                     ShowAudioPreview(row.Name, audio.m_CompressionFormat.ToString(),
-                        "Audio is available for export in its stored format. Playback needs a native iOS audio backend.");
+                        $"Length: {audio.m_Length:N2} seconds · {audio.m_Channels} channel(s)\nPlay attempts native iOS playback; unsupported codecs can still be exported.");
+                    break;
+                case AssetStudio.Font font:
+                    ShowFontPreview(row.Name,
+                        font.m_FontData is { Length: > 0 }
+                            ? $"Embedded font data · {font.m_FontData.Length:N0} bytes. Export to open or install the original font."
+                            : "This font has no embedded data to preview or export.");
+                    break;
+                case AssetStudio.Shader shader when shader.m_Script is { Length: > 0 }:
+                    ShowTextPreview(row.Name, "Shader source", Encoding.UTF8.GetString(shader.m_Script));
+                    break;
+                case AssetStudio.Sprite sprite:
+                    PreviewDetails.Text = "Cropped sprite preview; packed tight-mesh transparency and separate alpha textures are not applied.";
+                    var spriteImage = await Task.Run(() => MobileAssetExporter.Export(sprite));
+                    if (_selectedAsset?.Id != row.Id) return;
+                    ShowTexturePreview(row.Name, ImageSource.FromFile(spriteImage),
+                        (int)sprite.m_Rect.width, (int)sprite.m_Rect.height,
+                        "PNG sprite crop", PreviewDetails.Text);
                     break;
                 case AssetStudio.VideoClip:
                     ShowUnsupportedPreview(row.Name, "VideoClip",
                         "Video data can be exported in its stored format.");
+                    break;
+                case AssetStudio.MovieTexture:
+                    ShowUnsupportedPreview(row.Name, "MovieTexture",
+                        "Movie data can be exported in its stored OGV format.");
                     break;
                 default:
                     ShowUnsupportedPreview(row.Name, row.Type,
@@ -1537,6 +1757,104 @@ public partial class MainPage : ContentPage
         }
     }
 
+#if IOS
+    private AssetStudio.AudioClip? _selectedAudioClip;
+    private AVAudioPlayer? _audioPlayer;
+
+    private async void OnAudioPlaybackRequested(object? sender, EventArgs e)
+    {
+        var clip = _selectedAudioClip;
+        if (clip == null)
+            return;
+
+        try
+        {
+            if (_audioPlayer == null)
+            {
+                var path = await Task.Run(() => MobileAssetExporter.Export(clip));
+                if (!ReferenceEquals(_selectedAudioClip, clip))
+                    return;
+
+                _audioPlayer = AVAudioPlayer.FromUrl(NSUrl.FromFilename(path), out var error)
+                    ?? throw new InvalidDataException(error?.LocalizedDescription ?? "The audio format is not supported by iOS.");
+                _audioPlayer.PrepareToPlay();
+                _audioPlayer.NumberOfLoops = _audioLoopEnabled ? -1 : 0;
+                _audioPlayer.Volume = (float)AudioVolumeSlider.Value;
+            }
+
+            _audioPlayer.Play();
+            var player = _audioPlayer;
+            Dispatcher.StartTimer(TimeSpan.FromMilliseconds(250), () =>
+            {
+                if (!ReferenceEquals(_audioPlayer, player))
+                    return false;
+                UpdateAudioPlaybackState(
+                    player.Playing ? "Playing" : "Stopped",
+                    player.CurrentTime,
+                    player.Duration,
+                    clip.m_Frequency);
+                return player.Playing;
+            });
+            UpdateAudioPlaybackState("Playing", player.CurrentTime, player.Duration, clip.m_Frequency);
+        }
+        catch (Exception ex)
+        {
+            StatusLabel.Text = $"Audio playback failed: {ex.Message}";
+            await DisplayAlert("Audio playback failed", ex.Message, "OK");
+        }
+    }
+
+    private void OnAudioPauseRequested(object? sender, EventArgs e)
+    {
+        _audioPlayer?.Pause();
+        if (_audioPlayer != null && _selectedAudioClip != null)
+            UpdateAudioPlaybackState("Paused", _audioPlayer.CurrentTime, _audioPlayer.Duration, _selectedAudioClip.m_Frequency);
+    }
+
+    private void OnAudioStopRequested(object? sender, EventArgs e)
+    {
+        _audioPlayer?.Stop();
+        if (_audioPlayer != null && _selectedAudioClip != null)
+            UpdateAudioPlaybackState("Stopped", 0, _audioPlayer.Duration, _selectedAudioClip.m_Frequency);
+    }
+
+    private void OnAudioLoopChanged(bool enabled)
+    {
+        if (_audioPlayer != null)
+            _audioPlayer.NumberOfLoops = enabled ? -1 : 0;
+    }
+
+    private void OnAudioSeekRequested(double seconds)
+    {
+        if (_audioPlayer != null)
+            _audioPlayer.CurrentTime = Math.Clamp(seconds, 0, _audioPlayer.Duration);
+    }
+
+    private void OnAudioVolumeChanged(double volume)
+    {
+        if (_audioPlayer != null)
+            _audioPlayer.Volume = (float)Math.Clamp(volume, 0, 1);
+    }
+
+    private void StopPreviewAudio()
+    {
+        _audioPlayer?.Stop();
+        _audioPlayer?.Dispose();
+        _audioPlayer = null;
+        _selectedAudioClip = null;
+    }
+#else
+    private async void OnAudioPlaybackRequested(object? sender, EventArgs e) =>
+        await DisplayAlert("Audio playback unavailable",
+            "Audio playback is implemented only for the iOS app. The clip can still be exported.", "OK");
+
+    private static void OnAudioPauseRequested(object? sender, EventArgs e) { }
+    private static void OnAudioStopRequested(object? sender, EventArgs e) { }
+    private static void OnAudioLoopChanged(bool enabled) { }
+    private static void OnAudioSeekRequested(double seconds) { }
+    private static void OnAudioVolumeChanged(double volume) { }
+#endif
+
     private static NavigationPage CreateModalNavigationPage(Page page) =>
         new(page)
         {
@@ -1550,6 +1868,9 @@ public partial class MainPage : ContentPage
 
     private void ClearSelectedAsset()
     {
+#if IOS
+        StopPreviewAudio();
+#endif
         _selectedAsset = null;
         _selectedAssets.Clear();
         _showingEmptyPreview = true;
@@ -1819,6 +2140,7 @@ public partial class MainPage : ContentPage
         public string Id { get; init; } = Guid.NewGuid().ToString("N");
         public string? ParentId { get; init; }
         public string DisplayName { get; init; } = "";
+        public object? SourceAsset { get; init; }
         public int Depth
         {
             get => _depth;

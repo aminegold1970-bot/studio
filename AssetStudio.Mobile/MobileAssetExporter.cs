@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Text;
 using AssetStudio;
 using Newtonsoft.Json;
+using System.Xml.Linq;
 
 namespace AssetStudioMobile;
 
@@ -21,6 +22,10 @@ internal static class MobileAssetExporter
             VideoClip video => ExportVideo(video),
             MonoBehaviour behaviour => ExportMonoBehaviour(behaviour),
             Mesh mesh => (Encoding.UTF8.GetBytes(ExportObj(mesh)), ".obj"),
+            AssetStudio.Font font => ExportFont(font),
+            MovieTexture movie => (movie.m_MovieData, ".ogv"),
+            Sprite sprite => ExportSprite(sprite),
+            Shader shader when IsTextShader(shader.m_Script) => (shader.m_Script, ".shader"),
             _ => (asset.GetRawData(), ".bin")
         };
 
@@ -53,7 +58,7 @@ internal static class MobileAssetExporter
                     temporaryFiles.Add(filePath);
                     var entry = archive.CreateEntry(
                         $"{index++:D5}_{Path.GetFileName(filePath)}",
-                        CompressionLevel.Optimal);
+                        CompressionLevel.Fastest);
                     using (var input = File.OpenRead(filePath))
                     using (var output = entry.Open())
                     {
@@ -62,6 +67,8 @@ internal static class MobileAssetExporter
                     File.Delete(filePath);
                     temporaryFiles.Remove(filePath);
                 }
+                if (index == 0)
+                    throw new InvalidOperationException("There are no assets to add to the export archive.");
             }
 
             return archivePath;
@@ -83,21 +90,169 @@ internal static class MobileAssetExporter
         }
     }
 
+    public static string ExportMergedMeshes(IEnumerable<Mesh> sourceMeshes)
+    {
+        var meshes = sourceMeshes?.ToList() ?? new List<Mesh>();
+        if (meshes.Count == 0)
+            throw new InvalidOperationException("No meshes were selected for model export.");
+
+        var builder = new StringBuilder();
+        builder.AppendLine("# Merged by AssetStudio Mobile");
+        var vertexOffset = 0;
+        var uvOffset = 0;
+        var normalOffset = 0;
+        var groupIndex = 0;
+        foreach (var mesh in meshes)
+        {
+            var vertices = 0;
+            var uvs = 0;
+            var normals = 0;
+            var obj = ExportObj(mesh);
+            builder.Append("g mesh_").Append(groupIndex++).AppendLine();
+            foreach (var rawLine in obj.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var line = rawLine.TrimEnd('\r');
+                if (line.StartsWith("v ", StringComparison.Ordinal))
+                {
+                    builder.AppendLine(line);
+                    vertices++;
+                }
+                else if (line.StartsWith("vt ", StringComparison.Ordinal))
+                {
+                    builder.AppendLine(line);
+                    uvs++;
+                }
+                else if (line.StartsWith("vn ", StringComparison.Ordinal))
+                {
+                    builder.AppendLine(line);
+                    normals++;
+                }
+                else if (line.StartsWith("g ", StringComparison.Ordinal))
+                {
+                    builder.AppendLine(line);
+                }
+                else if (line.StartsWith("f ", StringComparison.Ordinal))
+                {
+                    builder.Append("f");
+                    foreach (var reference in line[2..].Split(' ', StringSplitOptions.RemoveEmptyEntries))
+                    {
+                        var indices = reference.Split('/');
+                        builder.Append(' ').Append(OffsetObjReference(indices[0], vertexOffset));
+                        if (indices.Length > 1)
+                        {
+                            builder.Append('/');
+                            if (indices[1].Length > 0)
+                                builder.Append(OffsetObjReference(indices[1], uvOffset));
+                        }
+                        if (indices.Length > 2)
+                        {
+                            builder.Append('/');
+                            if (indices[2].Length > 0)
+                                builder.Append(OffsetObjReference(indices[2], normalOffset));
+                        }
+                    }
+                    builder.AppendLine();
+                }
+            }
+            vertexOffset = checked(vertexOffset + vertices);
+            uvOffset = checked(uvOffset + uvs);
+            normalOffset = checked(normalOffset + normals);
+        }
+
+        return WriteOutputFile("MergedMeshes", Encoding.UTF8.GetBytes(builder.ToString()), ".obj");
+    }
+
     private static string WriteAssetFile(AssetStudio.Object asset, byte[] data, string extension)
     {
         var name = asset is NamedObject named && !string.IsNullOrWhiteSpace(named.m_Name)
             ? named.m_Name
             : asset.type.ToString();
-        var safeName = string.Concat(name.Select(character =>
-            Path.GetInvalidFileNameChars().Contains(character) ? '_' : character));
-        if (string.IsNullOrWhiteSpace(safeName))
-        {
-            safeName = asset.type.ToString();
-        }
+        return WriteOutputFile($"{name}_{asset.m_PathID}", data, extension);
+    }
 
-        var path = Path.Combine(FileSystem.CacheDirectory, $"{safeName}_{asset.m_PathID}{extension}");
-        File.WriteAllBytes(path, data);
+    private static string WriteOutputFile(string name, byte[] data, string extension)
+    {
+        var safeName = string.Concat(name.Select(character =>
+            char.IsControl(character) || "<>:\"/\\|?*".Contains(character) ? '_' : character));
+        if (string.IsNullOrWhiteSpace(safeName))
+            safeName = "AssetStudioExport";
+        Directory.CreateDirectory(FileSystem.CacheDirectory);
+        var path = Path.Combine(FileSystem.CacheDirectory,
+            $"{safeName}_{Guid.NewGuid():N}{extension}");
+        try
+        {
+            File.WriteAllBytes(path, data);
+            return path;
+        }
+        catch
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+            throw;
+        }
+    }
+
+    public static string ExportAssetListXml(IEnumerable<MainPage.AssetListExportRow> rows)
+    {
+        var document = new XDocument(
+            new XElement("Assets",
+                rows.Select(row =>
+                    new XElement("Asset",
+                        new XElement("Name", row.Name),
+                        new XElement("Container", row.Container),
+                        new XElement("Type", row.Type),
+                        new XElement("TypeID", row.TypeId),
+                        new XElement("PathID", row.PathId),
+                        new XElement("SourceFile", Path.GetFileName(row.SourceFile)),
+                        new XElement("Size", row.Size)))));
+        Directory.CreateDirectory(FileSystem.CacheDirectory);
+        var path = Path.Combine(FileSystem.CacheDirectory, $"AssetStudio_AssetList_{Guid.NewGuid():N}.xml");
+        document.Save(path);
         return path;
+    }
+
+    private static int OffsetObjReference(string value, int offset)
+    {
+        var index = int.Parse(value, NumberStyles.Integer, CultureInfo.InvariantCulture);
+        if (index <= 0)
+            throw new InvalidDataException("A mesh OBJ contains an invalid relative vertex reference.");
+        return checked(index + offset);
+    }
+
+    private static bool IsTextShader(byte[]? script)
+    {
+        if (script is not { Length: > 0 })
+            return false;
+        return script.All(value => value is 9 or 10 or 13 || value >= 32);
+    }
+
+    public static string ExportClassStructuresXml(IEnumerable<MainPage.ClassRow> classes)
+    {
+        var document = new XDocument(
+            new XElement("AssetStudioClassStructures",
+                classes.Select(item =>
+                    new XElement("Class",
+                        new XAttribute("id", item.Id),
+                        new XAttribute("version", item.Version),
+                        new XAttribute("name", item.Name),
+                        new XElement("Summary", item.Summary),
+                        new XElement("Structure", item.StructureText)))));
+        Directory.CreateDirectory(FileSystem.CacheDirectory);
+        var path = Path.Combine(FileSystem.CacheDirectory, $"AssetStudio_Classes_{Guid.NewGuid():N}.xml");
+        document.Save(path);
+        return path;
+    }
+
+    private static (byte[] Data, string Extension) ExportFont(AssetStudio.Font font)
+    {
+        var data = font.m_FontData;
+        if (data is not { Length: > 0 })
+            throw new InvalidDataException("This font does not contain embedded font data.");
+
+        var isOpenType = data.Length >= 4
+            && data[0] == (byte)'O' && data[1] == (byte)'T'
+            && data[2] == (byte)'T' && data[3] == (byte)'O';
+        return (data, isOpenType ? ".otf" : ".ttf");
     }
 
     private static (byte[] Data, string Extension) ExportMonoBehaviour(MonoBehaviour behaviour)
@@ -113,20 +268,21 @@ internal static class MobileAssetExporter
 
     private static (byte[] Data, string Extension) ExportTexture(Texture2D texture)
     {
+        var bgra = DecodeTexture(texture);
+        return (EncodePng(texture.m_Width, texture.m_Height, bgra), ".png");
+    }
+
+    private static byte[] DecodeTexture(Texture2D texture)
+    {
         if (texture.m_Width <= 0 || texture.m_Height <= 0
             || (long)texture.m_Width * texture.m_Height > MaxTexturePixels)
-        {
             throw new InvalidDataException("This texture is too large or has invalid dimensions for decoding on iPhone.");
-        }
-
         try
         {
             var bgra = new byte[checked(texture.m_Width * texture.m_Height * 4)];
             if (!new Texture2DConverter(texture).DecodeTexture2D(bgra))
-            {
                 throw new NotSupportedException($"Texture format {texture.m_TextureFormat} could not be decoded.");
-            }
-            return (EncodePng(texture.m_Width, texture.m_Height, bgra), ".png");
+            return bgra;
         }
         catch (DllNotFoundException exception)
         {
@@ -149,6 +305,76 @@ internal static class MobileAssetExporter
                 $"Texture format {texture.m_TextureFormat} requires a native decoder that is not available on iOS.",
                 exception.InnerException);
         }
+    }
+
+    private static (byte[] Data, string Extension) ExportSprite(Sprite sprite)
+    {
+        Texture2D texture;
+        Rectf textureRect;
+        SpriteSettings settings;
+        float downscaleMultiplier;
+        if (sprite.m_SpriteAtlas.TryGet(out var atlas)
+            && atlas.m_RenderDataMap.TryGetValue(sprite.m_RenderDataKey, out var atlasData)
+            && atlasData.texture.TryGet(out texture))
+        {
+            textureRect = atlasData.textureRect;
+            settings = atlasData.settingsRaw;
+            downscaleMultiplier = atlasData.downscaleMultiplier;
+        }
+        else if (sprite.m_RD.texture.TryGet(out texture))
+        {
+            textureRect = sprite.m_RD.textureRect;
+            settings = sprite.m_RD.settingsRaw;
+            downscaleMultiplier = sprite.m_RD.downscaleMultiplier;
+        }
+        else
+        {
+            throw new NotSupportedException("The sprite's source texture or atlas could not be resolved.");
+        }
+
+        var source = DecodeTexture(texture);
+        var scale = downscaleMultiplier > 0 && float.IsFinite(downscaleMultiplier)
+            ? 1f / downscaleMultiplier
+            : 1f;
+        var rectLeft = textureRect.x * scale;
+        var rectTop = textureRect.y * scale;
+        var rectRight = (textureRect.x + textureRect.width) * scale;
+        var rectBottom = (textureRect.y + textureRect.height) * scale;
+        if (!float.IsFinite(rectLeft) || !float.IsFinite(rectTop)
+            || !float.IsFinite(rectRight) || !float.IsFinite(rectBottom))
+            throw new InvalidDataException("The sprite has invalid texture rectangle values.");
+        var left = (int)Math.Clamp(MathF.Floor(rectLeft), 0, texture.m_Width);
+        var top = (int)Math.Clamp(MathF.Floor(rectTop), 0, texture.m_Height);
+        var right = (int)Math.Clamp(MathF.Ceiling(rectRight), 0, texture.m_Width);
+        var bottom = (int)Math.Clamp(MathF.Ceiling(rectBottom), 0, texture.m_Height);
+        var cropWidth = right - left;
+        var cropHeight = bottom - top;
+        if (cropWidth <= 0 || cropHeight <= 0)
+            throw new InvalidDataException("The sprite has an empty or out-of-range texture rectangle.");
+
+        var rotation = settings.packed == 1 ? settings.packingRotation : SpritePackingRotation.None;
+        var outputWidth = rotation == SpritePackingRotation.Rotate90 ? cropHeight : cropWidth;
+        var outputHeight = rotation == SpritePackingRotation.Rotate90 ? cropWidth : cropHeight;
+        var output = new byte[checked(outputWidth * outputHeight * 4)];
+        for (var y = 0; y < outputHeight; y++)
+        {
+            for (var x = 0; x < outputWidth; x++)
+            {
+                var (sourceX, sourceY) = rotation switch
+                {
+                    SpritePackingRotation.FlipHorizontal => (cropWidth - x - 1, y),
+                    SpritePackingRotation.FlipVertical => (x, cropHeight - y - 1),
+                    SpritePackingRotation.Rotate180 => (cropWidth - x - 1, cropHeight - y - 1),
+                    SpritePackingRotation.Rotate90 => (cropWidth - y - 1, x),
+                    _ => (x, y)
+                };
+                var sourceOffset = checked(((top + sourceY) * texture.m_Width + left + sourceX) * 4);
+                var outputOffset = checked((y * outputWidth + x) * 4);
+                Buffer.BlockCopy(source, sourceOffset, output, outputOffset, 4);
+            }
+        }
+
+        return (EncodePng(outputWidth, outputHeight, output), ".png");
     }
 
     private static byte[] EncodePng(int width, int height, byte[] bgra)
