@@ -1,0 +1,20 @@
+--- a/AssetStudio.Mobile/MainPage.xaml
++++ b/AssetStudio.Mobile/MainPage.xaml
+@@ -13,7 +13,7 @@
+             </HorizontalStackLayout>
+         </ScrollView>
+ 
+-        <Grid Grid.Row="1" ColumnDefinitions="38*,62*" ColumnSpacing="1" BackgroundColor="#3B414B"><Grid Grid.Column="0" RowDefinitions="Auto,Auto,*" RowSpacing="0" BackgroundColor="#1D2025"><Grid Grid.Row="0" ColumnDefinitions="*,*,*" Padding="6,5" ColumnSpacing="4" BackgroundColor="#1D2025">
++        <Grid x:Name="WorkspaceGrid" Grid.Row="1" ColumnDefinitions="38*,1,62*" ColumnSpacing="0" BackgroundColor="#3B414B" SizeChanged="OnWorkspaceSizeChanged"><Grid x:Name="BrowserPane" Grid.Column="0" RowDefinitions="Auto,Auto,*" RowSpacing="0" BackgroundColor="#1D2025"><Grid Grid.Row="0" ColumnDefinitions="*,*,*" Padding="6,5" ColumnSpacing="4" BackgroundColor="#1D2025">
+             <Button x:Name="HierarchyTab" Grid.Column="0" Text="Scene Hierarchy" Clicked="OnBrowserTabClicked" Style="{StaticResource TabButton}"/>
+             <Button x:Name="AssetListTab" Grid.Column="1" Text="Asset List" Clicked="OnBrowserTabClicked" Style="{StaticResource TabButton}"/>
+             <Button x:Name="ClassesTab" Grid.Column="2" Text="Asset Classes" Clicked="OnBrowserTabClicked" Style="{StaticResource TabButton}"/>
+@@ -84,7 +84,7 @@
+                     </CollectionView.ItemTemplate>
+                 </CollectionView>
+             </Grid>
+-            </Grid><Grid Grid.Column="1" RowDefinitions="*" RowSpacing="0" BackgroundColor="#1D2025"><Grid RowDefinitions="Auto,*" BackgroundColor="#1D2025" Grid.Row="0">
++            </Grid><BoxView x:Name="WorkspaceDivider" Grid.Column="1" WidthRequest="1" BackgroundColor="#3B414B"/><Grid x:Name="PreviewPane" Grid.Column="2" RowDefinitions="*" RowSpacing="0" BackgroundColor="#1D2025"><Grid RowDefinitions="Auto,*" BackgroundColor="#1D2025" Grid.Row="0">
+                 <Grid ColumnDefinitions="*,*" Padding="6" ColumnSpacing="5">
+                     <Button x:Name="PreviewTab" Text="Preview" Clicked="OnPreviewTabClicked" Style="{StaticResource TabButton}"/>
+                     <Button x:Name="DumpTab" Grid.Column="1" Text="Dump" Clicked="OnDumpTabClicked" Style="{StaticResource TabButton}"/>
