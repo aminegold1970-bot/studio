@@ -24,12 +24,12 @@ public partial class MainPage : ContentPage
 
         try
         {
-            var files = await FilePicker.Default.PickMultipleAsync(new PickOptions
+            var file = await FilePicker.Default.PickAsync(new PickOptions
             {
-                PickerTitle = "Select Unity asset files or an AssetBundle"
+                PickerTitle = "Select a Unity asset file or an AssetBundle"
             });
 
-            if (files is null || !files.Any())
+            if (file is null)
             {
                 return;
             }
@@ -39,21 +39,19 @@ public partial class MainPage : ContentPage
             Directory.CreateDirectory(importDirectory);
 
             var paths = new List<string>();
-            var fileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var file in files)
+            var fileName = Path.GetFileName(file.FileName);
+            if (string.IsNullOrWhiteSpace(fileName))
             {
-                var fileName = Path.GetFileName(file.FileName);
-                if (!fileNames.Add(fileName))
-                {
-                    throw new InvalidOperationException($"More than one selected file is named '{fileName}'. Select files with unique names.");
-                }
-
-                var destination = Path.Combine(importDirectory, fileName);
-                await using var source = await file.OpenReadAsync();
-                await using var target = File.Create(destination);
-                await source.CopyToAsync(target);
-                paths.Add(destination);
+                throw new InvalidOperationException("The selected file has no name.");
             }
+
+            var destination = Path.Combine(importDirectory, fileName);
+            await using (var source = await file.OpenReadAsync())
+            await using (var target = File.Create(destination))
+            {
+                await source.CopyToAsync(target);
+            }
+            paths.Add(destination);
 
             SetLoading(true, "Loading assets…");
             var manager = new AssetsManager();
