@@ -1114,28 +1114,46 @@ public partial class MainPage : ContentPage
             return;
         }
 
+        using var cancellation = new CancellationTokenSource();
+        _loadCancellation = cancellation;
+        CancelLoadButton.Text = "Cancel export";
         try
         {
             SetBusy(true, $"Preparing {meshes.Count} mesh(es)…");
+            var progress = new Progress<AssetLoadProgress>(update =>
+                SetLoadingProgress(Math.Clamp(update.Percent, 0, 100),
+                    string.IsNullOrWhiteSpace(update.Message) ? $"Exporting {meshes.Count} mesh(es)…" : update.Message));
             string outputPath;
             var rawFallbackCount = 0;
             if (merge)
             {
-                outputPath = await Task.Run(() => MobileAssetExporter.ExportMergedMeshes(meshes));
+                outputPath = await Task.Run(
+                    () => MobileAssetExporter.ExportMergedMeshes(meshes, cancellation.Token),
+                    cancellation.Token);
             }
             else
             {
                 var result = await Task.Run(() =>
-                    MobileAssetExporter.ExportArchive(meshes, MobileExportKind.Converted));
+                    MobileAssetExporter.ExportArchive(
+                        meshes,
+                        MobileExportKind.Converted,
+                        progress,
+                        cancellation.Token),
+                    cancellation.Token);
                 outputPath = result.ArchivePath;
                 rawFallbackCount = result.RawFallbackCount;
             }
+            cancellation.Token.ThrowIfCancellationRequested();
             await Share.Default.RequestAsync(new ShareFileRequest(
                 merge ? "AssetStudio merged OBJ model" : "AssetStudio split OBJ models",
                 new ShareFile(outputPath)));
             StatusLabel.Text = rawFallbackCount == 0
                 ? $"Exported {meshes.Count} mesh(es) as OBJ; materials and animations are not included"
                 : $"Exported {meshes.Count} mesh(es); {rawFallbackCount} used raw fallback (see ZIP report)";
+        }
+        catch (OperationCanceledException)
+        {
+            StatusLabel.Text = "Model export cancelled";
         }
         catch (Exception ex)
         {
@@ -1145,6 +1163,8 @@ public partial class MainPage : ContentPage
         }
         finally
         {
+            _loadCancellation = null;
+            CancelLoadButton.Text = "Cancel load";
             SetBusy(false, StatusLabel.Text);
         }
     }
@@ -1319,12 +1339,12 @@ public partial class MainPage : ContentPage
             }
             else
             {
-                var sourceAssets = targets
-                    .Select(row => row.SourceAsset)
-                    .OfType<AssetStudio.Object>()
+                var exportItems = targets.Select(row =>
+                    row.SourceAsset is AssetStudio.Object sourceAsset
+                        ? new MobileExportItem(sourceAsset, row.Container)
+                        : throw new InvalidOperationException(
+                            "One or more selected rows are not backed by parsed Unity assets."))
                     .ToArray();
-                if (sourceAssets.Length != targets.Count)
-                    throw new InvalidOperationException("One or more selected rows are not backed by parsed Unity assets.");
 
                 var kind = exportKind switch
                 {
@@ -1333,10 +1353,15 @@ public partial class MainPage : ContentPage
                     _ => MobileExportKind.Converted
                 };
                 string outputPath;
-                if (sourceAssets.Length == 1)
+                if (exportItems.Length == 1)
                 {
+                    var item = exportItems[0];
                     var result = await Task.Run(
-                        () => MobileAssetExporter.ExportForShare(sourceAssets[0], kind),
+                        () => MobileAssetExporter.ExportForShare(
+                            item.Asset,
+                            kind,
+                            item.Container,
+                            cancellation.Token),
                         cancellation.Token);
                     outputPath = result.FilePath;
                     rawFallbackCount = result.UsedRawFallback ? 1 : 0;
@@ -1345,15 +1370,16 @@ public partial class MainPage : ContentPage
                 else
                 {
                     var result = await Task.Run(
-                        () => MobileAssetExporter.ExportArchive(sourceAssets, kind, progress, cancellation.Token),
+                        () => MobileAssetExporter.ExportArchive(exportItems, kind, progress, cancellation.Token),
                         cancellation.Token);
                     outputPath = result.ArchivePath;
                     rawFallbackCount = result.RawFallbackCount;
                 }
 
+                cancellation.Token.ThrowIfCancellationRequested();
                 await Share.Default.RequestAsync(new ShareFileRequest(
                     $"AssetStudio {exportKind} export", new ShareFile(outputPath)));
-                count = sourceAssets.Length;
+                count = exportItems.Length;
             }
             StatusLabel.Text = rawFallbackCount == 0
                 ? $"Exported {count} item(s) · {exportKind} · {scope}"

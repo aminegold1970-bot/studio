@@ -19,12 +19,16 @@ internal static class MobileAssetExporter
         return WriteAssetFile(asset, data, extension);
     }
 
-    public static MobileSingleExportResult ExportForShare(AssetStudio.Object asset, MobileExportKind kind)
+    public static MobileSingleExportResult ExportForShare(
+        AssetStudio.Object asset,
+        MobileExportKind kind,
+        string? container = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(asset);
-        var payload = CreateExportPayload(asset, kind);
+        var payload = CreateExportPayload(asset, kind, container, cancellationToken);
         return new MobileSingleExportResult(
-            WriteAssetFile(asset, payload.Data, payload.Extension),
+            WriteAssetFile(asset, payload.Data, payload.Extension, cancellationToken),
             payload.UsedRawFallback,
             payload.Warning);
     }
@@ -42,25 +46,39 @@ internal static class MobileAssetExporter
         IEnumerable<AssetStudio.Object> assets,
         MobileExportKind kind,
         IProgress<MainPage.AssetLoadProgress>? progress = null,
+        CancellationToken cancellationToken = default) =>
+        ExportArchive(
+            assets?.Select(asset => new MobileExportItem(asset, null))
+                ?? throw new ArgumentNullException(nameof(assets)),
+            kind,
+            progress,
+            cancellationToken);
+
+    public static MobileArchiveExportResult ExportArchive(
+        IEnumerable<MobileExportItem> assets,
+        MobileExportKind kind,
+        IProgress<MainPage.AssetLoadProgress>? progress = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(assets);
-        var sourceAssets = assets.ToList();
-        if (sourceAssets.Count == 0)
+        var sourceItems = assets.ToList();
+        if (sourceItems.Count == 0)
             throw new InvalidOperationException("There are no assets to add to the export archive.");
 
         var archivePath = Path.Combine(FileSystem.CacheDirectory, $"AssetStudio_{Guid.NewGuid():N}.zip");
         try
         {
-            var report = new List<MobileArchiveReportEntry>(sourceAssets.Count);
+            var report = new List<MobileArchiveReportEntry>(sourceItems.Count);
             using (var archive = new ZipArchive(File.Create(archivePath), ZipArchiveMode.Create))
             {
-                for (var index = 0; index < sourceAssets.Count; index++)
+                for (var index = 0; index < sourceItems.Count; index++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    var asset = sourceAssets[index]
+                    var item = sourceItems[index]
                         ?? throw new InvalidDataException($"Asset {index + 1} is null.");
-                    var payload = CreateExportPayload(asset, kind);
+                    var asset = item.Asset
+                        ?? throw new InvalidDataException($"Asset {index + 1} has no parsed object.");
+                    var payload = CreateExportPayload(asset, kind, item.Container, cancellationToken);
                     var entryName = $"{index + 1:D5}_{GetArchiveAssetName(asset)}{payload.Extension}";
                     var entry = archive.CreateEntry(entryName, CompressionLevel.Fastest);
                     using (var output = entry.Open())
@@ -82,8 +100,8 @@ internal static class MobileAssetExporter
                         payload.UsedRawFallback,
                         payload.Warning));
                     progress?.Report(new MainPage.AssetLoadProgress(
-                        (index + 1) * 100 / sourceAssets.Count,
-                        $"Exported {index + 1} of {sourceAssets.Count} assets"));
+                        (index + 1) * 100 / sourceItems.Count,
+                        $"Exported {index + 1} of {sourceItems.Count} assets"));
                 }
 
                 cancellationToken.ThrowIfCancellationRequested();
@@ -95,7 +113,7 @@ internal static class MobileAssetExporter
 
             return new MobileArchiveExportResult(
                 archivePath,
-                sourceAssets.Count,
+                sourceItems.Count,
                 report.Count(entry => entry.RawFallback));
         }
         catch
@@ -106,7 +124,9 @@ internal static class MobileAssetExporter
         }
     }
 
-    public static string ExportMergedMeshes(IEnumerable<Mesh> sourceMeshes)
+    public static string ExportMergedMeshes(
+        IEnumerable<Mesh> sourceMeshes,
+        CancellationToken cancellationToken = default)
     {
         var meshes = sourceMeshes?.ToList() ?? new List<Mesh>();
         if (meshes.Count == 0)
@@ -120,13 +140,15 @@ internal static class MobileAssetExporter
         var groupIndex = 0;
         foreach (var mesh in meshes)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var vertices = 0;
             var uvs = 0;
             var normals = 0;
-            var obj = ExportObj(mesh);
+            var obj = ExportObj(mesh, cancellationToken);
             builder.Append("g mesh_").Append(groupIndex++).AppendLine();
             foreach (var rawLine in obj.Split('\n', StringSplitOptions.RemoveEmptyEntries))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var line = rawLine.TrimEnd('\r');
                 if (line.StartsWith("v ", StringComparison.Ordinal))
                 {
@@ -175,15 +197,28 @@ internal static class MobileAssetExporter
             normalOffset = checked(normalOffset + normals);
         }
 
-        return WriteOutputFile("MergedMeshes", Encoding.UTF8.GetBytes(builder.ToString()), ".obj");
+        cancellationToken.ThrowIfCancellationRequested();
+        return WriteOutputFile(
+            "MergedMeshes",
+            Encoding.UTF8.GetBytes(builder.ToString()),
+            ".obj",
+            cancellationToken);
     }
 
-    private static string WriteAssetFile(AssetStudio.Object asset, byte[] data, string extension)
+    private static string WriteAssetFile(
+        AssetStudio.Object asset,
+        byte[] data,
+        string extension,
+        CancellationToken cancellationToken = default)
     {
-        return WriteOutputFile($"{GetAssetName(asset)}_{asset.m_PathID}", data, extension);
+        return WriteOutputFile($"{GetAssetName(asset)}_{asset.m_PathID}", data, extension, cancellationToken);
     }
 
-    private static string WriteOutputFile(string name, byte[] data, string extension)
+    private static string WriteOutputFile(
+        string name,
+        byte[] data,
+        string extension,
+        CancellationToken cancellationToken = default)
     {
         var safeName = SanitizeFileName(name);
         Directory.CreateDirectory(FileSystem.CacheDirectory);
@@ -191,7 +226,14 @@ internal static class MobileAssetExporter
             $"{safeName}_{Guid.NewGuid():N}{extension}");
         try
         {
-            File.WriteAllBytes(path, data);
+            using var output = File.Create(path);
+            const int chunkSize = 1024 * 1024;
+            for (var offset = 0; offset < data.Length; offset += chunkSize)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var length = Math.Min(chunkSize, data.Length - offset);
+                output.Write(data, offset, length);
+            }
             return path;
         }
         catch
@@ -213,26 +255,36 @@ internal static class MobileAssetExporter
     private static string SanitizeFileName(string name)
     {
         var safeName = string.Concat(name.Select(character =>
-            char.IsControl(character) || "<>:\"/\\|?*".Contains(character) ? '_' : character));
+            char.IsControl(character) || "<>:\"/\\|?*".Contains(character) ? '_' : character))
+            .TrimEnd('.', ' ');
+        if (safeName.Length > 120)
+            safeName = safeName[..120].TrimEnd('.', ' ');
         return string.IsNullOrWhiteSpace(safeName) ? "AssetStudioExport" : safeName;
     }
 
-    private static ExportPayload CreateExportPayload(AssetStudio.Object asset, MobileExportKind kind)
+    private static ExportPayload CreateExportPayload(
+        AssetStudio.Object asset,
+        MobileExportKind kind,
+        string? container,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         try
         {
             var (data, extension) = kind switch
             {
                 MobileExportKind.Raw => (asset.GetRawData(), ".dat"),
                 MobileExportKind.Dump => GetDumpData(asset),
-                _ => ExportConverted(asset)
+                _ => ExportConverted(asset, container, cancellationToken)
             };
+            cancellationToken.ThrowIfCancellationRequested();
             return new ExportPayload(data, extension, false, null);
         }
         catch (Exception exception) when (
             kind != MobileExportKind.Raw
             && exception is (NotSupportedException or InvalidDataException))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var requestedFormat = kind == MobileExportKind.Dump ? "Dump" : "Converted";
             return new ExportPayload(
                 asset.GetRawData(),
@@ -250,21 +302,35 @@ internal static class MobileAssetExporter
         return (Encoding.UTF8.GetBytes(dump), ".txt");
     }
 
-    private static (byte[] Data, string Extension) ExportConverted(AssetStudio.Object asset) =>
+    private static (byte[] Data, string Extension) ExportConverted(
+        AssetStudio.Object asset,
+        string? container = null,
+        CancellationToken cancellationToken = default) =>
         asset switch
         {
-            Texture2D texture => ExportTexture(texture),
-            TextAsset text => (text.m_Script, ".txt"),
-            AudioClip audio => ExportAudio(audio),
-            VideoClip video => ExportVideo(video),
-            MonoBehaviour behaviour => ExportMonoBehaviour(behaviour),
-            Mesh mesh => (Encoding.UTF8.GetBytes(ExportObj(mesh)), ".obj"),
+            Texture2D texture => ExportTexture(texture, cancellationToken),
+            TextAsset text => ExportTextAsset(text, container),
+            AudioClip audio => ExportAudio(audio, cancellationToken),
+            VideoClip video => ExportVideo(video, cancellationToken),
+            MonoBehaviour behaviour => ExportMonoBehaviour(behaviour, cancellationToken),
+            Mesh mesh => (Encoding.UTF8.GetBytes(ExportObj(mesh, cancellationToken)), ".obj"),
             AssetStudio.Font font => ExportFont(font),
             MovieTexture movie => ExportMovieTexture(movie),
-            Sprite sprite => ExportSprite(sprite),
+            Sprite sprite => ExportSprite(sprite, cancellationToken),
             Shader shader => (Encoding.UTF8.GetBytes(shader.Convert()), ".shader"),
             _ => throw new NotSupportedException($"No converted exporter is available for {asset.type}.")
         };
+
+    private static (byte[] Data, string Extension) ExportTextAsset(TextAsset text, string? container)
+    {
+        var extension = Path.GetExtension(container ?? string.Empty);
+        if (extension.Length <= 1 || extension.Length > 16
+            || extension.Skip(1).Any(character => !char.IsAsciiLetterOrDigit(character)))
+        {
+            extension = ".txt";
+        }
+        return (text.m_Script, extension);
+    }
 
     public static string ExportAssetListXml(IEnumerable<MainPage.AssetListExportRow> rows)
     {
@@ -322,25 +388,33 @@ internal static class MobileAssetExporter
         return (data, isOpenType ? ".otf" : ".ttf");
     }
 
-    private static (byte[] Data, string Extension) ExportMonoBehaviour(MonoBehaviour behaviour)
+    private static (byte[] Data, string Extension) ExportMonoBehaviour(
+        MonoBehaviour behaviour,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var typeData = behaviour.ToType();
         if (typeData is null)
         {
             throw new NotSupportedException("This MonoBehaviour has no serialized type tree. Export its raw data or load the game's managed assemblies on desktop.");
         }
 
-        return (Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(typeData, Formatting.Indented)), ".json");
+        var data = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(typeData, Formatting.Indented));
+        cancellationToken.ThrowIfCancellationRequested();
+        return (data, ".json");
     }
 
-    private static (byte[] Data, string Extension) ExportTexture(Texture2D texture)
+    private static (byte[] Data, string Extension) ExportTexture(
+        Texture2D texture,
+        CancellationToken cancellationToken)
     {
-        var bgra = DecodeTexture(texture);
-        return (EncodePng(texture.m_Width, texture.m_Height, bgra), ".png");
+        var bgra = DecodeTexture(texture, cancellationToken);
+        return (EncodePng(texture.m_Width, texture.m_Height, bgra, cancellationToken), ".png");
     }
 
-    private static byte[] DecodeTexture(Texture2D texture)
+    private static byte[] DecodeTexture(Texture2D texture, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (texture.m_Width <= 0 || texture.m_Height <= 0
             || (long)texture.m_Width * texture.m_Height > MaxTexturePixels)
             throw new InvalidDataException("This texture is too large or has invalid dimensions for decoding on iPhone.");
@@ -349,6 +423,7 @@ internal static class MobileAssetExporter
             var bgra = new byte[checked(texture.m_Width * texture.m_Height * 4)];
             if (!new Texture2DConverter(texture).DecodeTexture2D(bgra))
                 throw new NotSupportedException($"Texture format {texture.m_TextureFormat} could not be decoded.");
+            cancellationToken.ThrowIfCancellationRequested();
             return bgra;
         }
         catch (DllNotFoundException exception)
@@ -374,8 +449,11 @@ internal static class MobileAssetExporter
         }
     }
 
-    private static (byte[] Data, string Extension) ExportSprite(Sprite sprite)
+    private static (byte[] Data, string Extension) ExportSprite(
+        Sprite sprite,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         Texture2D texture;
         Texture2D? alphaTexture = null;
         Rectf textureRect;
@@ -405,8 +483,8 @@ internal static class MobileAssetExporter
             throw new NotSupportedException("The sprite's source texture or atlas could not be resolved.");
         }
 
-        var source = DecodeTexture(texture);
-        var alphaSource = alphaTexture == null ? null : DecodeTexture(alphaTexture);
+        var source = DecodeTexture(texture, cancellationToken);
+        var alphaSource = alphaTexture == null ? null : DecodeTexture(alphaTexture, cancellationToken);
         var scale = downscaleMultiplier > 0 && float.IsFinite(downscaleMultiplier)
             ? 1f / downscaleMultiplier
             : 1f;
@@ -434,6 +512,7 @@ internal static class MobileAssetExporter
         var output = new byte[checked(outputWidth * outputHeight * 4)];
         for (var y = 0; y < outputHeight; y++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             for (var x = 0; x < outputWidth; x++)
             {
                 var (sourceX, sourceY) = rotation switch
@@ -468,10 +547,10 @@ internal static class MobileAssetExporter
         if (settings.packingMode == SpritePackingMode.Tight)
         {
             ApplySpriteMeshMask(sprite, textureRectOffset, rotation, cropWidth, cropHeight,
-                output, outputWidth, outputHeight);
+                output, outputWidth, outputHeight, cancellationToken);
         }
 
-        return (EncodePng(outputWidth, outputHeight, output), ".png");
+        return (EncodePng(outputWidth, outputHeight, output, cancellationToken), ".png");
     }
 
     private static void ApplySpriteMeshMask(
@@ -482,16 +561,18 @@ internal static class MobileAssetExporter
         int cropHeight,
         byte[] pixels,
         int width,
-        int height)
+        int height,
+        CancellationToken cancellationToken)
     {
         var renderData = sprite.m_RD;
-        var triangles = ReadSpriteTriangles(renderData);
+        var triangles = ReadSpriteTriangles(renderData, cancellationToken);
         if (triangles.Count == 0)
             throw new NotSupportedException("The tight-packed sprite has no readable triangles.");
 
         var covered = new bool[checked(width * height)];
         foreach (var triangle in triangles)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var p1 = TransformSpritePoint(sprite, textureRectOffset, rotation, cropWidth, cropHeight, triangle.A);
             var p2 = TransformSpritePoint(sprite, textureRectOffset, rotation, cropWidth, cropHeight, triangle.B);
             var p3 = TransformSpritePoint(sprite, textureRectOffset, rotation, cropWidth, cropHeight, triangle.C);
@@ -515,6 +596,7 @@ internal static class MobileAssetExporter
             var maxY = ClampPixel(rawMaxY, height - 1);
             for (var y = minY; y <= maxY; y++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 for (var x = minX; x <= maxX; x++)
                 {
                     var pointX = x + 0.5;
@@ -533,18 +615,23 @@ internal static class MobileAssetExporter
 
         for (var index = 0; index < covered.Length; index++)
         {
+            if ((index & 4095) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
             if (!covered[index])
                 pixels[index * 4 + 3] = 0;
         }
     }
 
-    private static List<(Vector3 A, Vector3 B, Vector3 C)> ReadSpriteTriangles(SpriteRenderData renderData)
+    private static List<(Vector3 A, Vector3 B, Vector3 C)> ReadSpriteTriangles(
+        SpriteRenderData renderData,
+        CancellationToken cancellationToken)
     {
         var triangles = new List<(Vector3 A, Vector3 B, Vector3 C)>();
         if (renderData.vertices is { Length: > 0 } && renderData.indices is { Length: > 0 })
         {
             for (var index = 0; index + 2 < renderData.indices.Length; index += 3)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (renderData.indices[index] >= renderData.vertices.Length
                     || renderData.indices[index + 1] >= renderData.vertices.Length
                     || renderData.indices[index + 2] >= renderData.vertices.Length)
@@ -586,6 +673,7 @@ internal static class MobileAssetExporter
 
             for (var index = 0; index < indexCount; index += 3)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var a = ReadSpriteVertex(renderData, stream, channel, subMesh,
                     ReadUInt16(renderData.m_IndexBuffer, firstIndexByte + index * 2));
                 var b = ReadSpriteVertex(renderData, stream, channel, subMesh,
@@ -650,7 +738,11 @@ internal static class MobileAssetExporter
     private static double Edge((double X, double Y) a, (double X, double Y) b, double x, double y) =>
         (x - a.X) * (b.Y - a.Y) - (y - a.Y) * (b.X - a.X);
 
-    private static byte[] EncodePng(int width, int height, byte[] bgra)
+    private static byte[] EncodePng(
+        int width,
+        int height,
+        byte[] bgra,
+        CancellationToken cancellationToken = default)
     {
         using var imageData = new MemoryStream();
         using (var zlib = new ZLibStream(imageData, CompressionLevel.Optimal, leaveOpen: true))
@@ -658,6 +750,7 @@ internal static class MobileAssetExporter
             var row = new byte[checked(width * 4 + 1)];
             for (var y = 0; y < height; y++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 row[0] = 0;
                 var sourceOffset = checked((height - y - 1) * width * 4);
                 for (var x = 0; x < width; x++)
@@ -720,12 +813,28 @@ internal static class MobileAssetExporter
         return crc;
     }
 
-    private static (byte[] Data, string Extension) ExportAudio(AudioClip audio)
+    private static (byte[] Data, string Extension) ExportAudio(
+        AudioClip audio,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var data = audio.m_AudioData.GetData();
+        cancellationToken.ThrowIfCancellationRequested();
         if (data is not { Length: > 0 })
         {
             throw new InvalidDataException("This audio clip contains no embedded audio data.");
+        }
+
+        if (audio.version is { Length: > 0 }
+            && audio.version[0] >= 5
+            && audio.m_CompressionFormat == AudioCompressionFormat.PCM)
+        {
+            return (EncodePcmWave(
+                data,
+                audio.m_Frequency,
+                audio.m_Channels,
+                audio.m_BitsPerSample,
+                cancellationToken), ".wav");
         }
 
         var extension = audio.version is { Length: > 0 } && audio.version[0] < 5
@@ -742,7 +851,8 @@ internal static class MobileAssetExporter
                 FMODSoundType.XM => ".xm",
                 FMODSoundType.XMA => ".wav",
                 FMODSoundType.VAG => ".vag",
-                _ => ".fsb"
+                FMODSoundType.AUDIOQUEUE => ".fsb",
+                _ => ".AudioClip"
             }
             : audio.m_CompressionFormat switch
             {
@@ -753,9 +863,58 @@ internal static class MobileAssetExporter
         return (data, extension);
     }
 
-    private static (byte[] Data, string Extension) ExportVideo(VideoClip video)
+    private static byte[] EncodePcmWave(
+        byte[] pcm,
+        int sampleRate,
+        int channels,
+        int bitsPerSample,
+        CancellationToken cancellationToken)
     {
+        if (sampleRate <= 0 || channels <= 0 || channels > ushort.MaxValue
+            || bitsPerSample is not (8 or 16 or 24 or 32))
+        {
+            throw new InvalidDataException("PCM audio has invalid sample-rate, channel, or bit-depth metadata.");
+        }
+
+        var blockAlign = checked(channels * (bitsPerSample / 8));
+        var byteRate = (long)sampleRate * blockAlign;
+        if (blockAlign > ushort.MaxValue || byteRate > uint.MaxValue
+            || pcm.Length % blockAlign != 0
+            || pcm.Length > int.MaxValue - 44)
+        {
+            throw new InvalidDataException("PCM audio data is inconsistent with its format metadata.");
+        }
+
+        var wave = new byte[44 + pcm.Length];
+        Encoding.ASCII.GetBytes("RIFF").CopyTo(wave, 0);
+        BinaryPrimitives.WriteUInt32LittleEndian(wave.AsSpan(4, 4), checked((uint)(36 + pcm.Length)));
+        Encoding.ASCII.GetBytes("WAVEfmt ").CopyTo(wave, 8);
+        BinaryPrimitives.WriteUInt32LittleEndian(wave.AsSpan(16, 4), 16);
+        BinaryPrimitives.WriteUInt16LittleEndian(wave.AsSpan(20, 2), 1);
+        BinaryPrimitives.WriteUInt16LittleEndian(wave.AsSpan(22, 2), checked((ushort)channels));
+        BinaryPrimitives.WriteUInt32LittleEndian(wave.AsSpan(24, 4), checked((uint)sampleRate));
+        BinaryPrimitives.WriteUInt32LittleEndian(wave.AsSpan(28, 4), checked((uint)byteRate));
+        BinaryPrimitives.WriteUInt16LittleEndian(wave.AsSpan(32, 2), checked((ushort)blockAlign));
+        BinaryPrimitives.WriteUInt16LittleEndian(wave.AsSpan(34, 2), checked((ushort)bitsPerSample));
+        Encoding.ASCII.GetBytes("data").CopyTo(wave, 36);
+        BinaryPrimitives.WriteUInt32LittleEndian(wave.AsSpan(40, 4), checked((uint)pcm.Length));
+        const int chunkSize = 1024 * 1024;
+        for (var offset = 0; offset < pcm.Length; offset += chunkSize)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var length = Math.Min(chunkSize, pcm.Length - offset);
+            Buffer.BlockCopy(pcm, offset, wave, 44 + offset, length);
+        }
+        return wave;
+    }
+
+    private static (byte[] Data, string Extension) ExportVideo(
+        VideoClip video,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
         var data = video.m_VideoData.GetData();
+        cancellationToken.ThrowIfCancellationRequested();
         if (data is not { Length: > 0 })
             throw new InvalidDataException("This video clip contains no embedded video data.");
 
@@ -775,7 +934,7 @@ internal static class MobileAssetExporter
         return (movie.m_MovieData, ".ogv");
     }
 
-    private static string ExportObj(Mesh mesh)
+    private static string ExportObj(Mesh mesh, CancellationToken cancellationToken = default)
     {
         var positions = mesh.m_Vertices;
         if (positions is null || mesh.m_VertexCount <= 0
@@ -800,6 +959,8 @@ internal static class MobileAssetExporter
 
         for (var i = 0; i < mesh.m_VertexCount; i++)
         {
+            if ((i & 1023) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
             builder.Append("v ")
                 .Append((-positions[i * positionStride]).ToString("R", CultureInfo.InvariantCulture)).Append(' ')
                 .Append(positions[i * positionStride + 1].ToString("R", CultureInfo.InvariantCulture)).Append(' ')
@@ -810,6 +971,8 @@ internal static class MobileAssetExporter
         {
             for (var i = 0; i < mesh.m_VertexCount; i++)
             {
+                if ((i & 1023) == 0)
+                    cancellationToken.ThrowIfCancellationRequested();
                 builder.Append("vt ")
                     .Append(uvs[i * uvStride].ToString("R", CultureInfo.InvariantCulture)).Append(' ')
                     .Append((1f - uvs[i * uvStride + 1]).ToString("R", CultureInfo.InvariantCulture)).AppendLine();
@@ -820,6 +983,8 @@ internal static class MobileAssetExporter
         {
             for (var i = 0; i < mesh.m_VertexCount; i++)
             {
+                if ((i & 1023) == 0)
+                    cancellationToken.ThrowIfCancellationRequested();
                 builder.Append("vn ")
                     .Append((-normals[i * normalStride]).ToString("R", CultureInfo.InvariantCulture)).Append(' ')
                     .Append(normals[i * normalStride + 1].ToString("R", CultureInfo.InvariantCulture)).Append(' ')
@@ -840,6 +1005,8 @@ internal static class MobileAssetExporter
             var faceEnd = firstFace + checked((int)(submesh.indexCount / 3));
             for (var face = firstFace; face < faceEnd; face++)
             {
+                if ((face & 1023) == 0)
+                    cancellationToken.ThrowIfCancellationRequested();
                 var indices = new[]
                 {
                     mesh.m_Indices[face * 3 + 2],
@@ -849,7 +1016,7 @@ internal static class MobileAssetExporter
                 builder.Append("f");
                 foreach (var rawIndex in indices)
                 {
-                    var index = checked((int)rawIndex - (int)submesh.firstVertex);
+                    var index = checked((int)rawIndex);
                     if ((uint)index >= (uint)mesh.m_VertexCount)
                     {
                         throw new InvalidDataException("The mesh contains an out-of-range triangle index.");
@@ -890,6 +1057,8 @@ internal enum MobileExportKind
     Raw,
     Dump
 }
+
+internal sealed record MobileExportItem(AssetStudio.Object Asset, string? Container);
 
 internal sealed record MobileSingleExportResult(string FilePath, bool UsedRawFallback, string? Warning);
 
