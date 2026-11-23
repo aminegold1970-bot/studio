@@ -8,14 +8,9 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: ios-ipa-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   build-ios:
     runs-on: macos-26
-
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -25,19 +20,11 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      - name: Cache NuGet packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-ios-${{ hashFiles('**/*.csproj', '**/*.props', '**/*.targets', '**/packages.lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-nuget-ios-
-
       - name: Verify .NET SDK
         run: dotnet --version
 
       - name: Install .NET iOS workload
-        run: dotnet workload install maui-ios --version 10.0.401 --skip-manifest-update
+        run: dotnet workload install maui-ios --version 10.0.401
 
       - name: Select Xcode 26.6
         run: sudo xcode-select --switch /Applications/Xcode_26.6.app
@@ -45,40 +32,23 @@ jobs:
       - name: Verify Apple toolchain
         run: xcodebuild -version
 
-      - name: Restore iOS app
-        run: dotnet restore AssetStudio.Mobile/AssetStudioMobile.csproj --runtime ios-arm64 -p:TargetFramework=net10.0-ios
-
-      - name: Restore referenced projects in parallel
-        shell: bash
+      - name: Restore iOS app and referenced projects
         run: |
-          set -euo pipefail
-
-          dotnet restore AssetStudio/AssetStudio.csproj &
-          p1=$!
-
-          dotnet restore AssetStudio.PInvoke/AssetStudio.PInvoke.csproj &
-          p2=$!
-
-          dotnet restore Texture2DDecoderWrapper/Texture2DDecoderWrapper.csproj &
-          p3=$!
-
-          wait "$p1"
-          wait "$p2"
-          wait "$p3"
+          dotnet restore AssetStudio.Mobile/AssetStudioMobile.csproj --runtime ios-arm64 -p:TargetFramework=net10.0-ios
+          dotnet restore AssetStudio/AssetStudio.csproj
+          dotnet restore AssetStudio.PInvoke/AssetStudio.PInvoke.csproj
+          dotnet restore Texture2DDecoderWrapper/Texture2DDecoderWrapper.csproj
 
       - name: Publish unsigned Release app for ARM64
-        run: |
-          dotnet publish AssetStudio.Mobile/AssetStudioMobile.csproj \
-            --configuration Release \
-            --framework net10.0-ios \
-            --runtime ios-arm64 \
-            --no-restore \
-            --verbosity minimal \
-            -m \
-            -p:EnableCodeSigning=false \
-            -p:ArchiveOnBuild=false \
-            -p:BuildIpa=false \
-            -p:PublishTrimmed=false
+        run: >-
+          dotnet publish AssetStudio.Mobile/AssetStudioMobile.csproj
+          --configuration Release
+          --framework net10.0-ios
+          --runtime ios-arm64
+          --no-restore
+          -p:EnableCodeSigning=false
+          -p:ArchiveOnBuild=false
+          -p:BuildIpa=false
 
       - name: Package unsigned app as IPA
         shell: bash
@@ -87,7 +57,6 @@ jobs:
 
           app_root="AssetStudio.Mobile/bin/Release/net10.0-ios/ios-arm64"
           app_path="$(find "$app_root" -type d -name '*.app' -prune -print -quit)"
-
           if [[ -z "$app_path" ]]; then
             echo "::error::No ARM64 iOS .app bundle was produced under $app_root"
             exit 1
@@ -95,16 +64,13 @@ jobs:
 
           ipa_path="$GITHUB_WORKSPACE/artifacts/AssetStudioMobile-unsigned.ipa"
           staging_root="$(mktemp -d "$RUNNER_TEMP/assetstudio-ipa.XXXXXX")"
-
           mkdir -p "$staging_root/Payload" "$(dirname "$ipa_path")"
-
           ditto "$app_path" "$staging_root/Payload/$(basename "$app_path")"
           ditto -c -k --sequesterRsrc --keepParent "$staging_root/Payload" "$ipa_path"
 
           unzip -tq "$ipa_path"
-
           if ! unzip -Z1 "$ipa_path" | grep -Eq '^Payload/[^/]+\.app/Info\.plist$'; then
-            echo "::error::The generated IPA does not contain a valid app bundle"
+            echo "::error::The generated IPA does not contain an app bundle at Payload/<name>.app"
             exit 1
           fi
 
