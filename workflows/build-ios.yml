@@ -1,0 +1,75 @@
+name: Build unsigned iOS IPA
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install .NET iOS workload
+        run: dotnet workload install maui-ios
+
+      - name: Show Apple toolchain
+        run: xcodebuild -version
+
+      - name: Restore iOS dependencies
+        run: dotnet restore AssetStudio.Mobile/AssetStudioMobile.csproj --runtime ios-arm64 -p:TargetFramework=net10.0-ios
+
+      - name: Publish unsigned Release app for ARM64
+        run: >-
+          dotnet publish AssetStudio.Mobile/AssetStudioMobile.csproj
+          --configuration Release
+          --framework net10.0-ios
+          --runtime ios-arm64
+          --no-restore
+          -p:EnableCodeSigning=false
+          -p:ArchiveOnBuild=false
+          -p:BuildIpa=false
+
+      - name: Package unsigned app as IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          app_root="AssetStudio.Mobile/bin/Release/net10.0-ios/ios-arm64"
+          app_path="$(find "$app_root" -type d -name '*.app' -prune -print -quit)"
+          if [[ -z "$app_path" ]]; then
+            echo "::error::No ARM64 iOS .app bundle was produced under $app_root"
+            exit 1
+          fi
+
+          ipa_path="$GITHUB_WORKSPACE/artifacts/AssetStudioMobile-unsigned.ipa"
+          staging_root="$(mktemp -d "$RUNNER_TEMP/assetstudio-ipa.XXXXXX")"
+          mkdir -p "$staging_root/Payload" "$(dirname "$ipa_path")"
+          ditto "$app_path" "$staging_root/Payload/$(basename "$app_path")"
+          ditto -c -k --sequesterRsrc --keepParent "$staging_root/Payload" "$ipa_path"
+
+          unzip -tq "$ipa_path"
+          if ! unzip -Z1 "$ipa_path" | grep -Eq '^Payload/[^/]+\.app/Info\.plist$'; then
+            echo "::error::The generated IPA does not contain an app bundle at Payload/<name>.app"
+            exit 1
+          fi
+
+          echo "Created unsigned IPA: $ipa_path"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AssetStudioMobile-unsigned-ipa
+          path: artifacts/AssetStudioMobile-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30
