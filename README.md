@@ -32,13 +32,13 @@ AssetStudio is a tool for exploring, extracting and exporting assets and assetbu
 
 ## iOS app (in progress)
 
-`AssetStudio.Mobile` is the iPhone front end in the original AssetStudio solution and reuses its Unity asset parser. It can import multiple files, Unity bundles, WebData, and ZIP files; search parsed assets; unpack bundles into a shareable ZIP; and export TextAssets, MonoBehaviours with a serialized type tree, videos, source audio, raw data, PNG textures, and individual meshes as OBJ. Individual Mesh assets can be viewed as an interactive wireframe and supported textures can be previewed. Exports and extracted bundles are handed to the native iOS share sheet.
+`AssetStudio.Mobile` is the iPhone front end in the original AssetStudio solution and reuses its Unity asset parser. It can import multiple files, Unity bundles, WebData, and ZIP files; search parsed assets; unpack bundles into a shareable ZIP; and export all, selected, or filtered assets as converted files, raw data, or dumps. Multi-asset exports are ZIP files containing uniquely named entries and an `AssetStudio_Export_Report.json` manifest; the app reports when an unsupported conversion is preserved as raw asset data. Asset-list and class-structure XML exports are also available. Individual Mesh assets can be viewed as an interactive wireframe and supported textures can be previewed. Exports and extracted bundles are handed to the native iOS share sheet, where they can be saved to Files or shared with another app.
 
 The iPhone app supports portrait and landscape. On narrow screens the desktop-style browser and preview switch to full-height **Assets** and **Preview** tabs, and asset rows collapse into compact summaries; wider screens retain the side-by-side workspace.
 
 This is not yet feature parity with the Windows GUI:
 
-- The native texture decoder DLL has no iOS build, so formats routed through it (including DXT, PVRTC, ETC, ASTC, and Crunch) cannot currently be converted or previewed. Texture formats handled by the existing managed converter can be exported as PNG.
+- The native texture decoder DLL has no iOS build, so formats routed through it (including DXT, PVRTC, ETC, ASTC, and Crunch) cannot currently be converted or previewed as PNG. Batch export preserves those assets as raw serialized data and records the fallback in the ZIP manifest.
 - Audio is extracted in the stored format; the desktop FMOD-based decoder/transcoder is Windows-only.
 - Mesh preview/OBJ export operate on individual Mesh assets. Scene hierarchy, materials, animation, and FBX export are not implemented; FBX depends on the Windows Autodesk FBX SDK native library.
 - MonoBehaviour JSON export requires the asset's serialized type tree. Assembly-assisted conversion is not available in the mobile UI.

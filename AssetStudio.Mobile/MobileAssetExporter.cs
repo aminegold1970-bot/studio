@@ -14,78 +14,94 @@ internal static class MobileAssetExporter
 
     public static string Export(AssetStudio.Object asset)
     {
-        var (data, extension) = asset switch
-        {
-            Texture2D texture => ExportTexture(texture),
-            TextAsset text => (text.m_Script, ".txt"),
-            AudioClip audio => ExportAudio(audio),
-            VideoClip video => ExportVideo(video),
-            MonoBehaviour behaviour => ExportMonoBehaviour(behaviour),
-            Mesh mesh => (Encoding.UTF8.GetBytes(ExportObj(mesh)), ".obj"),
-            AssetStudio.Font font => ExportFont(font),
-            MovieTexture movie => (movie.m_MovieData, ".ogv"),
-            Sprite sprite => ExportSprite(sprite),
-            Shader shader when IsTextShader(shader.m_Script) => (shader.m_Script, ".shader"),
-            _ => (asset.GetRawData(), ".bin")
-        };
-
+        ArgumentNullException.ThrowIfNull(asset);
+        var (data, extension) = ExportConverted(asset);
         return WriteAssetFile(asset, data, extension);
     }
 
-    public static string ExportRaw(AssetStudio.Object asset) =>
-        WriteAssetFile(asset, asset.GetRawData(), ".bin");
-
-    public static string ExportDump(AssetStudio.Object asset) =>
-        WriteAssetFile(asset, Encoding.UTF8.GetBytes(asset.Dump() ?? string.Empty), ".txt");
-
-    public static string ExportArchive(IEnumerable<AssetStudio.Object> assets, MobileExportKind kind)
+    public static MobileSingleExportResult ExportForShare(AssetStudio.Object asset, MobileExportKind kind)
     {
+        ArgumentNullException.ThrowIfNull(asset);
+        var payload = CreateExportPayload(asset, kind);
+        return new MobileSingleExportResult(
+            WriteAssetFile(asset, payload.Data, payload.Extension),
+            payload.UsedRawFallback,
+            payload.Warning);
+    }
+
+    public static string ExportRaw(AssetStudio.Object asset) =>
+        WriteAssetFile(asset, asset.GetRawData(), ".dat");
+
+    public static string ExportDump(AssetStudio.Object asset)
+    {
+        var (data, extension) = GetDumpData(asset);
+        return WriteAssetFile(asset, data, extension);
+    }
+
+    public static MobileArchiveExportResult ExportArchive(
+        IEnumerable<AssetStudio.Object> assets,
+        MobileExportKind kind,
+        IProgress<MainPage.AssetLoadProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(assets);
+        var sourceAssets = assets.ToList();
+        if (sourceAssets.Count == 0)
+            throw new InvalidOperationException("There are no assets to add to the export archive.");
+
         var archivePath = Path.Combine(FileSystem.CacheDirectory, $"AssetStudio_{Guid.NewGuid():N}.zip");
-        var temporaryFiles = new List<string>();
         try
         {
+            var report = new List<MobileArchiveReportEntry>(sourceAssets.Count);
             using (var archive = new ZipArchive(File.Create(archivePath), ZipArchiveMode.Create))
             {
-                var index = 0;
-                foreach (var asset in assets)
+                for (var index = 0; index < sourceAssets.Count; index++)
                 {
-                    var filePath = kind switch
-                    {
-                        MobileExportKind.Raw => ExportRaw(asset),
-                        MobileExportKind.Dump => ExportDump(asset),
-                        _ => Export(asset)
-                    };
-                    temporaryFiles.Add(filePath);
-                    var entry = archive.CreateEntry(
-                        $"{index++:D5}_{Path.GetFileName(filePath)}",
-                        CompressionLevel.Fastest);
-                    using (var input = File.OpenRead(filePath))
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var asset = sourceAssets[index]
+                        ?? throw new InvalidDataException($"Asset {index + 1} is null.");
+                    var payload = CreateExportPayload(asset, kind);
+                    var entryName = $"{index + 1:D5}_{GetArchiveAssetName(asset)}{payload.Extension}";
+                    var entry = archive.CreateEntry(entryName, CompressionLevel.Fastest);
                     using (var output = entry.Open())
                     {
-                        input.CopyTo(output);
+                        const int chunkSize = 1024 * 1024;
+                        for (var offset = 0; offset < payload.Data.Length; offset += chunkSize)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            var length = Math.Min(chunkSize, payload.Data.Length - offset);
+                            output.Write(payload.Data, offset, length);
+                        }
                     }
-                    File.Delete(filePath);
-                    temporaryFiles.Remove(filePath);
+
+                    report.Add(new MobileArchiveReportEntry(
+                        entryName,
+                        GetAssetName(asset),
+                        asset.type.ToString(),
+                        asset.m_PathID,
+                        payload.UsedRawFallback,
+                        payload.Warning));
+                    progress?.Report(new MainPage.AssetLoadProgress(
+                        (index + 1) * 100 / sourceAssets.Count,
+                        $"Exported {index + 1} of {sourceAssets.Count} assets"));
                 }
-                if (index == 0)
-                    throw new InvalidOperationException("There are no assets to add to the export archive.");
+
+                cancellationToken.ThrowIfCancellationRequested();
+                var reportEntry = archive.CreateEntry("AssetStudio_Export_Report.json", CompressionLevel.Fastest);
+                using var reportStream = reportEntry.Open();
+                using var writer = new StreamWriter(reportStream, new UTF8Encoding(false));
+                writer.Write(JsonConvert.SerializeObject(report, Formatting.Indented));
             }
 
-            return archivePath;
+            return new MobileArchiveExportResult(
+                archivePath,
+                sourceAssets.Count,
+                report.Count(entry => entry.RawFallback));
         }
         catch
         {
-            foreach (var filePath in temporaryFiles)
-            {
-                if (File.Exists(filePath))
-                {
-                    File.Delete(filePath);
-                }
-            }
             if (File.Exists(archivePath))
-            {
                 File.Delete(archivePath);
-            }
             throw;
         }
     }
@@ -164,18 +180,12 @@ internal static class MobileAssetExporter
 
     private static string WriteAssetFile(AssetStudio.Object asset, byte[] data, string extension)
     {
-        var name = asset is NamedObject named && !string.IsNullOrWhiteSpace(named.m_Name)
-            ? named.m_Name
-            : asset.type.ToString();
-        return WriteOutputFile($"{name}_{asset.m_PathID}", data, extension);
+        return WriteOutputFile($"{GetAssetName(asset)}_{asset.m_PathID}", data, extension);
     }
 
     private static string WriteOutputFile(string name, byte[] data, string extension)
     {
-        var safeName = string.Concat(name.Select(character =>
-            char.IsControl(character) || "<>:\"/\\|?*".Contains(character) ? '_' : character));
-        if (string.IsNullOrWhiteSpace(safeName))
-            safeName = "AssetStudioExport";
+        var safeName = SanitizeFileName(name);
         Directory.CreateDirectory(FileSystem.CacheDirectory);
         var path = Path.Combine(FileSystem.CacheDirectory,
             $"{safeName}_{Guid.NewGuid():N}{extension}");
@@ -191,6 +201,70 @@ internal static class MobileAssetExporter
             throw;
         }
     }
+
+    private static string GetAssetName(AssetStudio.Object asset) =>
+        asset is NamedObject named && !string.IsNullOrWhiteSpace(named.m_Name)
+            ? named.m_Name
+            : asset.type.ToString();
+
+    private static string GetArchiveAssetName(AssetStudio.Object asset) =>
+        SanitizeFileName($"{GetAssetName(asset)}_{asset.m_PathID}");
+
+    private static string SanitizeFileName(string name)
+    {
+        var safeName = string.Concat(name.Select(character =>
+            char.IsControl(character) || "<>:\"/\\|?*".Contains(character) ? '_' : character));
+        return string.IsNullOrWhiteSpace(safeName) ? "AssetStudioExport" : safeName;
+    }
+
+    private static ExportPayload CreateExportPayload(AssetStudio.Object asset, MobileExportKind kind)
+    {
+        try
+        {
+            var (data, extension) = kind switch
+            {
+                MobileExportKind.Raw => (asset.GetRawData(), ".dat"),
+                MobileExportKind.Dump => GetDumpData(asset),
+                _ => ExportConverted(asset)
+            };
+            return new ExportPayload(data, extension, false, null);
+        }
+        catch (Exception exception) when (
+            kind != MobileExportKind.Raw
+            && exception is (NotSupportedException or InvalidDataException))
+        {
+            var requestedFormat = kind == MobileExportKind.Dump ? "Dump" : "Converted";
+            return new ExportPayload(
+                asset.GetRawData(),
+                ".dat",
+                true,
+                $"{requestedFormat} export unavailable for {asset.type}: {exception.Message}");
+        }
+    }
+
+    private static (byte[] Data, string Extension) GetDumpData(AssetStudio.Object asset)
+    {
+        var dump = asset.Dump();
+        if (dump is null)
+            throw new NotSupportedException($"Asset type {asset.type} does not provide a text dump.");
+        return (Encoding.UTF8.GetBytes(dump), ".txt");
+    }
+
+    private static (byte[] Data, string Extension) ExportConverted(AssetStudio.Object asset) =>
+        asset switch
+        {
+            Texture2D texture => ExportTexture(texture),
+            TextAsset text => (text.m_Script, ".txt"),
+            AudioClip audio => ExportAudio(audio),
+            VideoClip video => ExportVideo(video),
+            MonoBehaviour behaviour => ExportMonoBehaviour(behaviour),
+            Mesh mesh => (Encoding.UTF8.GetBytes(ExportObj(mesh)), ".obj"),
+            AssetStudio.Font font => ExportFont(font),
+            MovieTexture movie => ExportMovieTexture(movie),
+            Sprite sprite => ExportSprite(sprite),
+            Shader shader => (Encoding.UTF8.GetBytes(shader.Convert()), ".shader"),
+            _ => throw new NotSupportedException($"No converted exporter is available for {asset.type}.")
+        };
 
     public static string ExportAssetListXml(IEnumerable<MainPage.AssetListExportRow> rows)
     {
@@ -217,13 +291,6 @@ internal static class MobileAssetExporter
         if (index <= 0)
             throw new InvalidDataException("A mesh OBJ contains an invalid relative vertex reference.");
         return checked(index + offset);
-    }
-
-    private static bool IsTextShader(byte[]? script)
-    {
-        if (script is not { Length: > 0 })
-            return false;
-        return script.All(value => value is 9 or 10 or 13 || value >= 32);
     }
 
     public static string ExportClassStructuresXml(IEnumerable<MainPage.ClassRow> classes)
@@ -656,12 +723,12 @@ internal static class MobileAssetExporter
     private static (byte[] Data, string Extension) ExportAudio(AudioClip audio)
     {
         var data = audio.m_AudioData.GetData();
-        if (data.Length == 0)
+        if (data is not { Length: > 0 })
         {
             throw new InvalidDataException("This audio clip contains no embedded audio data.");
         }
 
-        var extension = audio.version[0] < 5
+        var extension = audio.version is { Length: > 0 } && audio.version[0] < 5
             ? audio.m_Type switch
             {
                 FMODSoundType.ACC => ".m4a",
@@ -689,6 +756,9 @@ internal static class MobileAssetExporter
     private static (byte[] Data, string Extension) ExportVideo(VideoClip video)
     {
         var data = video.m_VideoData.GetData();
+        if (data is not { Length: > 0 })
+            throw new InvalidDataException("This video clip contains no embedded video data.");
+
         var extension = Path.GetExtension(video.m_OriginalPath);
         if (string.IsNullOrWhiteSpace(extension) || extension.Length > 10
             || extension.Any(character => !char.IsAsciiLetterOrDigit(character) && character != '.'))
@@ -696,6 +766,13 @@ internal static class MobileAssetExporter
             extension = ".video";
         }
         return (data, extension.ToLowerInvariant());
+    }
+
+    private static (byte[] Data, string Extension) ExportMovieTexture(MovieTexture movie)
+    {
+        if (movie.m_MovieData is not { Length: > 0 })
+            throw new InvalidDataException("This movie texture contains no embedded video data.");
+        return (movie.m_MovieData, ".ogv");
     }
 
     private static string ExportObj(Mesh mesh)
@@ -813,3 +890,17 @@ internal enum MobileExportKind
     Raw,
     Dump
 }
+
+internal sealed record MobileSingleExportResult(string FilePath, bool UsedRawFallback, string? Warning);
+
+internal sealed record MobileArchiveExportResult(string ArchivePath, int ExportedCount, int RawFallbackCount);
+
+internal sealed record MobileArchiveReportEntry(
+    string File,
+    string Name,
+    string Type,
+    long PathId,
+    bool RawFallback,
+    string? Warning);
+
+internal sealed record ExportPayload(byte[] Data, string Extension, bool UsedRawFallback, string? Warning);

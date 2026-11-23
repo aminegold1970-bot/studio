@@ -1118,13 +1118,25 @@ public partial class MainPage : ContentPage
         try
         {
             SetBusy(true, $"Preparing {meshes.Count} mesh(es)…");
-            var outputPath = await Task.Run(() => merge
-                ? MobileAssetExporter.ExportMergedMeshes(meshes)
-                : MobileAssetExporter.ExportArchive(meshes, MobileExportKind.Converted));
+            string outputPath;
+            var rawFallbackCount = 0;
+            if (merge)
+            {
+                outputPath = await Task.Run(() => MobileAssetExporter.ExportMergedMeshes(meshes));
+            }
+            else
+            {
+                var result = await Task.Run(() =>
+                    MobileAssetExporter.ExportArchive(meshes, MobileExportKind.Converted));
+                outputPath = result.ArchivePath;
+                rawFallbackCount = result.RawFallbackCount;
+            }
             await Share.Default.RequestAsync(new ShareFileRequest(
                 merge ? "AssetStudio merged OBJ model" : "AssetStudio split OBJ models",
                 new ShareFile(outputPath)));
-            StatusLabel.Text = $"Exported {meshes.Count} mesh(es) as OBJ; materials and animations are not included";
+            StatusLabel.Text = rawFallbackCount == 0
+                ? $"Exported {meshes.Count} mesh(es) as OBJ; materials and animations are not included"
+                : $"Exported {meshes.Count} mesh(es); {rawFallbackCount} used raw fallback (see ZIP report)";
         }
         catch (Exception ex)
         {
@@ -1286,10 +1298,17 @@ public partial class MainPage : ContentPage
         }
 
         using var cancellation = new CancellationTokenSource();
+        _loadCancellation = cancellation;
+        CancelLoadButton.Text = "Cancel export";
         try
         {
             SetBusy(true, $"Exporting {targets.Count} assets…");
             int count;
+            var rawFallbackCount = 0;
+            string? fallbackWarning = null;
+            var progress = new Progress<AssetLoadProgress>(update =>
+                SetLoadingProgress(Math.Clamp(update.Percent, 0, 100),
+                    string.IsNullOrWhiteSpace(update.Message) ? $"Exporting {targets.Count} assets…" : update.Message));
             if (ExportAssetsRequested != null)
             {
                 if (AssetFolderPickerRequested == null)
@@ -1297,9 +1316,6 @@ public partial class MainPage : ContentPage
 
                 var destination = await AssetFolderPickerRequested.Invoke();
                 if (string.IsNullOrWhiteSpace(destination)) return;
-                var progress = new Progress<AssetLoadProgress>(update =>
-                    SetLoadingProgress(Math.Clamp(update.Percent, 0, 100),
-                        string.IsNullOrWhiteSpace(update.Message) ? $"Exporting {targets.Count} assets…" : update.Message));
                 count = await ExportAssetsRequested.Invoke(exportKind, targets, destination, progress, cancellation.Token);
             }
             else
@@ -1311,32 +1327,40 @@ public partial class MainPage : ContentPage
                 if (sourceAssets.Length != targets.Count)
                     throw new InvalidOperationException("One or more selected rows are not backed by parsed Unity assets.");
 
-                var outputPath = await Task.Run(() =>
+                var kind = exportKind switch
                 {
-                    if (sourceAssets.Length == 1)
-                    {
-                        return exportKind switch
-                        {
-                            "Raw" => MobileAssetExporter.ExportRaw(sourceAssets[0]),
-                            "Dump" => MobileAssetExporter.ExportDump(sourceAssets[0]),
-                            _ => MobileAssetExporter.Export(sourceAssets[0])
-                        };
-                    }
-
-                    var kind = exportKind switch
-                    {
-                        "Raw" => MobileExportKind.Raw,
-                        "Dump" => MobileExportKind.Dump,
-                        _ => MobileExportKind.Converted
-                    };
-                    return MobileAssetExporter.ExportArchive(sourceAssets, kind);
-                }, cancellation.Token);
+                    "Raw" => MobileExportKind.Raw,
+                    "Dump" => MobileExportKind.Dump,
+                    _ => MobileExportKind.Converted
+                };
+                string outputPath;
+                if (sourceAssets.Length == 1)
+                {
+                    var result = await Task.Run(
+                        () => MobileAssetExporter.ExportForShare(sourceAssets[0], kind),
+                        cancellation.Token);
+                    outputPath = result.FilePath;
+                    rawFallbackCount = result.UsedRawFallback ? 1 : 0;
+                    fallbackWarning = result.Warning;
+                }
+                else
+                {
+                    var result = await Task.Run(
+                        () => MobileAssetExporter.ExportArchive(sourceAssets, kind, progress, cancellation.Token),
+                        cancellation.Token);
+                    outputPath = result.ArchivePath;
+                    rawFallbackCount = result.RawFallbackCount;
+                }
 
                 await Share.Default.RequestAsync(new ShareFileRequest(
                     $"AssetStudio {exportKind} export", new ShareFile(outputPath)));
                 count = sourceAssets.Length;
             }
-            StatusLabel.Text = $"Exported {count} item(s) · {exportKind} · {scope}";
+            StatusLabel.Text = rawFallbackCount == 0
+                ? $"Exported {count} item(s) · {exportKind} · {scope}"
+                : rawFallbackCount == 1 && fallbackWarning != null
+                    ? $"Exported {count} item(s) · raw fallback: {fallbackWarning}"
+                    : $"Exported {count} item(s) · {rawFallbackCount} raw fallback(s); see ZIP report";
         }
         catch (OperationCanceledException)
         {
@@ -1349,6 +1373,8 @@ public partial class MainPage : ContentPage
         }
         finally
         {
+            _loadCancellation = null;
+            CancelLoadButton.Text = "Cancel load";
             SetBusy(false, StatusLabel.Text);
         }
     }
