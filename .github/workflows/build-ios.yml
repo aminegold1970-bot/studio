@@ -8,142 +8,74 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: ios-build-${{ github.ref }}
-  cancel-in-progress: true
-
-env:
-  DOTNET_NOLOGO: true
-  DOTNET_CLI_TELEMETRY_OPTOUT: true
-  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
-
 jobs:
   build-ios:
     runs-on: macos-26
-
     steps:
-      # 1. Checkout
       - name: Check out source
         uses: actions/checkout@v4
 
-      # 2. Install .NET 10 SDK
       - name: Set up .NET 10
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.401
-          check-latest: false
+          dotnet-version: 10.0.x
 
       - name: Verify .NET SDK
         run: dotnet --version
 
-      # 3. Cache NuGet packages
-      - name: Cache NuGet packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-ios-${{ hashFiles('**/*.csproj', '**/NuGet.config', '**/Directory.Packages.props', '**/packages.lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-nuget-ios-
+      - name: Install .NET iOS workload
+        run: dotnet workload install maui-ios --version 10.0.401
 
-      # 4. Select Xcode
       - name: Select Xcode 26.6
         run: sudo xcode-select --switch /Applications/Xcode_26.6.app
 
       - name: Verify Apple toolchain
+        run: xcodebuild -version
+
+      - name: Restore iOS app and referenced projects
         run: |
-          xcodebuild -version
-          xcrun --sdk iphoneos --show-sdk-version
-
-      # 5. Install .NET iOS workload
-      - name: Install .NET iOS workload
-        run: |
-          START=$SECONDS
-
-          dotnet workload install maui-ios \
-            --version 10.0.401
-
-          echo "Workload installation took $((SECONDS - START)) seconds"
-
-      # 6. Restore original AssetStudio projects (.NET 6)
-      - name: Restore AssetStudio dependencies
-        run: |
-          START=$SECONDS
-
+          dotnet restore AssetStudio.Mobile/AssetStudioMobile.csproj --runtime ios-arm64 -p:TargetFramework=net10.0-ios
           dotnet restore AssetStudio/AssetStudio.csproj
-
           dotnet restore AssetStudio.PInvoke/AssetStudio.PInvoke.csproj
-
           dotnet restore Texture2DDecoderWrapper/Texture2DDecoderWrapper.csproj
 
-          echo "AssetStudio restore took $((SECONDS - START)) seconds"
+      - name: Publish unsigned Release app for ARM64
+        run: >-
+          dotnet publish AssetStudio.Mobile/AssetStudioMobile.csproj
+          --configuration Release
+          --framework net10.0-ios
+          --runtime ios-arm64
+          --no-restore
+          -p:EnableCodeSigning=false
+          -p:ArchiveOnBuild=false
+          -p:BuildIpa=false
 
-      # 7. Restore mobile project (.NET 10 iOS)
-      - name: Restore mobile dependencies
-        run: |
-          START=$SECONDS
-
-          dotnet restore AssetStudio.Mobile/AssetStudioMobile.csproj \
-            --runtime ios-arm64 \
-            -p:TargetFramework=net10.0-ios
-
-          echo "Mobile restore took $((SECONDS - START)) seconds"
-
-      # 8. Publish unsigned ARM64 app
-      - name: Publish unsigned Release app
-        run: |
-          START=$SECONDS
-
-          dotnet publish AssetStudio.Mobile/AssetStudioMobile.csproj \
-            --configuration Release \
-            --framework net10.0-ios \
-            --runtime ios-arm64 \
-            --no-restore \
-            -p:EnableCodeSigning=false \
-            -p:ArchiveOnBuild=false \
-            -p:BuildIpa=false
-
-          echo "Publish took $((SECONDS - START)) seconds"
-
-      # 9. Package IPA
-      - name: Package unsigned IPA
+      - name: Package unsigned app as IPA
         shell: bash
         run: |
           set -euo pipefail
 
-          START=$SECONDS
-
           app_root="AssetStudio.Mobile/bin/Release/net10.0-ios/ios-arm64"
-
           app_path="$(find "$app_root" -type d -name '*.app' -prune -print -quit)"
-
           if [[ -z "$app_path" ]]; then
-            echo "::error::No ARM64 iOS .app bundle was produced"
+            echo "::error::No ARM64 iOS .app bundle was produced under $app_root"
             exit 1
           fi
 
           ipa_path="$GITHUB_WORKSPACE/artifacts/AssetStudioMobile-unsigned.ipa"
-
           staging_root="$(mktemp -d "$RUNNER_TEMP/assetstudio-ipa.XXXXXX")"
-
           mkdir -p "$staging_root/Payload" "$(dirname "$ipa_path")"
-
           ditto "$app_path" "$staging_root/Payload/$(basename "$app_path")"
-
-          ditto -c -k --sequesterRsrc --keepParent \
-            "$staging_root/Payload" "$ipa_path"
+          ditto -c -k --sequesterRsrc --keepParent "$staging_root/Payload" "$ipa_path"
 
           unzip -tq "$ipa_path"
-
           if ! unzip -Z1 "$ipa_path" | grep -Eq '^Payload/[^/]+\.app/Info\.plist$'; then
-            echo "::error::Invalid IPA structure"
+            echo "::error::The generated IPA does not contain an app bundle at Payload/<name>.app"
             exit 1
           fi
 
           echo "Created unsigned IPA: $ipa_path"
-          echo "IPA size: $(du -h "$ipa_path" | cut -f1)"
-          echo "Packaging took $((SECONDS - START)) seconds"
 
-      # 10. Upload IPA
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
@@ -151,4 +83,3 @@ jobs:
           path: artifacts/AssetStudioMobile-unsigned.ipa
           if-no-files-found: error
           retention-days: 30
-          compression-level: 0
