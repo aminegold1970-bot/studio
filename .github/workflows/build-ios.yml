@@ -20,14 +20,21 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      - name: Verify .NET SDK
+        run: dotnet --version
+
       - name: Install .NET iOS workload
         run: dotnet workload install maui-ios
 
       - name: Show Apple toolchain
         run: xcodebuild -version
 
-      - name: Restore iOS dependencies
-        run: dotnet restore AssetStudio.Mobile/AssetStudioMobile.csproj --runtime ios-arm64 -p:TargetFramework=net10.0-ios
+      - name: Restore iOS app and referenced projects
+        run: |
+          dotnet restore AssetStudio.Mobile/AssetStudioMobile.csproj --runtime ios-arm64 -p:TargetFramework=net10.0-ios
+          dotnet restore AssetStudio/AssetStudio.csproj
+          dotnet restore AssetStudio.PInvoke/AssetStudio.PInvoke.csproj
+          dotnet restore Texture2DDecoderWrapper/Texture2DDecoderWrapper.csproj
 
       - name: Publish unsigned Release app for ARM64
         run: >-
