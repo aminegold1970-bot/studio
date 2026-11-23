@@ -9,7 +9,9 @@ namespace Texture2DDecoder
 
         static TextureDecoder()
         {
+#if NETFRAMEWORK
             DllLoader.PreloadDll(T2DDll.DllName);
+#endif
         }
 
         public static bool DecodeDXT1(byte[] data, int width, int height, byte[] image)

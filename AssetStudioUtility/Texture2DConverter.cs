@@ -52,6 +52,12 @@ namespace AssetStudio
                 case TextureFormat.ARGB32: //test pass
                     flag = DecodeARGB32(buff, bytes);
                     break;
+                case TextureFormat.ARGBFloat:
+                    flag = DecodeARGBFloat(buff, bytes);
+                    break;
+                case TextureFormat.BGR24:
+                    flag = DecodeBGR24(buff, bytes);
+                    break;
                 case TextureFormat.RGB565: //test pass
                     SwapBytesForXbox(buff);
                     flag = DecodeRGB565(buff, bytes);
@@ -92,6 +98,9 @@ namespace AssetStudio
                     break;
                 case TextureFormat.RGBAFloat:
                     flag = DecodeRGBAFloat(buff, bytes);
+                    break;
+                case TextureFormat.RGBFloat:
+                    flag = DecodeRGBFloat(buff, bytes);
                     break;
                 case TextureFormat.YUY2: //test pass
                     flag = DecodeYUY2(buff, bytes);
@@ -293,6 +302,32 @@ namespace AssetStudio
             return true;
         }
 
+        private bool DecodeARGBFloat(byte[] image_data, byte[] buff)
+        {
+            for (var i = 0; i < outPutSize; i += 4)
+            {
+                var sourceOffset = i * 4;
+                buff[i] = (byte)Math.Round(BitConverter.ToSingle(image_data, sourceOffset + 12) * 255f);
+                buff[i + 1] = (byte)Math.Round(BitConverter.ToSingle(image_data, sourceOffset + 8) * 255f);
+                buff[i + 2] = (byte)Math.Round(BitConverter.ToSingle(image_data, sourceOffset + 4) * 255f);
+                buff[i + 3] = (byte)Math.Round(BitConverter.ToSingle(image_data, sourceOffset) * 255f);
+            }
+            return true;
+        }
+
+        private bool DecodeBGR24(byte[] image_data, byte[] buff)
+        {
+            var size = m_Width * m_Height;
+            for (var i = 0; i < size; i++)
+            {
+                buff[i * 4] = image_data[i * 3];
+                buff[i * 4 + 1] = image_data[i * 3 + 1];
+                buff[i * 4 + 2] = image_data[i * 3 + 2];
+                buff[i * 4 + 3] = 255;
+            }
+            return true;
+        }
+
         private bool DecodeRGB565(byte[] image_data, byte[] buff)
         {
             var size = m_Width * m_Height;
@@ -428,6 +463,19 @@ namespace AssetStudio
                 buff[i + 1] = (byte)Math.Round(BitConverter.ToSingle(image_data, i * 4 + 4) * 255f);
                 buff[i + 2] = (byte)Math.Round(BitConverter.ToSingle(image_data, i * 4) * 255f);
                 buff[i + 3] = (byte)Math.Round(BitConverter.ToSingle(image_data, i * 4 + 12) * 255f);
+            }
+            return true;
+        }
+
+        private bool DecodeRGBFloat(byte[] image_data, byte[] buff)
+        {
+            for (var i = 0; i < outPutSize; i += 4)
+            {
+                var sourceOffset = i * 3;
+                buff[i] = (byte)Math.Round(BitConverter.ToSingle(image_data, sourceOffset + 8) * 255f);
+                buff[i + 1] = (byte)Math.Round(BitConverter.ToSingle(image_data, sourceOffset + 4) * 255f);
+                buff[i + 2] = (byte)Math.Round(BitConverter.ToSingle(image_data, sourceOffset) * 255f);
+                buff[i + 3] = 255;
             }
             return true;
         }

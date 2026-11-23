@@ -618,7 +618,7 @@ internal static class MobileAssetExporter
         cancellationToken.ThrowIfCancellationRequested();
         if (texture.m_Width <= 0 || texture.m_Height <= 0
             || (long)texture.m_Width * texture.m_Height > MaxTexturePixels)
-            throw new InvalidDataException("This texture is too large or has invalid dimensions for decoding on iPhone.");
+            throw new InvalidDataException("This texture is too large or has invalid dimensions for decoding on this device.");
 
         if (texture.m_TextureFormat is TextureFormat.DXT1 or TextureFormat.DXT3 or TextureFormat.DXT5)
         {
@@ -647,25 +647,22 @@ internal static class MobileAssetExporter
             cancellationToken.ThrowIfCancellationRequested();
             return bgra;
         }
-        catch (DllNotFoundException exception)
+        catch (Exception exception) when (exception is DllNotFoundException
+            or EntryPointNotFoundException
+            or BadImageFormatException)
         {
             throw new NotSupportedException(
-                $"Texture format {texture.m_TextureFormat} requires the native texture decoder, which is not yet available in the iOS app.",
-                exception);
-        }
-        catch (EntryPointNotFoundException exception)
-        {
-            throw new NotSupportedException(
-                $"Texture format {texture.m_TextureFormat} requires a decoder function not available in the iOS app.",
+                $"Texture format {texture.m_TextureFormat} requires a native decoder unavailable in this app build.",
                 exception);
         }
         catch (TypeInitializationException exception) when (
             exception.InnerException is NotSupportedException
                 or DllNotFoundException
-                or EntryPointNotFoundException)
+                or EntryPointNotFoundException
+                or BadImageFormatException)
         {
             throw new NotSupportedException(
-                $"Texture format {texture.m_TextureFormat} requires a native decoder that is not available on iOS.",
+                $"Texture format {texture.m_TextureFormat} requires a native decoder unavailable in this app build.",
                 exception.InnerException);
         }
     }
