@@ -8,10 +8,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: ios-ipa-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   build-ios:
     runs-on: macos-26
@@ -24,29 +20,10 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      - name: Cache .NET iOS workload packs
-        id: ios-workload-cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.dotnet/packs
-            ~/.dotnet/metadata/workloads
-            ~/.dotnet/sdk-manifests
-          key: ${{ runner.os }}-dotnet-ios-workload-10.0.401
-
-      - name: Cache NuGet packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', 'global.json') }}
-          restore-keys: |
-            ${{ runner.os }}-nuget-
-
       - name: Verify .NET SDK
         run: dotnet --version
 
       - name: Install .NET iOS workload
-        if: steps.ios-workload-cache.outputs.cache-hit != 'true'
         run: dotnet workload install maui-ios --version 10.0.401
 
       - name: Select Xcode 26.6
