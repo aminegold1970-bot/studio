@@ -1051,16 +1051,24 @@ public partial class MainPage : ContentPage
 
     private async void OnModelMenuClicked(object sender, EventArgs e)
     {
-        var choice = await Choose("Model",
+        var modelOptions = new List<string>
+        {
             "Export all meshes (split OBJ)",
             "Export all meshes (merged OBJ)",
             "Export checked scene objects (split OBJ)",
-            "Export checked scene objects (merged OBJ)");
+            "Export checked scene objects (merged OBJ)"
+        };
+#if IOS
+        modelOptions.Add("Export all meshes (static FBX)");
+        modelOptions.Add("Export checked scene objects (static FBX)");
+#endif
+        var choice = await Choose("Model", modelOptions.ToArray());
         if (choice == null)
             return;
 
         var exportAll = choice.StartsWith("Export all", StringComparison.Ordinal);
         var merge = choice.Contains("merged", StringComparison.Ordinal);
+        var exportFbx = choice.Contains("(static FBX)", StringComparison.Ordinal);
         var meshes = exportAll
             ? _allAssets.Select(row => row.SourceAsset).OfType<AssetStudio.Mesh>().Distinct().ToList()
             : GetCheckedSceneObjects()
@@ -1086,7 +1094,13 @@ public partial class MainPage : ContentPage
                     string.IsNullOrWhiteSpace(update.Message) ? $"Exporting {meshes.Count} mesh(es)…" : update.Message));
             string outputPath;
             var rawFallbackCount = 0;
-            if (merge)
+            if (exportFbx)
+            {
+                outputPath = await Task.Run(
+                    () => MobileFbxExporter.ExportMeshes(meshes, cancellation.Token),
+                    cancellation.Token);
+            }
+            else if (merge)
             {
                 outputPath = await Task.Run(
                     () => MobileAssetExporter.ExportMergedMeshes(meshes, cancellation.Token),
@@ -1106,9 +1120,13 @@ public partial class MainPage : ContentPage
             }
             cancellation.Token.ThrowIfCancellationRequested();
             await Share.Default.RequestAsync(new ShareFileRequest(
-                merge ? "AssetStudio merged OBJ model" : "AssetStudio split OBJ models",
+                exportFbx
+                    ? "AssetStudio static FBX model"
+                    : merge ? "AssetStudio merged OBJ model" : "AssetStudio split OBJ models",
                 new ShareFile(outputPath)));
-            StatusLabel.Text = rawFallbackCount == 0
+            StatusLabel.Text = exportFbx
+                ? $"Exported {meshes.Count} mesh(es) as static FBX; transforms, materials, skins and animations are not included"
+                : rawFallbackCount == 0
                 ? $"Exported {meshes.Count} mesh(es) as OBJ; materials and animations are not included"
                 : $"Exported {meshes.Count} mesh(es); {rawFallbackCount} used raw fallback (see ZIP report)";
         }
