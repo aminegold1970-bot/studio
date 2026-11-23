@@ -7,6 +7,7 @@
         <ScrollView Grid.Row="0" Orientation="Horizontal" BackgroundColor="#22252B">
             <HorizontalStackLayout Padding="5,4" Spacing="3">
                 <Button Text="File" Clicked="OnFileMenuClicked" Style="{StaticResource MenuButton}"/>
+                <Button Text="Library" Clicked="OnLibraryClicked" Style="{StaticResource MenuButton}"/>
                 <Button Text="Options" Clicked="OnOptionsMenuClicked" Style="{StaticResource MenuButton}"/>
                 <Button Text="Model" Clicked="OnModelMenuClicked" Style="{StaticResource MenuButton}"/>
                 <Button Text="Export" Clicked="OnExportMenuClicked" Style="{StaticResource MenuButton}"/>
@@ -21,11 +22,24 @@
             <Button x:Name="ClassesTab" Grid.Column="2" Text="Asset Classes" Clicked="OnBrowserTabClicked" Style="{StaticResource TabButton}"/>
         </Grid>
 
-        <Grid Grid.Row="2" RowDefinitions="Auto,Auto" Padding="7,3" BackgroundColor="#1D2025">
+        <Grid Grid.Row="2" RowDefinitions="Auto,Auto,Auto,Auto" Padding="7,3" BackgroundColor="#1D2025">
             <SearchBar x:Name="AssetSearch" Placeholder="Filter assets" PlaceholderColor="#9298A2"
                        TextColor="#F1F3F5" BackgroundColor="#292D34" HeightRequest="42"
                        TextChanged="OnAssetSearchTextChanged"/>
-            <Grid x:Name="AssetColumnHeaders" Grid.Row="1" ColumnDefinitions="2*,1.25*,1.1*,1.1*,.7*" Padding="3,3" ColumnSpacing="2">
+            <SearchBar x:Name="ClassSearch" Grid.Row="0" IsVisible="False" Placeholder="Filter asset classes"
+                       PlaceholderColor="#9298A2" TextColor="#F1F3F5" BackgroundColor="#292D34"
+                       HeightRequest="42" TextChanged="OnClassSearchTextChanged"/>
+            <Grid x:Name="HierarchySearchPanel" Grid.Row="0" IsVisible="False" ColumnDefinitions="*,Auto" ColumnSpacing="5">
+                <SearchBar x:Name="HierarchySearch" Placeholder="Find scene object" PlaceholderColor="#9298A2"
+                           TextColor="#F1F3F5" BackgroundColor="#292D34" HeightRequest="42"
+                           SearchButtonPressed="OnHierarchySearchButtonPressed" TextChanged="OnHierarchySearchTextChanged"/>
+                <Button Grid.Column="1" Text="Next" Clicked="OnHierarchySearchNextClicked" Style="{StaticResource TabButton}"/>
+            </Grid>
+            <HorizontalStackLayout x:Name="HierarchyActions" Grid.Row="1" IsVisible="False" Spacing="5" Padding="0,3">
+                <Button Text="Expand all" Clicked="OnHierarchyExpandAllClicked" Style="{StaticResource TabButton}"/>
+                <Button Text="Collapse all" Clicked="OnHierarchyCollapseAllClicked" Style="{StaticResource TabButton}"/>
+            </HorizontalStackLayout>
+            <Grid x:Name="AssetColumnHeaders" Grid.Row="3" ColumnDefinitions="2*,1.25*,1.1*,1.1*,.7*,34" Padding="3,3" ColumnSpacing="2">
                 <Button Text="Name" Clicked="OnSortName" Style="{StaticResource HeaderButton}"/>
                 <Button Grid.Column="1" Text="Container" Clicked="OnSortContainer" Style="{StaticResource HeaderButton}"/>
                 <Button Grid.Column="2" Text="Type" Clicked="OnSortType" Style="{StaticResource HeaderButton}"/>
@@ -36,20 +50,23 @@
 
         <Grid Grid.Row="3" RowDefinitions="2*,Auto,3*" BackgroundColor="#17191D">
             <Grid Grid.Row="0">
-                <CollectionView x:Name="AssetCollection" SelectionMode="Single"
+                <CollectionView x:Name="AssetCollection" SelectionMode="Multiple"
                                 SelectionChanged="OnAssetSelectionChanged" BackgroundColor="#17191D">
                     <CollectionView.EmptyView>
-                        <Label Text="No assets loaded" TextColor="#AEB6C2" HorizontalTextAlignment="Center"
+                        <Label Text="Drop Unity files here, or use File → Load file" TextColor="#AEB6C2" HorizontalTextAlignment="Center"
                                VerticalTextAlignment="Center"/>
                     </CollectionView.EmptyView>
                     <CollectionView.ItemTemplate>
                         <DataTemplate>
-                            <Grid ColumnDefinitions="2*,1.25*,1.1*,1.1*,.7*" Padding="7,9" ColumnSpacing="5">
+                            <Grid ColumnDefinitions="2*,1.25*,1.1*,1.1*,.7*,34" Padding="7,9" ColumnSpacing="5">
                                 <Label Text="{Binding Name}" TextColor="#E7EAF0" FontSize="12" LineBreakMode="TailTruncation"/>
                                 <Label Grid.Column="1" Text="{Binding Container}" TextColor="#AEB6C2" FontSize="11" LineBreakMode="TailTruncation"/>
                                 <Label Grid.Column="2" Text="{Binding Type}" TextColor="#AEB6C2" FontSize="11" LineBreakMode="TailTruncation"/>
                                 <Label Grid.Column="3" Text="{Binding PathId}" TextColor="#AEB6C2" FontSize="11"/>
                                 <Label Grid.Column="4" Text="{Binding Size}" TextColor="#AEB6C2" FontSize="11"/>
+                                <Button Grid.Column="5" Text="⋯" Clicked="OnAssetContextClicked"
+                                        CommandParameter="{Binding .}" Padding="0" WidthRequest="30" HeightRequest="30"
+                                        BackgroundColor="Transparent" TextColor="#B9C0CA" FontSize="18"/>
                             </Grid>
                         </DataTemplate>
                     </CollectionView.ItemTemplate>
@@ -59,9 +76,14 @@
                     <CollectionView.EmptyView><Label Text="No scene hierarchy loaded" TextColor="#AEB6C2" HorizontalTextAlignment="Center" VerticalTextAlignment="Center"/></CollectionView.EmptyView>
                     <CollectionView.ItemTemplate>
                         <DataTemplate>
-                            <Grid ColumnDefinitions="Auto,*" Padding="{Binding IndentPadding}" ColumnSpacing="8">
-                                <CheckBox IsChecked="{Binding IsChecked, Mode=TwoWay}" CheckedChanged="OnHierarchyCheckChanged" Color="#8B78D6"/>
-                                <Label Grid.Column="1" Text="{Binding DisplayName}" TextColor="#E7EAF0" VerticalTextAlignment="Center" FontSize="13"/>
+                            <Grid ColumnDefinitions="24,Auto,*" Padding="{Binding IndentPadding}" ColumnSpacing="5" MinimumHeightRequest="38">
+                                <Button Text="{Binding ExpandGlyph}" Clicked="OnHierarchyExpandClicked"
+                                        IsVisible="{Binding HasChildren}" Padding="0" WidthRequest="24" HeightRequest="30"
+                                        BackgroundColor="Transparent" TextColor="#B9C0CA" FontSize="13"/>
+                                <CheckBox Grid.Column="1" IsChecked="{Binding IsChecked, Mode=TwoWay}"
+                                          CheckedChanged="OnHierarchyCheckChanged" Color="#8B78D6"/>
+                                <Label Grid.Column="2" Text="{Binding DisplayName}" TextColor="#E7EAF0"
+                                       VerticalTextAlignment="Center" FontSize="13" LineBreakMode="TailTruncation"/>
                             </Grid>
                         </DataTemplate>
                     </CollectionView.ItemTemplate>
@@ -71,9 +93,12 @@
                     <CollectionView.EmptyView><Label Text="No asset classes loaded" TextColor="#AEB6C2" HorizontalTextAlignment="Center" VerticalTextAlignment="Center"/></CollectionView.EmptyView>
                     <CollectionView.ItemTemplate>
                         <DataTemplate>
-                            <Grid ColumnDefinitions="*,Auto" Padding="10,9">
-                                <Label Text="{Binding Name}" TextColor="#E7EAF0" FontSize="13"/>
-                                <Label Grid.Column="1" Text="{Binding Id}" TextColor="#AEB6C2" FontSize="12"/>
+                            <Grid ColumnDefinitions="*,Auto" Padding="10,9" ColumnSpacing="8">
+                                <VerticalStackLayout Spacing="2">
+                                    <Label Text="{Binding Name}" TextColor="#E7EAF0" FontSize="13"/>
+                                    <Label Text="{Binding Version}" TextColor="#8F98A5" FontSize="10"/>
+                                </VerticalStackLayout>
+                                <Label Grid.Column="1" Text="{Binding Id}" TextColor="#AEB6C2" FontSize="12" VerticalTextAlignment="Center"/>
                             </Grid>
                         </DataTemplate>
                     </CollectionView.ItemTemplate>
@@ -86,8 +111,70 @@
                     <Button x:Name="DumpTab" Grid.Column="1" Text="Dump" Clicked="OnDumpTabClicked" Style="{StaticResource TabButton}"/>
                 </Grid>
                 <ScrollView x:Name="PreviewScroll" Grid.Row="1" Padding="12">
-                    <VerticalStackLayout Spacing="7">
+                    <VerticalStackLayout Spacing="9">
                         <Label x:Name="PreviewTitle" Text="Preview" TextColor="#E7EAF0" FontSize="16" FontAttributes="Bold"/>
+                        <Label x:Name="PreviewKind" Text="Select an asset" TextColor="#8F98A5" FontSize="11"/>
+                        <Border x:Name="ImagePreviewFrame" IsVisible="False" BackgroundColor="#111317" Stroke="#3B414B" StrokeThickness="1" Padding="6">
+                            <Image x:Name="AssetImagePreview" Aspect="AspectFit" HeightRequest="230"/>
+                        </Border>
+                        <Border x:Name="TextPreviewFrame" IsVisible="False" BackgroundColor="#111317" Stroke="#3B414B" StrokeThickness="1" Padding="8">
+                            <ScrollView Orientation="Both" HeightRequest="210">
+                                <Label x:Name="AssetTextPreview" TextColor="#D5DAE2" FontFamily="monospace" FontSize="11" LineBreakMode="NoWrap"/>
+                            </ScrollView>
+                        </Border>
+                        <Border x:Name="FontPreviewFrame" IsVisible="False" BackgroundColor="#F4F4F4" Stroke="#3B414B" StrokeThickness="1" Padding="10">
+                            <VerticalStackLayout Spacing="7">
+                                <Label Text="Font specimen" TextColor="#333333" FontSize="11"/>
+                                <Label Text="The quick brown fox jumps over the lazy dog." TextColor="#111111" FontSize="12"/>
+                                <Label Text="The quick brown fox jumps over the lazy dog." TextColor="#111111" FontSize="18"/>
+                                <Label Text="The quick brown fox jumps over the lazy dog." TextColor="#111111" FontSize="26"/>
+                                <Label Text="0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ" TextColor="#111111" FontSize="15"/>
+                            </VerticalStackLayout>
+                        </Border>
+                        <Border x:Name="AudioPreviewFrame" IsVisible="False" BackgroundColor="#252A32" Stroke="#3B414B" StrokeThickness="1" Padding="12">
+                            <VerticalStackLayout Spacing="10">
+                                <Label Text="Audio clip" TextColor="#E7EAF0" FontAttributes="Bold"/>
+                                <Label x:Name="AudioPreviewInfo" TextColor="#B9C0CA" FontSize="12"/>
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                    <Label x:Name="AudioPlaybackStatus" Text="Stopped" TextColor="#D5DAE2" FontSize="11" VerticalTextAlignment="Center"/>
+                                    <Label x:Name="AudioFrequency" Grid.Column="1" Text="— Hz" TextColor="#AEB6C2" FontSize="11" VerticalTextAlignment="Center"/>
+                                </Grid>
+                                <Slider x:Name="AudioSeekSlider" Minimum="0" Maximum="1" Value="0" ValueChanged="OnAudioSeekChanged"/>
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <Label x:Name="AudioCurrentTime" Text="0:00" TextColor="#AEB6C2" FontSize="10"/>
+                                    <Label x:Name="AudioDuration" Grid.Column="1" Text="0:00" TextColor="#AEB6C2" FontSize="10"/>
+                                </Grid>
+                                <Grid ColumnDefinitions="*,*,*,*" ColumnSpacing="6">
+                                    <Button Text="▶ Play" Clicked="OnAudioPlayClicked" Style="{StaticResource TabButton}"/>
+                                    <Button Grid.Column="1" Text="Ⅱ Pause" Clicked="OnAudioPauseClicked" Style="{StaticResource TabButton}"/>
+                                    <Button Grid.Column="2" Text="■ Stop" Clicked="OnAudioStopClicked" Style="{StaticResource TabButton}"/>
+                                    <Button x:Name="AudioLoopButton" Grid.Column="3" Text="Loop: Off" Clicked="OnAudioLoopClicked" Style="{StaticResource TabButton}"/>
+                                </Grid>
+                                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+                                    <Label Text="Volume" TextColor="#AEB6C2" FontSize="11" VerticalTextAlignment="Center"/>
+                                    <Slider x:Name="AudioVolumeSlider" Grid.Column="1" Minimum="0" Maximum="1" Value="1" ValueChanged="OnAudioVolumeChanged"/>
+                                </Grid>
+                                <Label Text="Playback controls require the host app's audio backend." TextColor="#8F98A5" FontSize="10"/>
+                            </VerticalStackLayout>
+                        </Border>
+                        <Border x:Name="ModelPreviewFrame" IsVisible="False" BackgroundColor="#111317" Stroke="#3B414B" StrokeThickness="1" Padding="12">
+                            <VerticalStackLayout Spacing="6">
+                                <Label Text="3D model preview" TextColor="#E7EAF0" FontAttributes="Bold"/>
+                                <Label x:Name="ModelPreviewInfo" Text="A native iOS 3D renderer must be connected." TextColor="#AEB6C2" FontSize="12"/>
+                            </VerticalStackLayout>
+                        </Border>
+                        <Border x:Name="MetadataFrame" IsVisible="False" BackgroundColor="#20242B" Stroke="#3B414B" StrokeThickness="1" Padding="9">
+                            <VerticalStackLayout x:Name="MetadataHost" Spacing="0">
+                                <BindableLayout.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid ColumnDefinitions="*,1.2*" Padding="2,5" ColumnSpacing="8">
+                                            <Label Text="{Binding Key}" TextColor="#929BA8" FontSize="11"/>
+                                            <Label Grid.Column="1" Text="{Binding Value}" TextColor="#E2E6EC" FontSize="11" HorizontalTextAlignment="End"/>
+                                        </Grid>
+                                    </DataTemplate>
+                                </BindableLayout.ItemTemplate>
+                            </VerticalStackLayout>
+                        </Border>
                         <Label x:Name="PreviewDetails" Text="Select an asset to inspect it." TextColor="#AEB6C2" FontSize="12"/>
                     </VerticalStackLayout>
                 </ScrollView>
@@ -97,9 +184,11 @@
             </Grid>
         </Grid>
 
-        <Grid Grid.Row="4" ColumnDefinitions="*,Auto" Padding="9,6" BackgroundColor="#22252B">
+        <Grid Grid.Row="4" ColumnDefinitions="*,Auto,Auto" Padding="9,6" ColumnSpacing="8" BackgroundColor="#22252B">
             <Label x:Name="StatusLabel" Text="Ready to go" TextColor="#B9C0CA" FontSize="12" VerticalTextAlignment="Center"/>
-            <ActivityIndicator x:Name="BusyIndicator" Grid.Column="1" IsRunning="False" IsVisible="False" HeightRequest="20"/>
+            <Button x:Name="CancelLoadButton" Grid.Column="1" Text="Cancel load" IsVisible="False" Clicked="OnCancelLoadClicked"
+                    Padding="8,3" HeightRequest="30" FontSize="11" BackgroundColor="#7B3438" TextColor="White"/>
+            <ActivityIndicator x:Name="BusyIndicator" Grid.Column="2" IsRunning="False" IsVisible="False" HeightRequest="20"/>
         </Grid>
     </Grid>
     <ContentPage.Resources>
