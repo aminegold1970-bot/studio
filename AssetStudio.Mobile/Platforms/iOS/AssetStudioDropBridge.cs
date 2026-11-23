@@ -105,11 +105,17 @@ internal sealed class AssetStudioDropBridge : UIDropInteractionDelegate
 
     private static Task<string> CopyProviderAsync(NSItemProvider provider)
     {
-        var type = provider.RegisteredTypeIdentifiers.FirstOrDefault(id =>
-            provider.HasItemConformingTo(id) &&
-            (id == "public.data" || id == "public.item" || id == "public.file-url" ||
-             id == "public.url" || id.StartsWith("public.", StringComparison.Ordinal)));
-        type ??= "public.data";
+        var registeredTypes = provider.RegisteredTypeIdentifiers
+            .Where(provider.HasItemConformingTo)
+            .ToArray();
+        var type = registeredTypes.FirstOrDefault(id => id == "public.file-url")
+            ?? registeredTypes.FirstOrDefault(id => id == "public.item")
+            ?? registeredTypes.FirstOrDefault(id => id == "public.data")
+            ?? registeredTypes.FirstOrDefault(id => id.StartsWith("public.", StringComparison.Ordinal))
+            ?? registeredTypes.FirstOrDefault();
+        if (type == null)
+            throw new IOException("The dropped item did not provide a readable file representation.");
+
         var completion = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         provider.LoadFileRepresentation(type, (url, error) =>
         {

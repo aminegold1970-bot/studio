@@ -222,7 +222,11 @@ internal static class MobileAssetExporter
                             item.WorldTransform,
                             cancellationToken,
                             item.Materials,
-                            materialBundle.Materials)));
+                            materialBundle.Materials,
+                            item.SkinTransforms,
+                            item.SkinNormalTransforms,
+                            item.BlendShapePositionDeltas,
+                            item.BlendShapeNormalDeltas)));
                     var contents = BuildMergedObjContents(
                         objectFiles,
                         materialBundle.Materials.Count > 0,
@@ -243,7 +247,11 @@ internal static class MobileAssetExporter
                             item.WorldTransform,
                             cancellationToken,
                             item.Materials,
-                            materialBundle.Materials);
+                            materialBundle.Materials,
+                            item.SkinTransforms,
+                            item.SkinNormalTransforms,
+                            item.BlendShapePositionDeltas,
+                            item.BlendShapeNormalDeltas);
                         var entry = archive.CreateEntry(objectEntryNames[index], CompressionLevel.Fastest);
                         using var writer = new StreamWriter(entry.Open(), new UTF8Encoding(false));
                         writer.Write(contents);
@@ -282,8 +290,18 @@ internal static class MobileAssetExporter
         var materialMap = new Dictionary<Material, ObjMaterialInfo>();
         var textures = new Dictionary<Texture2D, (string Name, byte[] Data)>();
         var materialNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        materialNames.Add("AssetStudio_Default");
         var library = new StringBuilder();
         var materialIndex = 0;
+        library.AppendLine("newmtl AssetStudio_Default")
+            .AppendLine("Ka 0.2 0.2 0.2")
+            .AppendLine("Kd 1 1 1")
+            .AppendLine("Ke 0 0 0")
+            .AppendLine("Ks 0.2 0.2 0.2")
+            .AppendLine("Ns 20")
+            .AppendLine("d 1")
+            .AppendLine("illum 2")
+            .AppendLine();
 
         foreach (var material in sceneMeshes
             .SelectMany(item => item.Materials)
@@ -294,51 +312,77 @@ internal static class MobileAssetExporter
                 $"{material.m_Name}_{material.m_PathID}",
                 materialIndex++);
             var materialName = GetUniqueArchiveEntryName(materialNames, safeName, string.Empty);
-            var diffuse = new AssetStudio.Color(0.8f, 0.8f, 0.8f, 1);
-            foreach (var property in material.m_SavedProperties.m_Colors)
-            {
-                if (property.Key is "_Color" or "_BaseColor")
-                {
-                    diffuse = property.Value;
-                    break;
-                }
-            }
-
-            if (!float.IsFinite(diffuse.R) || !float.IsFinite(diffuse.G)
-                || !float.IsFinite(diffuse.B) || !float.IsFinite(diffuse.A))
-            {
-                throw new InvalidDataException($"Material '{material.m_Name}' contains a non-finite diffuse color.");
-            }
-
-            string? diffuseTextureName = null;
-            var textureEnvironment = material.m_SavedProperties.m_TexEnvs
-                .FirstOrDefault(property => property.Key is "_MainTex" or "_BaseMap");
-            if (textureEnvironment.Value?.m_Texture.TryGet<Texture2D>(out var texture) == true)
-            {
-                if (!textures.TryGetValue(texture, out var texturePayload))
-                {
-                    var (data, extension) = ExportTexture(texture, cancellationToken);
-                    var textureBaseName = SanitizeObjIdentifier(
-                        string.IsNullOrWhiteSpace(texture.m_Name) ? "Texture" : texture.m_Name,
-                        textures.Count);
-                    var textureName = GetUniqueArchiveEntryName(
-                        usedArchiveNames,
-                        $"{textureBaseName}_{texture.m_PathID}",
-                        extension);
-                    texturePayload = (textureName, data);
-                    textures.Add(texture, texturePayload);
-                }
-                diffuseTextureName = texturePayload.Name;
-            }
+            var diffuse = GetMaterialColor(
+                material, ["_Color", "_BaseColor"], new AssetStudio.Color(0.8f, 0.8f, 0.8f, 1));
+            var ambient = GetMaterialColor(
+                material, ["_SColor"], new AssetStudio.Color(0.2f, 0.2f, 0.2f, 1));
+            var emissive = GetMaterialColor(
+                material, ["_EmissionColor"], new AssetStudio.Color(0, 0, 0, 1));
+            var specular = GetMaterialColor(
+                material, ["_SpecularColor"], new AssetStudio.Color(0.2f, 0.2f, 0.2f, 1));
+            var shininess = GetMaterialFloat(material, ["_Shininess"], 20f);
+            var transparency = GetMaterialFloat(material, ["_Transparency"], 0f);
+            ValidateMaterialColor(material, diffuse);
+            ValidateMaterialColor(material, ambient);
+            ValidateMaterialColor(material, emissive);
+            ValidateMaterialColor(material, specular);
+            if (!float.IsFinite(shininess) || !float.IsFinite(transparency))
+                throw new InvalidDataException($"Material '{material.m_Name}' contains a non-finite property.");
+            var opacity = diffuse.A * (1 - Math.Clamp(transparency, 0, 1));
 
             library.Append("newmtl ").AppendLine(materialName)
-                .AppendLine("Ka 0.2 0.2 0.2")
-                .Append("Kd ").Append(diffuse.R.ToString("R", CultureInfo.InvariantCulture)).Append(' ')
-                .Append(diffuse.G.ToString("R", CultureInfo.InvariantCulture)).Append(' ')
-                .Append(diffuse.B.ToString("R", CultureInfo.InvariantCulture)).AppendLine()
-                .Append("d ").Append(diffuse.A.ToString("R", CultureInfo.InvariantCulture)).AppendLine();
-            if (diffuseTextureName != null)
-                library.Append("map_Kd ").AppendLine(diffuseTextureName);
+                .Append("Ka ").Append(FormatColor(ambient)).AppendLine()
+                .Append("Kd ").Append(FormatColor(diffuse)).AppendLine()
+                .Append("Ke ").Append(FormatColor(emissive)).AppendLine()
+                .Append("Ks ").Append(FormatColor(specular)).AppendLine()
+                .Append("Ns ").Append(Math.Clamp(shininess, 0, 1000).ToString("R", CultureInfo.InvariantCulture)).AppendLine()
+                .Append("d ").Append(opacity.ToString("R", CultureInfo.InvariantCulture)).AppendLine()
+                .AppendLine("illum 2");
+            foreach (var textureEnvironment in material.m_SavedProperties.m_TexEnvs)
+            {
+                var mapKeyword = textureEnvironment.Key switch
+                {
+                    "_MainTex" or "_BaseMap" => "map_Kd",
+                    "_BumpMap" or "_NormalMap" => "map_Bump",
+                    "_SpecularMap" or "_SpecGlossMap" or "_MetallicGlossMap" => "map_Ks",
+                    "_EmissionMap" => "map_Ke",
+                    _ => null
+                };
+                if (mapKeyword == null
+                    || !textureEnvironment.Value.m_Texture.TryGet<Texture2D>(out var texture))
+                {
+                    continue;
+                }
+
+                var textureName = GetObjTextureName(
+                    texture,
+                    textures,
+                    usedArchiveNames,
+                    cancellationToken);
+                var scale = textureEnvironment.Value.m_Scale;
+                var offset = textureEnvironment.Value.m_Offset;
+                if (!float.IsFinite(scale.X) || !float.IsFinite(scale.Y)
+                    || !float.IsFinite(offset.X) || !float.IsFinite(offset.Y))
+                {
+                    throw new InvalidDataException(
+                        $"Material '{material.m_Name}' has non-finite texture coordinates.");
+                }
+
+                library.Append(mapKeyword);
+                if (scale.X != 1 || scale.Y != 1)
+                {
+                    library.Append(" -s ")
+                        .Append(scale.X.ToString("R", CultureInfo.InvariantCulture)).Append(' ')
+                        .Append(scale.Y.ToString("R", CultureInfo.InvariantCulture)).Append(" 1");
+                }
+                if (offset.X != 0 || offset.Y != 0)
+                {
+                    library.Append(" -o ")
+                        .Append(offset.X.ToString("R", CultureInfo.InvariantCulture)).Append(' ')
+                        .Append(offset.Y.ToString("R", CultureInfo.InvariantCulture)).Append(" 0");
+                }
+                library.Append(' ').AppendLine(textureName);
+            }
             library.AppendLine();
             materialMap.Add(material, new ObjMaterialInfo(materialName));
         }
@@ -348,6 +392,65 @@ internal static class MobileAssetExporter
             library.ToString(),
             textures.Values.Select(texture => new ObjTextureEntry(texture.Name, texture.Data)).ToList());
     }
+
+    private static string GetObjTextureName(
+        Texture2D texture,
+        Dictionary<Texture2D, (string Name, byte[] Data)> textures,
+        HashSet<string> usedArchiveNames,
+        CancellationToken cancellationToken)
+    {
+        if (textures.TryGetValue(texture, out var existing))
+            return existing.Name;
+
+        var (data, extension) = ExportTexture(texture, cancellationToken);
+        var textureBaseName = SanitizeObjIdentifier(
+            string.IsNullOrWhiteSpace(texture.m_Name) ? "Texture" : texture.m_Name,
+            textures.Count);
+        var textureName = GetUniqueArchiveEntryName(
+            usedArchiveNames,
+            $"{textureBaseName}_{texture.m_PathID}",
+            extension);
+        textures.Add(texture, (textureName, data));
+        return textureName;
+    }
+
+    private static AssetStudio.Color GetMaterialColor(
+        Material material,
+        string[] propertyNames,
+        AssetStudio.Color fallback)
+    {
+        foreach (var property in material.m_SavedProperties.m_Colors)
+        {
+            if (propertyNames.Contains(property.Key, StringComparer.Ordinal))
+                return property.Value;
+        }
+        return fallback;
+    }
+
+    private static float GetMaterialFloat(Material material, string[] propertyNames, float fallback)
+    {
+        foreach (var property in material.m_SavedProperties.m_Floats)
+        {
+            if (propertyNames.Contains(property.Key, StringComparer.Ordinal))
+                return property.Value;
+        }
+        return fallback;
+    }
+
+    private static void ValidateMaterialColor(Material material, AssetStudio.Color color)
+    {
+        if (!float.IsFinite(color.R) || !float.IsFinite(color.G)
+            || !float.IsFinite(color.B) || !float.IsFinite(color.A))
+        {
+            throw new InvalidDataException($"Material '{material.m_Name}' contains a non-finite color.");
+        }
+    }
+
+    private static string FormatColor(AssetStudio.Color color) =>
+        string.Join(' ',
+            color.R.ToString("R", CultureInfo.InvariantCulture),
+            color.G.ToString("R", CultureInfo.InvariantCulture),
+            color.B.ToString("R", CultureInfo.InvariantCulture));
 
     private static string WriteMergedObj(
         IEnumerable<(string Name, string Contents)> objectFiles,
@@ -481,16 +584,19 @@ internal static class MobileAssetExporter
 
                 Mesh? mesh;
                 Renderer? renderer;
+                SkinnedMeshRenderer? skinnedRenderer;
                 switch (component)
                 {
                     case MeshFilter meshFilter when meshFilter.m_Mesh.TryGet(out var value):
                         mesh = value;
                         renderer = gameObject.m_MeshRenderer;
+                        skinnedRenderer = null;
                         break;
                     case SkinnedMeshRenderer skinnedMeshRenderer
                         when skinnedMeshRenderer.m_Mesh.TryGet(out var value):
                         mesh = value;
                         renderer = skinnedMeshRenderer;
+                        skinnedRenderer = skinnedMeshRenderer;
                         break;
                     default:
                         continue;
@@ -509,7 +615,27 @@ internal static class MobileAssetExporter
                     : string.IsNullOrWhiteSpace(mesh.m_Name)
                         ? gameObject.m_Name
                         : $"{gameObject.m_Name}_{mesh.m_Name}";
-                geometries.Add(new SceneMeshGeometry(mesh, worldTransform, objectName, materials));
+                var (skinTransforms, skinNormalTransforms) = skinnedRenderer == null
+                    ? (null, null)
+                    : GetSkinTransforms(
+                        mesh,
+                        skinnedRenderer,
+                        transform,
+                        transformCache,
+                        activeTransforms,
+                        cancellationToken);
+                var (blendShapePositionDeltas, blendShapeNormalDeltas) = skinnedRenderer == null
+                    ? (null, null)
+                    : GetBlendShapeDeltas(mesh, skinnedRenderer, cancellationToken);
+                geometries.Add(new SceneMeshGeometry(
+                    mesh,
+                    worldTransform,
+                    objectName,
+                    materials,
+                    skinTransforms,
+                    skinNormalTransforms,
+                    blendShapePositionDeltas,
+                    blendShapeNormalDeltas));
             }
         }
 
@@ -563,11 +689,395 @@ internal static class MobileAssetExporter
         }
     }
 
+    private static (NumericsMatrix4x4[]? PositionTransforms, NumericsMatrix4x4[]? NormalTransforms)
+        GetSkinTransforms(
+            Mesh mesh,
+            SkinnedMeshRenderer renderer,
+            AssetStudio.Transform rendererTransform,
+            Dictionary<AssetStudio.Transform, NumericsMatrix4x4> transformCache,
+            HashSet<AssetStudio.Transform> activeTransforms,
+            CancellationToken cancellationToken)
+    {
+        var skin = mesh.m_Skin;
+        if (skin is not { Length: > 0 })
+            return (null, null);
+        if (skin.Length != mesh.m_VertexCount)
+            throw new InvalidDataException($"Skinned mesh '{mesh.m_Name}' has an invalid bone-weight count.");
+
+        var hasInfluences = false;
+        foreach (var vertexWeights in skin)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            for (var influence = 0; influence < 4; influence++)
+            {
+                var weight = vertexWeights.weight[influence];
+                if (!float.IsFinite(weight) || weight < 0)
+                    throw new InvalidDataException($"Skinned mesh '{mesh.m_Name}' has invalid bone weights.");
+                hasInfluences |= weight > 0;
+            }
+        }
+        if (!hasInfluences)
+            return (null, null);
+
+        if (mesh.m_BindPose is not { Length: > 0 } bindPoses)
+        {
+            throw new NotSupportedException(
+                $"Skinned mesh '{mesh.m_Name}' has weights but no usable bind poses.");
+        }
+
+        var bones = renderer.m_Bones ?? Array.Empty<PPtr<AssetStudio.Transform>>();
+        var hasBoneHashes = mesh.m_BoneNameHashes is { } boneNameHashes
+            && boneNameHashes.Length == bindPoses.Length;
+        if (bones.Length == 0 && !hasBoneHashes)
+        {
+            throw new NotSupportedException(
+                $"Skinned mesh '{mesh.m_Name}' has weights but no usable bind poses or renderer bones.");
+        }
+
+        Dictionary<uint, AssetStudio.Transform>? hashLookup = null;
+        var reflection = NumericsMatrix4x4.CreateScale(-1, 1, 1);
+        var positionTransforms = new NumericsMatrix4x4[bindPoses.Length];
+        var normalTransforms = new NumericsMatrix4x4[bindPoses.Length];
+        for (var index = 0; index < bindPoses.Length; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            AssetStudio.Transform? bone = null;
+            if (index < bones.Length && bones[index].TryGet(out var resolvedBone))
+                bone = resolvedBone;
+            if (bone == null
+                && mesh.m_BoneNameHashes is { } boneHashes
+                && boneHashes.Length == bindPoses.Length)
+            {
+                hashLookup ??= BuildTransformHashLookup(rendererTransform, cancellationToken);
+                if (hashLookup.TryGetValue(boneHashes[index], out var hashBone))
+                    bone = hashBone;
+            }
+            if (bone == null)
+            {
+                throw new NotSupportedException(
+                    $"Skinned mesh '{mesh.m_Name}' has an unresolved bone at index {index}.");
+            }
+
+            var bindPose = ToNumericsRowMatrix(bindPoses[index]);
+            var skinTransform = reflection * bindPose * reflection
+                * GetWorldTransform(bone, transformCache, activeTransforms, cancellationToken);
+            if (!IsFinite(skinTransform)
+                || !NumericsMatrix4x4.Invert(skinTransform, out var inverseTransform))
+            {
+                throw new InvalidDataException(
+                    $"Skinned mesh '{mesh.m_Name}' has a singular or non-finite bone transform.");
+            }
+            positionTransforms[index] = skinTransform;
+            normalTransforms[index] = NumericsMatrix4x4.Transpose(inverseTransform);
+        }
+
+        return (positionTransforms, normalTransforms);
+    }
+
+    private static (NumericsVector3[]? PositionDeltas, NumericsVector3[]? NormalDeltas)
+        GetBlendShapeDeltas(
+            Mesh mesh,
+            SkinnedMeshRenderer renderer,
+            CancellationToken cancellationToken)
+    {
+        var blendShapes = mesh.m_Shapes;
+        if (blendShapes?.channels is not { Length: > 0 } channels)
+            return (null, null);
+
+        NumericsVector3[]? positionDeltas = null;
+        NumericsVector3[]? normalDeltas = null;
+        for (var channelIndex = 0; channelIndex < channels.Length; channelIndex++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var weight = renderer.m_BlendShapeWeights is { } weights && channelIndex < weights.Length
+                ? weights[channelIndex]
+                : 0;
+            if (!float.IsFinite(weight))
+                throw new InvalidDataException($"Skinned mesh '{mesh.m_Name}' has a non-finite blend-shape weight.");
+            if (weight == 0)
+                continue;
+
+            var channel = channels[channelIndex];
+            if (channel.frameCount <= 0
+                || channel.frameIndex < 0
+                || (long)channel.frameIndex + channel.frameCount > blendShapes.shapes.Length
+                || (long)channel.frameIndex + channel.frameCount > blendShapes.fullWeights.Length)
+            {
+                throw new InvalidDataException($"Skinned mesh '{mesh.m_Name}' has an invalid blend-shape frame range.");
+            }
+
+            var previousWeight = 0f;
+            NumericsVector3[]? previousPositions = null;
+            NumericsVector3[]? previousNormals = null;
+            var applied = false;
+            for (var frameOffset = 0; frameOffset < channel.frameCount; frameOffset++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var frameIndex = channel.frameIndex + frameOffset;
+                var fullWeight = blendShapes.fullWeights[frameIndex];
+                if (!float.IsFinite(fullWeight) || fullWeight <= previousWeight)
+                    throw new InvalidDataException($"Skinned mesh '{mesh.m_Name}' has invalid blend-shape frame weights.");
+
+                var framePositions = new NumericsVector3[mesh.m_VertexCount];
+                NumericsVector3[]? frameNormals = null;
+                var shape = blendShapes.shapes[frameIndex];
+                if ((ulong)shape.firstVertex + shape.vertexCount > (ulong)blendShapes.vertices.Length)
+                    throw new InvalidDataException($"Skinned mesh '{mesh.m_Name}' has an invalid blend-shape vertex range.");
+                if (shape.hasNormals && mesh.m_Normals is { Length: > 0 })
+                    frameNormals = new NumericsVector3[mesh.m_VertexCount];
+
+                var shapeEnd = checked((int)(shape.firstVertex + shape.vertexCount));
+                for (var deltaIndex = (int)shape.firstVertex; deltaIndex < shapeEnd; deltaIndex++)
+                {
+                    if ((deltaIndex & 1023) == 0)
+                        cancellationToken.ThrowIfCancellationRequested();
+                    var delta = blendShapes.vertices[deltaIndex];
+                    if (delta.index >= mesh.m_VertexCount)
+                        throw new InvalidDataException($"Skinned mesh '{mesh.m_Name}' has an out-of-range blend-shape vertex.");
+                    if (!IsFinite(delta.vertex)
+                        || (frameNormals != null && !IsFinite(delta.normal)))
+                    {
+                        throw new InvalidDataException($"Skinned mesh '{mesh.m_Name}' has a non-finite blend-shape delta.");
+                    }
+                    framePositions[delta.index] += new NumericsVector3(
+                        -delta.vertex.X,
+                        delta.vertex.Y,
+                        delta.vertex.Z);
+                    if (frameNormals != null)
+                    {
+                        frameNormals[delta.index] += new NumericsVector3(
+                            -delta.normal.X,
+                            delta.normal.Y,
+                            delta.normal.Z);
+                    }
+                }
+
+                if (weight <= fullWeight || frameOffset == channel.frameCount - 1)
+                {
+                    var amount = (weight - previousWeight) / (fullWeight - previousWeight);
+                    amount = frameOffset == 0
+                        ? Math.Min(amount, 1)
+                        : Math.Clamp(amount, 0, 1);
+                    positionDeltas ??= new NumericsVector3[mesh.m_VertexCount];
+                    AccumulateBlendShapeFrame(
+                        positionDeltas,
+                        previousPositions,
+                        framePositions,
+                        amount,
+                        cancellationToken);
+                    if (frameNormals != null || previousNormals != null)
+                    {
+                        normalDeltas ??= new NumericsVector3[mesh.m_VertexCount];
+                        AccumulateBlendShapeFrame(
+                            normalDeltas,
+                            previousNormals,
+                            frameNormals,
+                            amount,
+                            cancellationToken);
+                    }
+                    applied = true;
+                    break;
+                }
+
+                previousWeight = fullWeight;
+                previousPositions = framePositions;
+                previousNormals = frameNormals;
+            }
+
+            if (!applied)
+                throw new InvalidDataException($"Skinned mesh '{mesh.m_Name}' has an unapplied blend-shape weight.");
+        }
+
+        return (positionDeltas, normalDeltas);
+    }
+
+    private static void AccumulateBlendShapeFrame(
+        NumericsVector3[] destination,
+        NumericsVector3[]? previousFrame,
+        NumericsVector3[]? currentFrame,
+        float amount,
+        CancellationToken cancellationToken)
+    {
+        for (var index = 0; index < destination.Length; index++)
+        {
+            if ((index & 2047) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
+            var previous = previousFrame == null ? NumericsVector3.Zero : previousFrame[index];
+            var current = currentFrame == null ? NumericsVector3.Zero : currentFrame[index];
+            destination[index] += previous + (current - previous) * amount;
+        }
+    }
+
+    private static bool IsFinite(AssetStudio.Vector3 vector) =>
+        float.IsFinite(vector.X) && float.IsFinite(vector.Y) && float.IsFinite(vector.Z);
+
+    private static Dictionary<uint, AssetStudio.Transform> BuildTransformHashLookup(
+        AssetStudio.Transform rendererTransform,
+        CancellationToken cancellationToken)
+    {
+        var root = rendererTransform;
+        var ancestors = new HashSet<AssetStudio.Transform>();
+        while (root.m_Father.TryGet(out var parent))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!ancestors.Add(root))
+                throw new InvalidDataException("The scene contains a cycle in its transform hierarchy.");
+            root = parent;
+        }
+
+        var lookup = new Dictionary<uint, AssetStudio.Transform>();
+        var ambiguousHashes = new HashSet<uint>();
+        var visited = new HashSet<AssetStudio.Transform>();
+        var pending = new Stack<AssetStudio.Transform>();
+        pending.Push(root);
+        while (pending.TryPop(out var transform))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!visited.Add(transform))
+                continue;
+
+            var path = GetTransformPathByFather(transform);
+            if (path != null)
+            {
+                var hash = ComputeBonePathHash(path);
+                if (lookup.TryGetValue(hash, out var existing) && existing != transform)
+                {
+                    lookup.Remove(hash);
+                    ambiguousHashes.Add(hash);
+                }
+                else if (!ambiguousHashes.Contains(hash))
+                {
+                    lookup[hash] = transform;
+                }
+            }
+
+            foreach (var childPointer in transform.m_Children)
+            {
+                if (childPointer.TryGet(out var child))
+                    pending.Push(child);
+            }
+        }
+        return lookup;
+    }
+
+    private static string? GetTransformPathByFather(AssetStudio.Transform transform)
+    {
+        var names = new List<string>();
+        var visited = new HashSet<AssetStudio.Transform>();
+        var current = transform;
+        while (true)
+        {
+            if (!visited.Add(current)
+                || !current.m_GameObject.TryGet(out var gameObject)
+                || string.IsNullOrWhiteSpace(gameObject.m_Name))
+            {
+                return null;
+            }
+            names.Add(gameObject.m_Name);
+            if (!current.m_Father.TryGet(out var parent))
+                break;
+            current = parent;
+        }
+        names.Reverse();
+        return string.Join("/", names);
+    }
+
+    private static uint ComputeBonePathHash(string path)
+    {
+        var crc = 0xffffffffu;
+        foreach (var value in Encoding.UTF8.GetBytes(path))
+        {
+            crc ^= value;
+            for (var bit = 0; bit < 8; bit++)
+                crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xedb88320u : crc >> 1;
+        }
+        return ~crc;
+    }
+
+    private static NumericsMatrix4x4 ToNumericsRowMatrix(AssetStudio.Matrix4x4 matrix) =>
+        new(
+            matrix.M00, matrix.M10, matrix.M20, matrix.M30,
+            matrix.M01, matrix.M11, matrix.M21, matrix.M31,
+            matrix.M02, matrix.M12, matrix.M22, matrix.M32,
+            matrix.M03, matrix.M13, matrix.M23, matrix.M33);
+
+    private static bool IsFinite(NumericsMatrix4x4 matrix) =>
+        float.IsFinite(matrix.M11) && float.IsFinite(matrix.M12)
+        && float.IsFinite(matrix.M13) && float.IsFinite(matrix.M14)
+        && float.IsFinite(matrix.M21) && float.IsFinite(matrix.M22)
+        && float.IsFinite(matrix.M23) && float.IsFinite(matrix.M24)
+        && float.IsFinite(matrix.M31) && float.IsFinite(matrix.M32)
+        && float.IsFinite(matrix.M33) && float.IsFinite(matrix.M34)
+        && float.IsFinite(matrix.M41) && float.IsFinite(matrix.M42)
+        && float.IsFinite(matrix.M43) && float.IsFinite(matrix.M44);
+
+    internal static NumericsVector3 TransformVertexPosition(
+        Mesh mesh,
+        int vertexIndex,
+        NumericsVector3 position,
+        NumericsMatrix4x4 worldTransform,
+        NumericsMatrix4x4[]? skinTransforms)
+    {
+        if (skinTransforms == null)
+            return NumericsVector3.Transform(position, worldTransform);
+
+        var result = NumericsVector3.Zero;
+        var totalWeight = 0f;
+        var weights = mesh.m_Skin![vertexIndex];
+        for (var influence = 0; influence < 4; influence++)
+        {
+            var weight = weights.weight[influence];
+            if (weight <= 0)
+                continue;
+            var boneIndex = weights.boneIndex[influence];
+            if ((uint)boneIndex >= (uint)skinTransforms.Length)
+                throw new InvalidDataException($"Skinned mesh '{mesh.m_Name}' references an invalid bone index.");
+            result += NumericsVector3.Transform(position, skinTransforms[boneIndex]) * weight;
+            totalWeight += weight;
+        }
+        return totalWeight > 1e-6f
+            ? result / totalWeight
+            : NumericsVector3.Transform(position, worldTransform);
+    }
+
+    internal static NumericsVector3 TransformVertexNormal(
+        Mesh mesh,
+        int vertexIndex,
+        NumericsVector3 normal,
+        NumericsMatrix4x4 worldNormalTransform,
+        NumericsMatrix4x4[]? skinNormalTransforms)
+    {
+        if (skinNormalTransforms == null)
+            return NumericsVector3.TransformNormal(normal, worldNormalTransform);
+
+        var result = NumericsVector3.Zero;
+        var totalWeight = 0f;
+        var weights = mesh.m_Skin![vertexIndex];
+        for (var influence = 0; influence < 4; influence++)
+        {
+            var weight = weights.weight[influence];
+            if (weight <= 0)
+                continue;
+            var boneIndex = weights.boneIndex[influence];
+            if ((uint)boneIndex >= (uint)skinNormalTransforms.Length)
+                throw new InvalidDataException($"Skinned mesh '{mesh.m_Name}' references an invalid bone index.");
+            result += NumericsVector3.TransformNormal(normal, skinNormalTransforms[boneIndex]) * weight;
+            totalWeight += weight;
+        }
+        return totalWeight > 1e-6f
+            ? result / totalWeight
+            : NumericsVector3.TransformNormal(normal, worldNormalTransform);
+    }
+
     internal readonly record struct SceneMeshGeometry(
         Mesh Mesh,
         NumericsMatrix4x4 WorldTransform,
         string Name,
-        Material[] Materials);
+        Material[] Materials,
+        NumericsMatrix4x4[]? SkinTransforms,
+        NumericsMatrix4x4[]? SkinNormalTransforms,
+        NumericsVector3[]? BlendShapePositionDeltas,
+        NumericsVector3[]? BlendShapeNormalDeltas);
 
     private static string WriteAssetFile(
         AssetStudio.Object asset,
@@ -1376,7 +1886,11 @@ internal static class MobileAssetExporter
         NumericsMatrix4x4 worldTransform,
         CancellationToken cancellationToken,
         IReadOnlyList<Material>? submeshMaterials = null,
-        IReadOnlyDictionary<Material, ObjMaterialInfo>? materialMap = null)
+        IReadOnlyDictionary<Material, ObjMaterialInfo>? materialMap = null,
+        NumericsMatrix4x4[]? skinTransforms = null,
+        NumericsMatrix4x4[]? skinNormalTransforms = null,
+        NumericsVector3[]? blendShapePositionDeltas = null,
+        NumericsVector3[]? blendShapeNormalDeltas = null)
     {
         var positions = mesh.m_Vertices;
         if (positions is null || mesh.m_VertexCount <= 0
@@ -1389,6 +1903,18 @@ internal static class MobileAssetExporter
         if (positionStride is not (3 or 4))
         {
             throw new NotSupportedException("This mesh uses an unsupported vertex layout.");
+        }
+
+        var colors = mesh.m_Colors ?? Array.Empty<float>();
+        var colorStride = 0;
+        if (colors.Length > 0)
+        {
+            if (colors.Length % mesh.m_VertexCount != 0
+                || colors.Length / mesh.m_VertexCount is not (3 or 4))
+            {
+                throw new InvalidDataException("This mesh contains an unsupported vertex-color layout.");
+            }
+            colorStride = colors.Length / mesh.m_VertexCount;
         }
 
         var uvs = mesh.GetUV(0) ?? Array.Empty<float>();
@@ -1415,18 +1941,32 @@ internal static class MobileAssetExporter
         {
             if ((i & 1023) == 0)
                 cancellationToken.ThrowIfCancellationRequested();
-            var position = NumericsVector3.Transform(
-                new NumericsVector3(
-                    -positions[i * positionStride],
-                    positions[i * positionStride + 1],
-                    positions[i * positionStride + 2]),
-                worldTransform);
+            var sourcePosition = new NumericsVector3(
+                -positions[i * positionStride],
+                positions[i * positionStride + 1],
+                positions[i * positionStride + 2]);
+            if (blendShapePositionDeltas != null)
+                sourcePosition += blendShapePositionDeltas[i];
+            var position = TransformVertexPosition(
+                mesh,
+                i,
+                sourcePosition,
+                worldTransform,
+                skinTransforms);
             if (!float.IsFinite(position.X) || !float.IsFinite(position.Y) || !float.IsFinite(position.Z))
                 throw new InvalidDataException("The scene transform produced a non-finite vertex.");
             builder.Append("v ")
                 .Append(position.X.ToString("R", CultureInfo.InvariantCulture)).Append(' ')
                 .Append(position.Y.ToString("R", CultureInfo.InvariantCulture)).Append(' ')
-                .Append(position.Z.ToString("R", CultureInfo.InvariantCulture)).AppendLine();
+                .Append(position.Z.ToString("R", CultureInfo.InvariantCulture));
+            for (var channel = 0; channel < colorStride; channel++)
+            {
+                var color = colors[i * colorStride + channel];
+                if (!float.IsFinite(color))
+                    throw new InvalidDataException("The mesh contains a non-finite vertex color.");
+                builder.Append(' ').Append(color.ToString("R", CultureInfo.InvariantCulture));
+            }
+            builder.AppendLine();
         }
 
         if (uvStride >= 2)
@@ -1447,12 +1987,18 @@ internal static class MobileAssetExporter
             {
                 if ((i & 1023) == 0)
                     cancellationToken.ThrowIfCancellationRequested();
-                var normal = NumericsVector3.TransformNormal(
-                    new NumericsVector3(
-                        -normals[i * normalStride],
-                        normals[i * normalStride + 1],
-                        normals[i * normalStride + 2]),
-                    normalTransform);
+                var sourceNormal = new NumericsVector3(
+                    -normals[i * normalStride],
+                    normals[i * normalStride + 1],
+                    normals[i * normalStride + 2]);
+                if (blendShapeNormalDeltas != null)
+                    sourceNormal += blendShapeNormalDeltas[i];
+                var normal = TransformVertexNormal(
+                    mesh,
+                    i,
+                    sourceNormal,
+                    normalTransform,
+                    skinNormalTransforms);
                 var lengthSquared = normal.LengthSquared();
                 if (!float.IsFinite(lengthSquared))
                     throw new InvalidDataException("The scene transform produced a non-finite normal.");
@@ -1476,12 +2022,13 @@ internal static class MobileAssetExporter
                 throw new InvalidDataException("The mesh contains an invalid triangle index range.");
             }
 
-            if (submeshMaterials != null
-                && submeshIndex < submeshMaterials.Count
-                && materialMap != null
-                && materialMap.TryGetValue(submeshMaterials[submeshIndex], out var materialInfo))
+            if (materialMap is { Count: > 0 } && submeshMaterials != null)
             {
-                builder.Append("usemtl ").AppendLine(materialInfo.Name);
+                var materialName = submeshIndex < submeshMaterials.Count
+                    && materialMap.TryGetValue(submeshMaterials[submeshIndex], out var materialInfo)
+                        ? materialInfo.Name
+                        : "AssetStudio_Default";
+                builder.Append("usemtl ").AppendLine(materialName);
             }
 
             var faceEnd = firstFace + checked((int)(submesh.indexCount / 3));

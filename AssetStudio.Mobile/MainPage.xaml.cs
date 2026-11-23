@@ -984,17 +984,67 @@ public partial class MainPage : ContentPage
 #if IOS
     private async Task WaitForActionSheetDismissalAsync()
     {
-        if (Handler?.PlatformView is not UIKit.UIViewController presenter)
-            return;
+        var fallbackPresenter = Handler?.PlatformView as UIKit.UIViewController;
+        var rootPresenter = UIKit.UIApplication.SharedApplication.ConnectedScenes
+            .OfType<UIKit.UIWindowScene>()
+            .SelectMany(scene => scene.Windows)
+            .FirstOrDefault(window => window.IsKeyWindow)?
+            .RootViewController
+            ?? fallbackPresenter;
+        if (rootPresenter == null)
+            throw new InvalidOperationException("The iOS file picker could not find the active window. Try again.");
 
+        var stableDismissalChecks = 0;
         for (var attempt = 0; attempt < 40; attempt++)
         {
-            if (presenter.PresentedViewController is not UIKit.UIAlertController)
-                return;
+            var topPresenter = GetTopPresentedViewController(rootPresenter);
+            if (topPresenter is not UIKit.UIAlertController)
+            {
+                if (++stableDismissalChecks >= 3)
+                {
+                    await Task.Delay(300);
+                    if (GetTopPresentedViewController(rootPresenter) is not UIKit.UIAlertController)
+                        return;
+                    stableDismissalChecks = 0;
+                }
+            }
+            else
+            {
+                stableDismissalChecks = 0;
+            }
+
             await Task.Delay(50);
         }
 
         throw new InvalidOperationException("The iOS menu did not dismiss before the file picker was opened. Try again.");
+    }
+
+    private static UIKit.UIViewController GetTopPresentedViewController(UIKit.UIViewController presenter)
+    {
+        while (true)
+        {
+            if (presenter.PresentedViewController is { } presented)
+            {
+                presenter = presented;
+                continue;
+            }
+
+            if (presenter is UIKit.UINavigationController navigationController
+                && navigationController.VisibleViewController is { } visible)
+            {
+                presenter = visible;
+                continue;
+            }
+
+            if (presenter is UIKit.UITabBarController tabBarController
+                && tabBarController.SelectedViewController is { } selected)
+            {
+                presenter = selected;
+                continue;
+            }
+
+            return presenter;
+        }
     }
 #endif
 
@@ -1306,13 +1356,13 @@ public partial class MainPage : ContentPage
             if (exportFbx)
             {
                 StatusLabel.Text = sceneObjects == null
-                    ? $"Exported {meshes.Count} mesh(es) as static FBX; transforms, materials, skins and animations are not included"
-                    : $"Exported {meshes.Count} mesh(es) as static FBX with scene transforms; materials, skins and animations are not included";
+                    ? $"Exported {meshes.Count} mesh(es) as static FBX; transforms, materials, rigs and animations are not included"
+                    : $"Exported {meshes.Count} mesh(es) as static FBX with scene transforms and baked skin/blend-shape pose; rigs, materials and animation are not included";
             }
             else if (sceneObjects != null)
             {
                 StatusLabel.Text =
-                    $"Exported {meshes.Count} scene mesh(es) as static OBJ with diffuse materials and base textures; skinning and animations are not included";
+                    $"Exported {meshes.Count} scene mesh(es) as static OBJ with material maps, vertex colors and baked skin/blend-shape pose; rigs and animation are not included";
             }
             else
             {

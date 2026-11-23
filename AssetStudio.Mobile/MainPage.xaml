@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui" xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml" x:Class="AssetStudioMobile.MainPage" Shell.NavBarIsVisible="False" BackgroundColor="#FFFFFF">
     <Grid RowDefinitions="Auto,Auto,*,Auto" RowSpacing="0" ColumnDefinitions="*">
-        <ScrollView x:Name="MenuScroll" Grid.Row="0" HeightRequest="25" Orientation="Horizontal" BackgroundColor="#F0F0F0">
+        <ScrollView x:Name="MenuScroll" Grid.Row="0" HeightRequest="44" Orientation="Horizontal" BackgroundColor="#F0F0F0">
             <HorizontalStackLayout Padding="4,0" Spacing="0">
                 <Button Text="File" Clicked="OnFileMenuClicked" Style="{StaticResource MenuButton}"/>
                 <Button Text="Options" Clicked="OnOptionsMenuClicked" Style="{StaticResource MenuButton}"/>
@@ -216,11 +216,11 @@
     <ContentPage.Resources>
         <ResourceDictionary>
             <Style x:Key="MenuButton" TargetType="Button">
-                <Setter Property="Padding" Value="5,0"/><Setter Property="CornerRadius" Value="0"/>
-                <Setter Property="FontSize" Value="10"/><Setter Property="TextColor" Value="#202020"/>
+                <Setter Property="Padding" Value="10,0"/><Setter Property="CornerRadius" Value="0"/>
+                <Setter Property="FontSize" Value="13"/><Setter Property="TextColor" Value="#202020"/>
                 <Setter Property="BackgroundColor" Value="#F0F0F0"/><Setter Property="BorderColor" Value="Transparent"/>
-                <Setter Property="BorderWidth" Value="0"/><Setter Property="HeightRequest" Value="25"/>
-                <Setter Property="MinimumHeightRequest" Value="0"/><Setter Property="MinimumWidthRequest" Value="0"/>
+                <Setter Property="BorderWidth" Value="0"/><Setter Property="HeightRequest" Value="44"/>
+                <Setter Property="MinimumHeightRequest" Value="44"/><Setter Property="MinimumWidthRequest" Value="0"/>
             </Style>
             <Style x:Key="HeaderButton" TargetType="Button">
                 <Setter Property="Padding" Value="2,1"/><Setter Property="CornerRadius" Value="0"/>

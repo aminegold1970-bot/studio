@@ -22,7 +22,11 @@ internal static class MobileFbxExporter
                 mesh,
                 NumericsMatrix4x4.Identity,
                 string.IsNullOrWhiteSpace(mesh.m_Name) ? "Mesh" : mesh.m_Name,
-                Array.Empty<Material>())),
+                Array.Empty<Material>(),
+                null,
+                null,
+                null,
+                null)),
             cancellationToken);
     }
 
@@ -61,6 +65,10 @@ internal static class MobileFbxExporter
                     geometry.Mesh,
                     geometry.WorldTransform,
                     geometry.Name,
+                    geometry.SkinTransforms,
+                    geometry.SkinNormalTransforms,
+                    geometry.BlendShapePositionDeltas,
+                    geometry.BlendShapeNormalDeltas,
                     allocator,
                     cancellationToken));
             }
@@ -90,6 +98,10 @@ internal static class MobileFbxExporter
         Mesh source,
         NumericsMatrix4x4 worldTransform,
         string objectName,
+        NumericsMatrix4x4[]? skinTransforms,
+        NumericsMatrix4x4[]? skinNormalTransforms,
+        NumericsVector3[]? blendShapePositionDeltas,
+        NumericsVector3[]? blendShapeNormalDeltas,
         MDLMeshBufferDataAllocator allocator,
         CancellationToken cancellationToken)
     {
@@ -133,12 +145,18 @@ internal static class MobileFbxExporter
 
             var sourceOffset = index * positionStride;
             var targetOffset = index * componentsPerVertex;
-            var position = NumericsVector3.Transform(
-                new NumericsVector3(
-                    -positions[sourceOffset],
-                    positions[sourceOffset + 1],
-                    positions[sourceOffset + 2]),
-                worldTransform);
+            var sourcePosition = new NumericsVector3(
+                -positions[sourceOffset],
+                positions[sourceOffset + 1],
+                positions[sourceOffset + 2]);
+            if (blendShapePositionDeltas != null)
+                sourcePosition += blendShapePositionDeltas[index];
+            var position = MobileAssetExporter.TransformVertexPosition(
+                source,
+                index,
+                sourcePosition,
+                worldTransform,
+                skinTransforms);
             if (!float.IsFinite(position.X) || !float.IsFinite(position.Y) || !float.IsFinite(position.Z))
                 throw new InvalidDataException($"Mesh '{source.m_Name}' has a non-finite transformed vertex.");
             vertexData[targetOffset] = position.X;
@@ -147,12 +165,18 @@ internal static class MobileFbxExporter
             var attributeOffset = targetOffset + 3;
             if (hasNormals)
             {
-                var normal = NumericsVector3.TransformNormal(
-                    new NumericsVector3(
-                        -normals![index * 3],
-                        normals[index * 3 + 1],
-                        normals[index * 3 + 2]),
-                    normalTransform);
+                var sourceNormal = new NumericsVector3(
+                    -normals![index * 3],
+                    normals[index * 3 + 1],
+                    normals[index * 3 + 2]);
+                if (blendShapeNormalDeltas != null)
+                    sourceNormal += blendShapeNormalDeltas[index];
+                var normal = MobileAssetExporter.TransformVertexNormal(
+                    source,
+                    index,
+                    sourceNormal,
+                    normalTransform,
+                    skinNormalTransforms);
                 var lengthSquared = normal.LengthSquared();
                 if (!float.IsFinite(lengthSquared))
                     throw new InvalidDataException($"Mesh '{source.m_Name}' has a non-finite transformed normal.");
