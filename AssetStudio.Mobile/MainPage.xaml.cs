@@ -66,8 +66,8 @@ public partial class MainPage : ContentPage
     private bool? _compactWorkspace;
     private bool _showingCompactPreview;
     private const double WorkspaceDividerWidth = 20;
-    private double _workspaceBrowserRatio = 0.75;
-    private double _workspaceDragStartRatio = 0.75;
+    private double _workspaceBrowserRatio = 0.61;
+    private double _workspaceDragStartRatio = 0.61;
 
     public MainPage()
     {
@@ -180,7 +180,7 @@ public partial class MainPage : ContentPage
             if (availableWidth <= 0)
                 return;
             var ratio = _workspaceDragStartRatio + e.TotalX / availableWidth;
-            _workspaceBrowserRatio = Math.Clamp(ratio, 0.25, 0.85);
+            _workspaceBrowserRatio = Math.Clamp(ratio, 0.25, 1.0);
             ApplyWorkspacePaneRatio();
             return;
         }
