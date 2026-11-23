@@ -7,7 +7,7 @@
     Title="AssetStudio">
 
     <ShellContent
-        Title="Home"
+        Title="AssetStudio"
         ContentTemplate="{DataTemplate local:MainPage}"
         Route="MainPage" />
 

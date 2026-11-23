@@ -32,7 +32,9 @@ AssetStudio is a tool for exploring, extracting and exporting assets and assetbu
 
 ## iOS app (in progress)
 
-`AssetStudio.Mobile` is the iPhone front end in the original AssetStudio solution and reuses its Unity asset parser. It can import multiple files, Unity bundles, WebData, and ZIP files; search parsed assets; unpack bundles into a shareable ZIP; and export TextAssets, MonoBehaviours with a serialized type tree, videos, source audio, raw data, PNG textures, and individual meshes as OBJ. Individual Mesh assets can be viewed as an interactive wireframe and supported textures can be previewed.
+`AssetStudio.Mobile` is the iPhone front end in the original AssetStudio solution and reuses its Unity asset parser. It can import multiple files, Unity bundles, WebData, and ZIP files; search parsed assets; unpack bundles into a shareable ZIP; and export TextAssets, MonoBehaviours with a serialized type tree, videos, source audio, raw data, PNG textures, and individual meshes as OBJ. Individual Mesh assets can be viewed as an interactive wireframe and supported textures can be previewed. Exports and extracted bundles are handed to the native iOS share sheet.
+
+The iPhone app supports portrait and landscape. On narrow screens the desktop-style browser and preview switch to full-height **Assets** and **Preview** tabs, and asset rows collapse into compact summaries; wider screens retain the side-by-side workspace.
 
 This is not yet feature parity with the Windows GUI:
 

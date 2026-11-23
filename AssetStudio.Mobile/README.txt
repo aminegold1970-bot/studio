@@ -1,6 +1,13 @@
 AssetStudio Mobile GUI — Stage 37 / v27
 ======================================
 
+HISTORICAL NOTE
+---------------
+The Stage 37/38 limitations below describe an earlier source snapshot. The current
+AssetStudio.Mobile project includes its MAUI project, AssetStudio parser reference,
+and connected mobile loader. For current build instructions and iOS limitations,
+see the repository README.md.
+
 New feature: iOS Files drag-and-drop + persistent source-file library.
 
 WHAT THIS VERSION ADDS

@@ -3,6 +3,7 @@ using System.Collections.ObjectModel;
 using System.Linq;
 using System.IO;
 using System.Security.Cryptography;
+using System.Text;
 
 namespace AssetStudioMobile;
 
@@ -52,9 +53,12 @@ public partial class MainPage : ContentPage
     private AssetRow? _selectedAsset;
     private readonly List<AssetRow> _selectedAssets = new();
     private bool _showingDump;
+    private bool _showingEmptyPreview = true;
     private readonly AssetDocumentLibrary _documentLibrary = new();
     private readonly AssetStudioMobileLoader _assetLoader = new();
     private bool _dropBridgeAttached;
+    private bool? _compactWorkspace;
+    private bool _showingCompactPreview;
 
     public MainPage()
     {
@@ -64,9 +68,9 @@ public partial class MainPage : ContentPage
         BindableLayout.SetItemsSource(MetadataHost, _metadataRows);
         BindableLayout.SetItemTemplate(MetadataHost, new DataTemplate(() =>
         {
-            var key = new Label { TextColor = Color.FromArgb("#929BA8"), FontSize = 11 };
+            var key = new Label { TextColor = Color.FromArgb("#777777"), FontSize = 11 };
             key.SetBinding(Label.TextProperty, nameof(MetadataRow.Key));
-            var value = new Label { TextColor = Color.FromArgb("#E2E6EC"), FontSize = 11, HorizontalTextAlignment = TextAlignment.End };
+            var value = new Label { TextColor = Color.FromArgb("#202020"), FontSize = 11, HorizontalTextAlignment = TextAlignment.End };
             value.SetBinding(Label.TextProperty, nameof(MetadataRow.Value));
             var row = new Grid { ColumnDefinitions = { new ColumnDefinition(GridLength.Star), new ColumnDefinition(new GridLength(1.2, GridUnitType.Star)) }, Padding = new Thickness(2, 5), ColumnSpacing = 8 };
             row.Add(key); row.Add(value, 1);
@@ -83,13 +87,39 @@ public partial class MainPage : ContentPage
 
     private void OnWorkspaceSizeChanged(object? sender, EventArgs e)
     {
-        // AssetStudio's desktop workspace is a browser pane beside a preview pane.
-        // Keep that arrangement in landscape; stack the panes on a narrow portrait screen.
         if (WorkspaceGrid.Width <= 0 || WorkspaceGrid.Height <= 0)
             return;
 
-        bool landscape = WorkspaceGrid.Width >= WorkspaceGrid.Height;
-        if (landscape)
+        var compact = WorkspaceGrid.Width < 960;
+        if (_compactWorkspace == compact)
+            return;
+
+        _compactWorkspace = compact;
+        CompactWorkspaceTabs.IsVisible = compact;
+        AssetColumnHeaders.IsVisible = !compact && _browserTab == "Asset List";
+        if (compact)
+        {
+            _showingCompactPreview = false;
+            WorkspaceGrid.ColumnDefinitions = new ColumnDefinitionCollection { new ColumnDefinition(GridLength.Star) };
+            WorkspaceGrid.RowDefinitions = new RowDefinitionCollection
+            {
+                new RowDefinition(GridLength.Auto),
+                new RowDefinition(GridLength.Star)
+            };
+            Grid.SetRow(CompactWorkspaceTabs, 0);
+            Grid.SetColumn(CompactWorkspaceTabs, 0);
+            Grid.SetRow(BrowserPane, 1);
+            Grid.SetColumn(BrowserPane, 0);
+            Grid.SetRow(WorkspaceDivider, 1);
+            Grid.SetColumn(WorkspaceDivider, 0);
+            Grid.SetRow(PreviewPane, 1);
+            Grid.SetColumn(PreviewPane, 0);
+            WorkspaceDivider.WidthRequest = -1;
+            WorkspaceDivider.HeightRequest = 1;
+            WorkspaceDivider.IsVisible = false;
+            RefreshCompactWorkspacePane();
+        }
+        else
         {
             WorkspaceGrid.ColumnDefinitions = new ColumnDefinitionCollection
             {
@@ -98,25 +128,45 @@ public partial class MainPage : ContentPage
                 new ColumnDefinition(new GridLength(62, GridUnitType.Star))
             };
             WorkspaceGrid.RowDefinitions = new RowDefinitionCollection { new RowDefinition(GridLength.Star) };
-            Grid.SetRow(BrowserPane, 0); Grid.SetColumn(BrowserPane, 0);
-            Grid.SetRow(WorkspaceDivider, 0); Grid.SetColumn(WorkspaceDivider, 1);
-            WorkspaceDivider.WidthRequest = 1; WorkspaceDivider.HeightRequest = -1;
-            Grid.SetRow(PreviewPane, 0); Grid.SetColumn(PreviewPane, 2);
+            Grid.SetRow(BrowserPane, 0);
+            Grid.SetColumn(BrowserPane, 0);
+            Grid.SetRow(WorkspaceDivider, 0);
+            Grid.SetColumn(WorkspaceDivider, 1);
+            Grid.SetRow(PreviewPane, 0);
+            Grid.SetColumn(PreviewPane, 2);
+            WorkspaceDivider.WidthRequest = 1;
+            WorkspaceDivider.HeightRequest = -1;
+            WorkspaceDivider.IsVisible = true;
+            BrowserPane.IsVisible = true;
+            PreviewPane.IsVisible = true;
         }
-        else
-        {
-            WorkspaceGrid.ColumnDefinitions = new ColumnDefinitionCollection { new ColumnDefinition(GridLength.Star) };
-            WorkspaceGrid.RowDefinitions = new RowDefinitionCollection
-            {
-                new RowDefinition(new GridLength(45, GridUnitType.Star)),
-                new RowDefinition(new GridLength(1)),
-                new RowDefinition(new GridLength(55, GridUnitType.Star))
-            };
-            Grid.SetRow(BrowserPane, 0); Grid.SetColumn(BrowserPane, 0);
-            Grid.SetRow(WorkspaceDivider, 1); Grid.SetColumn(WorkspaceDivider, 0);
-            WorkspaceDivider.WidthRequest = -1; WorkspaceDivider.HeightRequest = 1;
-            Grid.SetRow(PreviewPane, 2); Grid.SetColumn(PreviewPane, 0);
-        }
+
+        foreach (var asset in _allAssets)
+            asset.IsCompactLayout = compact;
+    }
+
+    private void OnCompactWorkspaceTabClicked(object? sender, EventArgs e)
+    {
+        if (sender is not Button button)
+            return;
+
+        _showingCompactPreview = Equals(button.CommandParameter, "Preview");
+        RefreshCompactWorkspacePane();
+    }
+
+    private void RefreshCompactWorkspacePane()
+    {
+        if (_compactWorkspace != true)
+            return;
+
+        BrowserPane.IsVisible = !_showingCompactPreview;
+        PreviewPane.IsVisible = _showingCompactPreview;
+        CompactAssetsButton.BackgroundColor = _showingCompactPreview
+            ? Color.FromArgb("#E2E2E2")
+            : Color.FromArgb("#FFFFFF");
+        CompactPreviewButton.BackgroundColor = _showingCompactPreview
+            ? Color.FromArgb("#FFFFFF")
+            : Color.FromArgb("#E2E2E2");
     }
 
     protected override void OnHandlerChanged()
@@ -205,7 +255,11 @@ public partial class MainPage : ContentPage
         void Apply()
         {
             _allAssets.Clear();
-            foreach (var asset in incoming) _allAssets.Add(asset);
+            foreach (var asset in incoming)
+            {
+                asset.IsCompactLayout = _compactWorkspace == true;
+                _allAssets.Add(asset);
+            }
             ApplyAssetFilter();
             StatusLabel.Text = $"{_allAssets.Count} assets";
         }
@@ -352,11 +406,13 @@ public partial class MainPage : ContentPage
     {
         MainThread.BeginInvokeOnMainThread(() =>
         {
+            _showingEmptyPreview = false;
             ResetPreviewSurface();
             PreviewTitle.Text = title;
             PreviewKind.Text = "Asset information";
             PreviewDetails.Text = details;
             DumpText.Text = dump;
+            RefreshPreviewSurfaceVisibility();
         });
     }
 
@@ -368,6 +424,7 @@ public partial class MainPage : ContentPage
     {
         MainThread.BeginInvokeOnMainThread(() =>
         {
+            _showingEmptyPreview = false;
             ResetPreviewSurface();
             PreviewTitle.Text = title;
             PreviewKind.Text = "Texture / Sprite";
@@ -376,6 +433,7 @@ public partial class MainPage : ContentPage
             SetAssetMetadata(new[] { new MetadataRow("Width", width.ToString()),
                 new MetadataRow("Height", height.ToString()), new MetadataRow("Format", format) });
             PreviewDetails.Text = additionalInfo ?? string.Empty;
+            RefreshPreviewSurfaceVisibility();
         });
     }
 
@@ -383,12 +441,14 @@ public partial class MainPage : ContentPage
     {
         MainThread.BeginInvokeOnMainThread(() =>
         {
+            _showingEmptyPreview = false;
             ResetPreviewSurface();
             PreviewTitle.Text = title;
             PreviewKind.Text = kind;
             TextPreviewFrame.IsVisible = true;
             AssetTextPreview.Text = content ?? string.Empty;
             PreviewDetails.Text = details;
+            RefreshPreviewSurfaceVisibility();
         });
     }
 
@@ -396,11 +456,13 @@ public partial class MainPage : ContentPage
     {
         MainThread.BeginInvokeOnMainThread(() =>
         {
+            _showingEmptyPreview = false;
             ResetPreviewSurface();
             PreviewTitle.Text = title;
             PreviewKind.Text = "Font";
             FontPreviewFrame.IsVisible = true;
             PreviewDetails.Text = details;
+            RefreshPreviewSurfaceVisibility();
         });
     }
 
@@ -408,6 +470,7 @@ public partial class MainPage : ContentPage
     {
         MainThread.BeginInvokeOnMainThread(() =>
         {
+            _showingEmptyPreview = false;
             ResetPreviewSurface();
             PreviewTitle.Text = title;
             PreviewKind.Text = "AudioClip";
@@ -424,6 +487,7 @@ public partial class MainPage : ContentPage
             AudioLoopButton.Text = "Loop: Off";
             AudioVolumeSlider.Value = 1;
             PreviewDetails.Text = details;
+            RefreshPreviewSurfaceVisibility();
         });
     }
 
@@ -431,13 +495,16 @@ public partial class MainPage : ContentPage
     {
         MainThread.BeginInvokeOnMainThread(() =>
         {
+            _showingEmptyPreview = false;
             ResetPreviewSurface();
             PreviewTitle.Text = title;
             PreviewKind.Text = "Mesh / Model";
             ModelPreviewFrame.IsVisible = true;
             ModelPreviewInfo.Text = string.IsNullOrWhiteSpace(details)
-                ? "Mesh data is available, but a native iOS 3D renderer is not connected." : details;
+                ? "A wireframe preview is available for individual Mesh assets." : details;
+            OpenMeshPreviewButton.IsVisible = _selectedAsset?.SourceAsset is AssetStudio.Mesh;
             PreviewDetails.Text = "";
+            RefreshPreviewSurfaceVisibility();
         });
     }
 
@@ -445,10 +512,12 @@ public partial class MainPage : ContentPage
     {
         MainThread.BeginInvokeOnMainThread(() =>
         {
+            _showingEmptyPreview = false;
             ResetPreviewSurface();
             PreviewTitle.Text = title;
             PreviewKind.Text = type;
             PreviewDetails.Text = message;
+            RefreshPreviewSurfaceVisibility();
         });
     }
 
@@ -461,6 +530,7 @@ public partial class MainPage : ContentPage
         FontPreviewFrame.IsVisible = false;
         AudioPreviewFrame.IsVisible = false;
         ModelPreviewFrame.IsVisible = false;
+        OpenMeshPreviewButton.IsVisible = false;
         AssetImagePreview.Source = null;
         AssetTextPreview.Text = string.Empty;
         AudioPreviewInfo.Text = string.Empty;
@@ -544,7 +614,40 @@ public partial class MainPage : ContentPage
 
     private async Task ExtractFilesAsync()
     {
-        if (ExtractFilesRequested == null || AssetFolderPickerRequested == null)
+        if (ExtractFilesRequested == null)
+        {
+            if (AssetFolderPickerRequested != null)
+            {
+                ReportUnwired("Extract file");
+                return;
+            }
+
+            try
+            {
+                var pickedSources = await FilePicker.PickMultipleAsync(new PickOptions { PickerTitle = "Select files to extract" });
+                var sources = pickedSources?.ToList() ?? new List<FileResult>();
+                if (sources.Count == 0) return;
+
+                var persisted = new List<FileResult>();
+                foreach (var source in sources)
+                    persisted.Add(await _documentLibrary.ImportAsync(source));
+
+                SetBusy(true, $"Unpacking {persisted.Count} file(s)…");
+                var archivePath = await Task.Run(() => MobileBundleExtractor.CreateArchive(
+                    persisted.Select(file => file.FullPath).ToArray()));
+                await Share.Default.RequestAsync(new ShareFileRequest(
+                    "AssetStudio unpacked files", new ShareFile(archivePath)));
+                SetBusy(false, "Unpacked files are ready to share.");
+            }
+            catch (Exception ex)
+            {
+                SetBusy(false, $"File extraction failed: {ex.Message}");
+                if (_showErrorMessages) await DisplayAlert("File extraction failed", ex.Message, "OK");
+            }
+            return;
+        }
+
+        if (AssetFolderPickerRequested == null)
         {
             ReportUnwired("Extract file");
             return;
@@ -590,7 +693,10 @@ public partial class MainPage : ContentPage
     {
         if (ExtractFolderRequested == null || AssetFolderPickerRequested == null)
         {
-            ReportUnwired("Extract folder");
+            await DisplayAlert("Extract folder",
+                "On iPhone, choose Extract file and select the Unity bundles or ZIP files to unpack.",
+                "Choose files");
+            await ExtractFilesAsync();
             return;
         }
 
@@ -633,7 +739,10 @@ public partial class MainPage : ContentPage
     {
         if (AssetFolderPickerRequested == null || AssetFolderSelected == null)
         {
-            StatusLabel.Text = "Folder loading requires host folder-picker and AssetStudio loader adapters";
+            await DisplayAlert("Load folder",
+                "On iPhone, choose Load file to select multiple Unity files from Files.",
+                "Choose files");
+            await PickAssetFilesAsync();
             return;
         }
 
@@ -718,7 +827,6 @@ public partial class MainPage : ContentPage
         _sortColumn = -1;
         _reverseSort = false;
         ClearSelectedAsset();
-        ResetPreviewSurface();
         PreviewTitle.Text = "Preview";
         PreviewKind.Text = "Select an asset";
         PreviewDetails.Text = "Select an asset to inspect it.";
@@ -876,12 +984,6 @@ public partial class MainPage : ContentPage
 
     private async Task RunAssetExportAsync(string exportKind, string scope)
     {
-        if (ExportAssetsRequested == null || AssetFolderPickerRequested == null)
-        {
-            ReportUnwired($"{exportKind} export");
-            return;
-        }
-
         IReadOnlyList<AssetRow> targets = scope switch
         {
             "All assets" => _allAssets.ToList(),
@@ -895,17 +997,57 @@ public partial class MainPage : ContentPage
             return;
         }
 
-        var destination = await AssetFolderPickerRequested.Invoke();
-        if (string.IsNullOrWhiteSpace(destination)) return;
-
         using var cancellation = new CancellationTokenSource();
         try
         {
             SetBusy(true, $"Exporting {targets.Count} assets…");
-            var progress = new Progress<AssetLoadProgress>(update =>
-                SetLoadingProgress(Math.Clamp(update.Percent, 0, 100),
-                    string.IsNullOrWhiteSpace(update.Message) ? $"Exporting {targets.Count} assets…" : update.Message));
-            var count = await ExportAssetsRequested.Invoke(exportKind, targets, destination, progress, cancellation.Token);
+            int count;
+            if (ExportAssetsRequested != null)
+            {
+                if (AssetFolderPickerRequested == null)
+                    throw new InvalidOperationException("The connected exporter requires a destination folder picker.");
+
+                var destination = await AssetFolderPickerRequested.Invoke();
+                if (string.IsNullOrWhiteSpace(destination)) return;
+                var progress = new Progress<AssetLoadProgress>(update =>
+                    SetLoadingProgress(Math.Clamp(update.Percent, 0, 100),
+                        string.IsNullOrWhiteSpace(update.Message) ? $"Exporting {targets.Count} assets…" : update.Message));
+                count = await ExportAssetsRequested.Invoke(exportKind, targets, destination, progress, cancellation.Token);
+            }
+            else
+            {
+                var sourceAssets = targets
+                    .Select(row => row.SourceAsset)
+                    .OfType<AssetStudio.Object>()
+                    .ToArray();
+                if (sourceAssets.Length != targets.Count)
+                    throw new InvalidOperationException("One or more selected rows are not backed by parsed Unity assets.");
+
+                var outputPath = await Task.Run(() =>
+                {
+                    if (sourceAssets.Length == 1)
+                    {
+                        return exportKind switch
+                        {
+                            "Raw" => MobileAssetExporter.ExportRaw(sourceAssets[0]),
+                            "Dump" => MobileAssetExporter.ExportDump(sourceAssets[0]),
+                            _ => MobileAssetExporter.Export(sourceAssets[0])
+                        };
+                    }
+
+                    var kind = exportKind switch
+                    {
+                        "Raw" => MobileExportKind.Raw,
+                        "Dump" => MobileExportKind.Dump,
+                        _ => MobileExportKind.Converted
+                    };
+                    return MobileAssetExporter.ExportArchive(sourceAssets, kind);
+                }, cancellation.Token);
+
+                await Share.Default.RequestAsync(new ShareFileRequest(
+                    $"AssetStudio {exportKind} export", new ShareFile(outputPath)));
+                count = sourceAssets.Length;
+            }
             StatusLabel.Text = $"Exported {count} item(s) · {exportKind} · {scope}";
         }
         catch (OperationCanceledException)
@@ -940,8 +1082,8 @@ public partial class MainPage : ContentPage
         });
         await Navigation.PushModalAsync(new NavigationPage(dialog)
         {
-            BarBackgroundColor = Color.FromArgb("#22252B"),
-            BarTextColor = Color.FromArgb("#F1F3F5")
+            BarBackgroundColor = Color.FromArgb("#E8E8E8"),
+            BarTextColor = Color.FromArgb("#202020")
         });
     }
 
@@ -986,11 +1128,17 @@ public partial class MainPage : ContentPage
     {
         if (sender is not Button button) return;
         _browserTab = button.Text;
+        HierarchyTab.BackgroundColor = _browserTab == HierarchyTab.Text ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
+        AssetListTab.BackgroundColor = _browserTab == AssetListTab.Text ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
+        ClassesTab.BackgroundColor = _browserTab == ClassesTab.Text ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
         RefreshBrowserTab();
     }
 
     private void RefreshBrowserTab()
     {
+        HierarchyTab.BackgroundColor = _browserTab == HierarchyTab.Text ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
+        AssetListTab.BackgroundColor = _browserTab == AssetListTab.Text ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
+        ClassesTab.BackgroundColor = _browserTab == ClassesTab.Text ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
         AssetCollection.IsVisible = _browserTab == "Asset List";
         HierarchyCollection.IsVisible = _browserTab == "Scene Hierarchy";
         ClassesCollection.IsVisible = _browserTab == "Asset Classes";
@@ -998,7 +1146,7 @@ public partial class MainPage : ContentPage
         ClassSearch.IsVisible = _browserTab == "Asset Classes";
         HierarchySearchPanel.IsVisible = _browserTab == "Scene Hierarchy";
         HierarchyActions.IsVisible = _browserTab == "Scene Hierarchy";
-        AssetColumnHeaders.IsVisible = _browserTab == "Asset List";
+        AssetColumnHeaders.IsVisible = _compactWorkspace != true && _browserTab == "Asset List";
         StatusLabel.Text = $"{_browserTab} · {(_browserTab == "Asset List" ? _visibleAssets.Count : _browserTab == "Scene Hierarchy" ? _hierarchy.Count : _visibleClasses.Count)} items";
     }
 
@@ -1205,6 +1353,7 @@ public partial class MainPage : ContentPage
         }
 
         _selectedAsset = row;
+        _showingEmptyPreview = false;
         ResetPreviewSurface();
         PreviewTitle.Text = row.Name;
         PreviewKind.Text = row.Type;
@@ -1214,6 +1363,66 @@ public partial class MainPage : ContentPage
         _showingDump = false;
         RefreshPreviewSurfaceVisibility();
         StatusLabel.Text = $"{_selectedAssets.Count} selected · Preview: {row.Name}";
+        _ = PresentAssetPreviewAsync(row);
+    }
+
+    private async Task PresentAssetPreviewAsync(AssetRow row)
+    {
+        try
+        {
+            switch (row.SourceAsset)
+            {
+                case AssetStudio.TextAsset text:
+                    ShowTextPreview(row.Name, "TextAsset", Encoding.UTF8.GetString(text.m_Script));
+                    break;
+                case AssetStudio.Texture2D texture:
+                    PreviewDetails.Text = "Decoding texture…";
+                    var imagePath = await Task.Run(() => MobileAssetExporter.Export(texture));
+                    if (_selectedAsset?.Id != row.Id) return;
+                    ShowTexturePreview(row.Name, ImageSource.FromFile(imagePath), texture.m_Width,
+                        texture.m_Height, texture.m_TextureFormat.ToString());
+                    break;
+                case AssetStudio.Mesh mesh:
+                    ShowModelPreview(row.Name,
+                        $"Mesh · {mesh.m_VertexCount:N0} vertices · Open the wireframe preview to inspect it.");
+                    break;
+                case AssetStudio.MonoBehaviour behaviour:
+                    ShowTextPreview(row.Name, "MonoBehaviour dump", behaviour.Dump() ?? string.Empty);
+                    break;
+                case AssetStudio.AudioClip audio:
+                    ShowAudioPreview(row.Name, audio.m_CompressionFormat.ToString(),
+                        "Audio is available for export in its stored format. Playback needs a native iOS audio backend.");
+                    break;
+                case AssetStudio.VideoClip:
+                    ShowUnsupportedPreview(row.Name, "VideoClip",
+                        "Video data can be exported in its stored format.");
+                    break;
+                default:
+                    ShowUnsupportedPreview(row.Name, row.Type,
+                        $"No mobile preview is available for {row.Type}. Use Export to save the asset.");
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            if (_selectedAsset?.Id != row.Id) return;
+            ShowUnsupportedPreview(row.Name, row.Type, $"Preview failed: {ex.Message}");
+        }
+    }
+
+    private async void OnMeshPreviewClicked(object sender, EventArgs e)
+    {
+        if (_selectedAsset?.SourceAsset is not AssetStudio.Mesh mesh)
+            return;
+
+        try
+        {
+            await Navigation.PushModalAsync(new NavigationPage(new MeshPreviewPage(mesh)));
+        }
+        catch (Exception ex)
+        {
+            await DisplayAlert("Mesh preview failed", ex.Message, "OK");
+        }
     }
 
     // Returns the current multi-selection in the same order reported by CollectionView.
@@ -1224,6 +1433,7 @@ public partial class MainPage : ContentPage
     {
         _selectedAsset = null;
         _selectedAssets.Clear();
+        _showingEmptyPreview = true;
         ResetPreviewSurface();
         PreviewTitle.Text = "Preview";
         PreviewKind.Text = "Select an asset";
@@ -1235,10 +1445,11 @@ public partial class MainPage : ContentPage
 
     private void RefreshPreviewSurfaceVisibility()
     {
-        PreviewScroll.IsVisible = _previewEnabled && !_showingDump;
-        DumpScroll.IsVisible = _previewEnabled && _showingDump;
-        PreviewTab.BackgroundColor = !_showingDump ? Color.FromArgb("#46566D") : Color.FromArgb("#30353E");
-        DumpTab.BackgroundColor = _showingDump ? Color.FromArgb("#46566D") : Color.FromArgb("#30353E");
+        PreviewScroll.IsVisible = _previewEnabled && !_showingDump && !_showingEmptyPreview;
+        DumpScroll.IsVisible = _previewEnabled && _showingDump && !_showingEmptyPreview;
+        EmptyPreviewSurface.IsVisible = _previewEnabled && _showingEmptyPreview;
+        PreviewTab.BackgroundColor = !_showingDump ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
+        DumpTab.BackgroundColor = _showingDump ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
     }
 
     private void OnHierarchySelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -1263,6 +1474,7 @@ public partial class MainPage : ContentPage
     private void OnClassSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (e.CurrentSelection.FirstOrDefault() is not ClassRow item) return;
+        _showingEmptyPreview = false;
         PreviewTitle.Text = $"{item.Name} ({item.Id})";
         PreviewDetails.Text = string.IsNullOrWhiteSpace(item.Summary)
             ? $"Class ID: {item.Id}\nVersion: {item.Version}\nSelect Dump to inspect the serialized type tree."
@@ -1270,6 +1482,7 @@ public partial class MainPage : ContentPage
         DumpText.Text = string.IsNullOrWhiteSpace(item.StructureText)
             ? $"No type-tree structure was supplied for {item.Name}.\n\nClass ID: {item.Id}\nVersion: {item.Version}"
             : item.StructureText;
+        RefreshPreviewSurfaceVisibility();
         StatusLabel.Text = $"Selected class: {item.Name} ({item.Id})";
         OnDumpTabClicked(this, EventArgs.Empty);
     }
@@ -1280,10 +1493,27 @@ public partial class MainPage : ContentPage
         RefreshPreviewSurfaceVisibility();
     }
 
-    private void OnDumpTabClicked(object sender, EventArgs e)
+    private async void OnDumpTabClicked(object sender, EventArgs e)
     {
         _showingDump = true;
         RefreshPreviewSurfaceVisibility();
+        var row = _selectedAsset;
+        if (_browserTab != "Asset List" || row == null || row.SourceAsset is not AssetStudio.Object asset)
+            return;
+
+        DumpText.Text = "Generating serialized dump…";
+        try
+        {
+            var dump = await Task.Run(() => asset.Dump() ?? string.Empty);
+            if (_selectedAsset?.Id == row.Id)
+                DumpText.Text = dump;
+        }
+        catch (Exception ex)
+        {
+            if (_selectedAsset?.Id != row.Id) return;
+            DumpText.Text = $"Dump failed: {ex.Message}";
+            StatusLabel.Text = $"Dump failed: {ex.Message}";
+        }
     }
 
     // Native multi-select type filter. The original WinForms menu permits
@@ -1303,21 +1533,21 @@ public partial class MainPage : ContentPage
                                         : new HashSet<string>(current, StringComparer.Ordinal);
             _completed = completed;
             Title = "Filter Type";
-            BackgroundColor = Color.FromArgb("#17191D");
+            BackgroundColor = Color.FromArgb("#FFFFFF");
 
-            var selectAll = new Button { Text = "Select all", BackgroundColor = Color.FromArgb("#303640"), TextColor = Colors.White };
+            var selectAll = new Button { Text = "Select all", BackgroundColor = Color.FromArgb("#E0E0E0"), TextColor = Color.FromArgb("#202020") };
             selectAll.Clicked += (_, _) => SetAll(true);
-            var clearAll = new Button { Text = "Clear", BackgroundColor = Color.FromArgb("#303640"), TextColor = Colors.White };
+            var clearAll = new Button { Text = "Clear", BackgroundColor = Color.FromArgb("#E0E0E0"), TextColor = Color.FromArgb("#202020") };
             clearAll.Clicked += (_, _) => SetAll(false);
             var list = new VerticalStackLayout { Spacing = 2, Padding = new Thickness(12, 4) };
             foreach (var type in types)
             {
-                var check = new CheckBox { IsChecked = _selected.Contains(type), Color = Color.FromArgb("#65A8FF"), VerticalOptions = LayoutOptions.Center };
+                var check = new CheckBox { IsChecked = _selected.Contains(type), Color = Color.FromArgb("#2878C8"), VerticalOptions = LayoutOptions.Center };
                 check.CheckedChanged += (_, args) =>
                 {
                     if (args.Value) _selected.Add(type); else _selected.Remove(type);
                 };
-                var label = new Label { Text = type, TextColor = Color.FromArgb("#E7EAF0"), VerticalTextAlignment = TextAlignment.Center, FontSize = 14 };
+                var label = new Label { Text = type, TextColor = Color.FromArgb("#202020"), VerticalTextAlignment = TextAlignment.Center, FontSize = 14 };
                 var row = new Grid { ColumnDefinitions = { new ColumnDefinition(GridLength.Auto), new ColumnDefinition(GridLength.Star) }, Padding = new Thickness(4, 3) };
                 row.Add(check); row.Add(label, 1);
                 var tap = new TapGestureRecognizer();
@@ -1328,7 +1558,7 @@ public partial class MainPage : ContentPage
 
             var apply = new Button { Text = "Apply", BackgroundColor = Color.FromArgb("#2878C8"), TextColor = Colors.White };
             apply.Clicked += async (_, _) => await Finish(true);
-            var cancel = new Button { Text = "Cancel", BackgroundColor = Color.FromArgb("#303640"), TextColor = Colors.White };
+            var cancel = new Button { Text = "Cancel", BackgroundColor = Color.FromArgb("#E0E0E0"), TextColor = Color.FromArgb("#202020") };
             cancel.Clicked += async (_, _) => await Finish(false);
             var top = new Grid { ColumnDefinitions = { new ColumnDefinition(GridLength.Star), new ColumnDefinition(GridLength.Star) }, ColumnSpacing = 8 };
             top.Add(selectAll); top.Add(clearAll, 1);
@@ -1370,8 +1600,10 @@ public partial class MainPage : ContentPage
     // the loader's actual work; this page never estimates it.
     public sealed record AssetLoadProgress(int Percent, string Message);
 
-    public sealed class AssetRow
+    public sealed class AssetRow : BindableObject
     {
+        private bool _isCompactLayout;
+
         // Stable UI identity is separate from PathID: PathIDs are only unique
         // within a serialized file and can legitimately repeat across files.
         public string Id { get; init; } = Guid.NewGuid().ToString("N");
@@ -1389,6 +1621,27 @@ public partial class MainPage : ContentPage
         // It deliberately avoids referencing the WinForms-only AssetItem type.
         // Keep this reference alive for as long as the row is in the workspace.
         public object? SourceAsset { get; init; }
+
+        public bool IsCompactLayout
+        {
+            get => _isCompactLayout;
+            set
+            {
+                if (_isCompactLayout == value) return;
+                _isCompactLayout = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(IsDesktopLayout));
+            }
+        }
+
+        public bool IsDesktopLayout => !IsCompactLayout;
+        public string CompactDetails => string.Join(" · ", new[]
+        {
+            Type,
+            Container,
+            string.IsNullOrWhiteSpace(PathId) ? null : $"ID {PathId}",
+            Size
+        }.Where(value => !string.IsNullOrWhiteSpace(value)));
     }
 
     // Host adapter: create a UI row from the real core AssetStudio object.

@@ -2,7 +2,11 @@
 
 Audit basis: original `AssetStudio-master-original.zip` extracted at `/mnt/data/as_original/AssetStudio-master`, compared with the actual v27 mobile source folder.
 
-## Important finding
+## Current status
+
+This report describes the earlier v27 reconstruction and is historical, not an audit of the current source tree. The current MAUI project has a `.csproj`, references the `AssetStudio` parser, and connects `AssetStudioMobileLoader` to the page. See `AssetStudio.Mobile/AssetStudioMobile.csproj` and `AssetStudio.Mobile/AssetStudioMobileLoader.cs`.
+
+## Historical finding from v27
 
 **None of the original repository projects are currently compiled into the v27 mobile source.** The v27 folder contains reconstructed MAUI page files and iOS drop support, but it has no `.csproj`, `.sln`, project references, or direct `using AssetStudio...` integration. `MainPage.AssetRow.SourceObject` is only an opaque `object` reference. Therefore, the categories below describe what should be reused, adapted, or excluded for the port—not files already integrated.
 
