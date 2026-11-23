@@ -90,7 +90,7 @@ public partial class MainPage : ContentPage
         if (WorkspaceGrid.Width <= 0 || WorkspaceGrid.Height <= 0)
             return;
 
-        var compact = WorkspaceGrid.Width < 960;
+        var compact = WorkspaceGrid.Width < 500;
         if (_compactWorkspace == compact)
             return;
 
@@ -740,9 +740,9 @@ public partial class MainPage : ContentPage
         if (AssetFolderPickerRequested == null || AssetFolderSelected == null)
         {
             await DisplayAlert("Load folder",
-                "On iPhone, choose Load file to select multiple Unity files from Files.",
+                "Folder picking is not available here. Select multiple Unity files from Files instead.",
                 "Choose files");
-            await PickAssetFilesAsync();
+            await PickAssetFilesAsync(allowMultiple: true);
             return;
         }
 
@@ -787,20 +787,51 @@ public partial class MainPage : ContentPage
         }
     }
 
-    private async Task PickAssetFilesAsync()
+    private async Task PickAssetFilesAsync(bool allowMultiple = false)
     {
+        SetBusy(true, allowMultiple ? "Choose Unity files…" : "Choose a Unity file…");
         try
         {
-            var files = await FilePicker.PickMultipleAsync(new PickOptions { PickerTitle = "Select Unity asset files" });
-            var selected = files?.ToList() ?? new List<FileResult>();
-            if (selected.Count == 0) return;
+            List<FileResult> selected;
+            if (allowMultiple)
+            {
+                var files = await FilePicker.Default.PickMultipleAsync(
+                    new PickOptions { PickerTitle = "Select Unity asset files" });
+                selected = files?.ToList() ?? new List<FileResult>();
+            }
+            else
+            {
+                var file = await FilePicker.Default.PickAsync(
+                    new PickOptions { PickerTitle = "Select a Unity asset file" });
+                selected = file == null ? new List<FileResult>() : new List<FileResult> { file };
+            }
+
+            if (selected.Count == 0)
+            {
+                SetBusy(false, "File selection cancelled.");
+                return;
+            }
+
             var persisted = new List<FileResult>();
-            foreach (var file in selected) persisted.Add(await _documentLibrary.ImportAsync(file));
+            foreach (var file in selected)
+            {
+                SetBusy(true, $"Copying {file.FileName} to Library…");
+                var imported = await _documentLibrary.ImportAsync(file);
+                if (string.IsNullOrWhiteSpace(imported.FullPath) || !File.Exists(imported.FullPath))
+                    throw new IOException($"The selected file '{file.FileName}' was not saved to the AssetStudio library.");
+                persisted.Add(imported);
+            }
+
+            SetBusy(false, $"{persisted.Count} file(s) copied to Library.");
             await LoadPersistentFilesAsync(persisted, "Imported files");
+        }
+        catch (OperationCanceledException)
+        {
+            SetBusy(false, "File selection cancelled.");
         }
         catch (Exception ex)
         {
-            SetBusy(false, "Ready");
+            SetBusy(false, $"File import failed: {ex.Message}");
             StatusLabel.Text = $"File import failed: {ex.Message}";
             await DisplayAlert("File import failed", ex.Message, "OK");
         }
