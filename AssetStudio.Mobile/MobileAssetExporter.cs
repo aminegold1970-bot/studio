@@ -1769,12 +1769,13 @@ internal static class MobileAssetExporter
             + sprite.m_Rect.width * sprite.m_Pivot.X - textureRectOffset.X;
         var y = position.Y * sprite.m_PixelsToUnits
             + sprite.m_Rect.height * sprite.m_Pivot.Y - textureRectOffset.Y;
+        // Map mesh points into the same counterclockwise orientation as the pixel crop.
         return rotation switch
         {
             SpritePackingRotation.FlipHorizontal => (cropWidth - x, y),
             SpritePackingRotation.FlipVertical => (x, cropHeight - y),
             SpritePackingRotation.Rotate180 => (cropWidth - x, cropHeight - y),
-            SpritePackingRotation.Rotate90 => (cropHeight - y, x),
+            SpritePackingRotation.Rotate90 => (y, cropWidth - x),
             _ => (x, y)
         };
     }
@@ -2035,13 +2036,46 @@ internal static class MobileAssetExporter
         if (data is not { Length: > 0 })
             throw new InvalidDataException("This video clip contains no embedded video data.");
 
-        var extension = Path.GetExtension(video.m_OriginalPath);
-        if (string.IsNullOrWhiteSpace(extension) || extension.Length > 10
-            || extension.Any(character => !char.IsAsciiLetterOrDigit(character) && character != '.'))
+        return (data, GetVideoExtension(video.m_OriginalPath, data));
+    }
+
+    private static string GetVideoExtension(string? originalPath, byte[] data)
+    {
+        var extension = Path.GetExtension(originalPath ?? string.Empty);
+        if (!string.IsNullOrWhiteSpace(extension) && extension.Length <= 10
+            && extension.All(character => char.IsAsciiLetterOrDigit(character) || character == '.'))
         {
-            extension = ".video";
+            return extension.ToLowerInvariant();
         }
-        return (data, extension.ToLowerInvariant());
+
+        var bytes = data.AsSpan();
+        if (bytes.Length >= 12 && bytes.Slice(4, 4).SequenceEqual("ftyp"u8))
+        {
+            var brand = bytes.Slice(8, 4);
+            if (brand.SequenceEqual("qt  "u8))
+                return ".mov";
+            if (brand.SequenceEqual("M4V "u8))
+                return ".m4v";
+            return ".mp4";
+        }
+        if (bytes.StartsWith("OggS"u8))
+            return ".ogv";
+        if (bytes.Length >= 4
+            && bytes[0] == 0x1A && bytes[1] == 0x45
+            && bytes[2] == 0xDF && bytes[3] == 0xA3)
+        {
+            return bytes.IndexOf("webm"u8) >= 0 ? ".webm" : ".mkv";
+        }
+        if (bytes.Length >= 12 && bytes.StartsWith("RIFF"u8) && bytes.Slice(8, 4).SequenceEqual("AVI "u8))
+            return ".avi";
+        if (bytes.Length >= 4
+            && bytes[0] == 0 && bytes[1] == 0 && bytes[2] == 1
+            && bytes[3] is 0xBA or 0xB3)
+        {
+            return ".mpg";
+        }
+
+        return ".video";
     }
 
     private static (byte[] Data, string Extension) ExportMovieTexture(MovieTexture movie)

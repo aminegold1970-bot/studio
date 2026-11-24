@@ -1972,15 +1972,18 @@ public partial class MainPage : ContentPage
         var currentTypes = _selectedTypes == null
             ? null
             : _selectedTypes.Where(types.Contains).ToHashSet(StringComparer.Ordinal);
-        var dialog = new AssetTypeFilterPage(types, currentTypes, selected =>
-        {
-            _selectedTypes = selected.Count == types.Length ? null : selected;
-            _browserTab = "Asset List";
-            RefreshBrowserTab();
-            ClearAssetListSelectionForFilterChange();
-            ApplyAssetFilter();
-        });
+        var dialog = new AssetTypeFilterPage(types, currentTypes);
         await Navigation.PushModalAsync(CreateModalNavigationPage(dialog));
+        var selectedTypes = await dialog.Completion;
+        if (selectedTypes == null)
+            return;
+
+        _selectedTypes = selectedTypes.Count == types.Length ? null : selectedTypes;
+        _browserTab = "Asset List";
+        RefreshBrowserTab();
+        ClearAssetListSelectionForFilterChange();
+        ApplyAssetFilter();
+        AssetCollection.Focus();
     }
 
     private async void OnDebugMenuClicked(object sender, EventArgs e)
@@ -2354,6 +2357,7 @@ public partial class MainPage : ContentPage
         RebuildVisibleHierarchy();
         HierarchyCollection.SelectedItem = match;
         HierarchyCollection.ScrollTo(match, ScrollToPosition.MakeVisible, animate: true);
+        HierarchyCollection.Focus();
         StatusLabel.Text = $"Scene object {_nextHierarchySearchResult} / {_hierarchySearchResults.Count}: {match.DisplayName}";
     }
 
@@ -2483,6 +2487,7 @@ public partial class MainPage : ContentPage
         RebuildVisibleHierarchy();
         HierarchyCollection.SelectedItem = node;
         HierarchyCollection.ScrollTo(node, ScrollToPosition.MakeVisible, animate: true);
+        HierarchyCollection.Focus();
         StatusLabel.Text = $"Scene object: {node.DisplayName}";
     }
 
@@ -3239,7 +3244,8 @@ public partial class MainPage : ContentPage
     {
         private readonly HashSet<string> _selected;
         private readonly List<TypeFilterRow> _allRows;
-        private readonly Action<HashSet<string>> _completed;
+        private readonly TaskCompletionSource<HashSet<string>?> _completion =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly SearchBar _search = new()
         {
             Placeholder = "Search asset types…",
@@ -3253,11 +3259,10 @@ public partial class MainPage : ContentPage
         private bool _updatingRows;
         private bool _finished;
 
-        public AssetTypeFilterPage(string[] types, HashSet<string>? current, Action<HashSet<string>> completed)
+        public AssetTypeFilterPage(string[] types, HashSet<string>? current)
         {
             _selected = current == null ? new HashSet<string>(types, StringComparer.Ordinal)
                                         : new HashSet<string>(current, StringComparer.Ordinal);
-            _completed = completed;
             Title = "Filter Type";
             BackgroundColor = Color.FromArgb("#FFFFFF");
 
@@ -3357,6 +3362,15 @@ public partial class MainPage : ContentPage
             ApplyFilter();
         }
 
+        public Task<HashSet<string>?> Completion => _completion.Task;
+
+        protected override void OnDisappearing()
+        {
+            base.OnDisappearing();
+            if (!_finished)
+                _completion.TrySetResult(null);
+        }
+
         private void SetAll(bool enabled)
         {
             _updatingRows = true;
@@ -3412,9 +3426,19 @@ public partial class MainPage : ContentPage
         {
             if (_finished) return;
             _finished = true;
-            if (apply)
-                _completed(new HashSet<string>(_selected, StringComparer.Ordinal));
-            await Navigation.PopModalAsync();
+            var result = apply
+                ? new HashSet<string>(_selected, StringComparer.Ordinal)
+                : null;
+            try
+            {
+                await Navigation.PopModalAsync();
+                _completion.TrySetResult(result);
+            }
+            catch (Exception exception)
+            {
+                _completion.TrySetException(exception);
+                throw;
+            }
         }
     }
 
