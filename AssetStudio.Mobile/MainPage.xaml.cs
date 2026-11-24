@@ -109,6 +109,9 @@ public partial class MainPage : ContentPage
         DroppedFilesReceived += OnDroppedFilesReceived;
         DropFailed += OnDropFailed;
         DropTargetChanged += OnDropTargetChanged;
+#if IOS
+        Loaded += OnDropPageLoaded;
+#endif
         var workspaceSplitter = new PanGestureRecognizer();
         workspaceSplitter.PanUpdated += OnWorkspaceDividerPanUpdated;
         WorkspaceDivider.GestureRecognizers.Add(workspaceSplitter);
@@ -233,10 +236,27 @@ public partial class MainPage : ContentPage
     {
         base.OnHandlerChanged();
 #if IOS
-        if (Handler?.PlatformView is UIKit.UIViewController controller && controller.View is { } view)
-            AssetStudioDropBridge.Attach(view);
+        // The MAUI page handler can be created before its native view enters the
+        // window. Attach again after layout so the live iOS view is a real drop target.
+        MainThread.BeginInvokeOnMainThread(AttachNativeDropTarget);
 #endif
     }
+
+#if IOS
+    private void OnDropPageLoaded(object? sender, EventArgs e) =>
+        MainThread.BeginInvokeOnMainThread(AttachNativeDropTarget);
+
+    private void AttachNativeDropTarget()
+    {
+        if (Handler?.PlatformView is UIKit.UIViewController controller &&
+            controller.View is UIKit.UIView pageView)
+        {
+            AssetStudioDropBridge.Attach(pageView);
+            if (pageView.Window is UIKit.UIWindow window)
+                AssetStudioDropBridge.Attach(window);
+        }
+    }
+#endif
 
     // Native iOS UIDropInteraction sends temporary file paths here. They are
     // immediately copied into the app's Documents library before the provider URL expires.
