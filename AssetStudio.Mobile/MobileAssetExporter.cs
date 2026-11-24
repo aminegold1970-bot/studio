@@ -8,6 +8,7 @@ using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats.Bmp;
 using SixLabors.ImageSharp.Formats.Tga;
 using SixLabors.ImageSharp.PixelFormats;
+using SixLabors.ImageSharp.Processing;
 using ImageSharpImage = SixLabors.ImageSharp.Image;
 using System.Xml.Linq;
 using NumericsMatrix4x4 = System.Numerics.Matrix4x4;
@@ -1526,21 +1527,44 @@ internal static class MobileAssetExporter
         }
 
         var source = DecodeTexture(texture, cancellationToken);
+        var sourceWidth = texture.m_Width;
+        var sourceHeight = texture.m_Height;
         var alphaSource = alphaTexture == null ? null : DecodeTexture(alphaTexture, cancellationToken);
-        var scale = downscaleMultiplier > 0 && float.IsFinite(downscaleMultiplier)
-            ? 1f / downscaleMultiplier
-            : 1f;
-        var rectLeft = textureRect.x * scale;
-        var rectTop = textureRect.y * scale;
-        var rectRight = (textureRect.x + textureRect.width) * scale;
-        var rectBottom = (textureRect.y + textureRect.height) * scale;
+        var alphaWidth = alphaTexture?.m_Width ?? 0;
+        var alphaHeight = alphaTexture?.m_Height ?? 0;
+        if (downscaleMultiplier > 0 && downscaleMultiplier != 1f)
+        {
+            if (!float.IsFinite(downscaleMultiplier))
+                throw new InvalidDataException("The sprite has an invalid downscale multiplier.");
+            sourceWidth = GetDownscaledTextureDimension(sourceWidth, downscaleMultiplier);
+            sourceHeight = GetDownscaledTextureDimension(sourceHeight, downscaleMultiplier);
+            source = ResizeSpriteTexture(
+                source, texture.m_Width, texture.m_Height, sourceWidth, sourceHeight, cancellationToken);
+            if (alphaTexture != null && alphaSource != null)
+            {
+                alphaWidth = GetDownscaledTextureDimension(alphaWidth, downscaleMultiplier);
+                alphaHeight = GetDownscaledTextureDimension(alphaHeight, downscaleMultiplier);
+                alphaSource = ResizeSpriteTexture(
+                    alphaSource,
+                    alphaTexture.m_Width,
+                    alphaTexture.m_Height,
+                    alphaWidth,
+                    alphaHeight,
+                    cancellationToken);
+            }
+        }
+
+        var rectLeft = textureRect.x;
+        var rectTop = textureRect.y;
+        var rectRight = textureRect.x + textureRect.width;
+        var rectBottom = textureRect.y + textureRect.height;
         if (!float.IsFinite(rectLeft) || !float.IsFinite(rectTop)
             || !float.IsFinite(rectRight) || !float.IsFinite(rectBottom))
             throw new InvalidDataException("The sprite has invalid texture rectangle values.");
-        var left = (int)Math.Clamp(MathF.Floor(rectLeft), 0, texture.m_Width);
-        var top = (int)Math.Clamp(MathF.Floor(rectTop), 0, texture.m_Height);
-        var right = (int)Math.Clamp(MathF.Ceiling(rectRight), 0, texture.m_Width);
-        var bottom = (int)Math.Clamp(MathF.Ceiling(rectBottom), 0, texture.m_Height);
+        var left = (int)Math.Clamp(MathF.Floor(rectLeft), 0, sourceWidth);
+        var top = (int)Math.Clamp(MathF.Floor(rectTop), 0, sourceHeight);
+        var right = (int)Math.Clamp(MathF.Ceiling(rectRight), 0, sourceWidth);
+        var bottom = (int)Math.Clamp(MathF.Ceiling(rectBottom), 0, sourceHeight);
         var cropWidth = right - left;
         var cropHeight = bottom - top;
         if (cropWidth <= 0 || cropHeight <= 0)
@@ -1565,18 +1589,18 @@ internal static class MobileAssetExporter
                     SpritePackingRotation.Rotate90 => (cropWidth - y - 1, x),
                     _ => (x, y)
                 };
-                var sourceOffset = checked(((top + sourceY) * texture.m_Width + left + sourceX) * 4);
+                var sourceOffset = checked(((top + sourceY) * sourceWidth + left + sourceX) * 4);
                 var outputOffset = checked((y * outputWidth + x) * 4);
                 Buffer.BlockCopy(source, sourceOffset, output, outputOffset, 4);
                 if (alphaSource != null)
                 {
                     var alphaX = Math.Clamp(
-                        (int)((left + sourceX + 0.5) * alphaTexture!.m_Width / texture.m_Width),
-                        0, alphaTexture.m_Width - 1);
+                        (int)((left + sourceX + 0.5) * alphaWidth / sourceWidth),
+                        0, alphaWidth - 1);
                     var alphaY = Math.Clamp(
-                        (int)((top + sourceY + 0.5) * alphaTexture.m_Height / texture.m_Height),
-                        0, alphaTexture.m_Height - 1);
-                    var alphaOffset = checked((alphaY * alphaTexture.m_Width + alphaX) * 4);
+                        (int)((top + sourceY + 0.5) * alphaHeight / sourceHeight),
+                        0, alphaHeight - 1);
+                    var alphaOffset = checked((alphaY * alphaWidth + alphaX) * 4);
                     var alphaChannel = alphaTexture.m_TextureFormat == TextureFormat.Alpha8
                         ? alphaSource[alphaOffset + 3]
                         : alphaSource[alphaOffset + 2];
@@ -1595,6 +1619,61 @@ internal static class MobileAssetExporter
         return (
             EncodeImage(outputWidth, outputHeight, output, imageFormat, cancellationToken),
             GetImageExtension(imageFormat));
+    }
+
+    private static int GetDownscaledTextureDimension(int dimension, float multiplier)
+    {
+        var scaledDimension = dimension / multiplier;
+        if (!float.IsFinite(scaledDimension) || scaledDimension < 1 || scaledDimension > int.MaxValue)
+            throw new InvalidDataException("The sprite downscale multiplier produces invalid texture dimensions.");
+        return (int)scaledDimension;
+    }
+
+    private static byte[] ResizeSpriteTexture(
+        byte[] source,
+        int sourceWidth,
+        int sourceHeight,
+        int targetWidth,
+        int targetHeight,
+        CancellationToken cancellationToken)
+    {
+        if (sourceWidth <= 0 || sourceHeight <= 0
+            || targetWidth <= 0 || targetHeight <= 0
+            || (long)sourceWidth * sourceHeight > MaxTexturePixels
+            || (long)targetWidth * targetHeight > MaxTexturePixels)
+        {
+            throw new InvalidDataException("The sprite resize dimensions are invalid or exceed the mobile limit.");
+        }
+
+        var sourceLength = checked((long)sourceWidth * sourceHeight * 4);
+        var targetLength = checked((long)targetWidth * targetHeight * 4);
+        if (source.LongLength != sourceLength)
+        {
+            throw new InvalidDataException("The sprite resize dimensions are invalid or exceed the mobile limit.");
+        }
+
+        using var image = ImageSharpImage.LoadPixelData<Bgra32>(source, sourceWidth, sourceHeight);
+        image.Mutate(operation => operation.Resize(targetWidth, targetHeight));
+        var resized = new byte[checked((int)targetLength)];
+        image.ProcessPixelRows(accessor =>
+        {
+            for (var y = 0; y < targetHeight; y++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var row = accessor.GetRowSpan(y);
+                var rowOffset = y * targetWidth * 4;
+                for (var x = 0; x < targetWidth; x++)
+                {
+                    var pixel = row[x];
+                    var pixelOffset = rowOffset + x * 4;
+                    resized[pixelOffset] = pixel.B;
+                    resized[pixelOffset + 1] = pixel.G;
+                    resized[pixelOffset + 2] = pixel.R;
+                    resized[pixelOffset + 3] = pixel.A;
+                }
+            }
+        });
+        return resized;
     }
 
     private static void ApplySpriteMeshMask(
@@ -1825,14 +1904,14 @@ internal static class MobileAssetExporter
             case MobileImageFormat.Bmp:
                 image.Save(output, new BmpEncoder
                 {
-                    BitsPerPixel = BmpBitsPerPixel.Bit32,
+                    BitsPerPixel = BmpBitsPerPixel.Pixel32,
                     SupportTransparency = true
                 });
                 break;
             case MobileImageFormat.Tga:
                 image.Save(output, new TgaEncoder
                 {
-                    BitsPerPixel = TgaBitsPerPixel.Bit32,
+                    BitsPerPixel = TgaBitsPerPixel.Pixel32,
                     Compression = TgaCompression.None
                 });
                 break;

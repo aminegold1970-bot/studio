@@ -340,10 +340,10 @@ namespace AssetStudio
             for (var i = 0; i < outPutSize; i += 4)
             {
                 var sourceOffset = i * 4;
-                buff[i] = (byte)Math.Round(BitConverter.ToSingle(image_data, sourceOffset + 12) * 255f);
-                buff[i + 1] = (byte)Math.Round(BitConverter.ToSingle(image_data, sourceOffset + 8) * 255f);
-                buff[i + 2] = (byte)Math.Round(BitConverter.ToSingle(image_data, sourceOffset + 4) * 255f);
-                buff[i + 3] = (byte)Math.Round(BitConverter.ToSingle(image_data, sourceOffset) * 255f);
+                buff[i] = ToLdrByte(BitConverter.ToSingle(image_data, sourceOffset + 12));
+                buff[i + 1] = ToLdrByte(BitConverter.ToSingle(image_data, sourceOffset + 8));
+                buff[i + 2] = ToLdrByte(BitConverter.ToSingle(image_data, sourceOffset + 4));
+                buff[i + 3] = ToLdrByte(BitConverter.ToSingle(image_data, sourceOffset));
             }
             return true;
         }
@@ -434,7 +434,7 @@ namespace AssetStudio
             {
                 buff[i] = 0;
                 buff[i + 1] = 0;
-                buff[i + 2] = (byte)Math.Round(Half.ToHalf(image_data, i / 2) * 255f);
+                buff[i + 2] = ToLdrByte(Half.ToHalf(image_data, i / 2));
                 buff[i + 3] = 255;
             }
             return true;
@@ -445,8 +445,8 @@ namespace AssetStudio
             for (var i = 0; i < outPutSize; i += 4)
             {
                 buff[i] = 0;
-                buff[i + 1] = (byte)Math.Round(Half.ToHalf(image_data, i + 2) * 255f);
-                buff[i + 2] = (byte)Math.Round(Half.ToHalf(image_data, i) * 255f);
+                buff[i + 1] = ToLdrByte(Half.ToHalf(image_data, i + 2));
+                buff[i + 2] = ToLdrByte(Half.ToHalf(image_data, i));
                 buff[i + 3] = 255;
             }
             return true;
@@ -456,10 +456,10 @@ namespace AssetStudio
         {
             for (var i = 0; i < outPutSize; i += 4)
             {
-                buff[i] = (byte)Math.Round(Half.ToHalf(image_data, i * 2 + 4) * 255f);
-                buff[i + 1] = (byte)Math.Round(Half.ToHalf(image_data, i * 2 + 2) * 255f);
-                buff[i + 2] = (byte)Math.Round(Half.ToHalf(image_data, i * 2) * 255f);
-                buff[i + 3] = (byte)Math.Round(Half.ToHalf(image_data, i * 2 + 6) * 255f);
+                buff[i] = ToLdrByte(Half.ToHalf(image_data, i * 2 + 4));
+                buff[i + 1] = ToLdrByte(Half.ToHalf(image_data, i * 2 + 2));
+                buff[i + 2] = ToLdrByte(Half.ToHalf(image_data, i * 2));
+                buff[i + 3] = ToLdrByte(Half.ToHalf(image_data, i * 2 + 6));
             }
             return true;
         }
@@ -470,7 +470,7 @@ namespace AssetStudio
             {
                 buff[i] = 0;
                 buff[i + 1] = 0;
-                buff[i + 2] = (byte)Math.Round(BitConverter.ToSingle(image_data, i) * 255f);
+                buff[i + 2] = ToLdrByte(BitConverter.ToSingle(image_data, i));
                 buff[i + 3] = 255;
             }
             return true;
@@ -481,8 +481,8 @@ namespace AssetStudio
             for (var i = 0; i < outPutSize; i += 4)
             {
                 buff[i] = 0;
-                buff[i + 1] = (byte)Math.Round(BitConverter.ToSingle(image_data, i * 2 + 4) * 255f);
-                buff[i + 2] = (byte)Math.Round(BitConverter.ToSingle(image_data, i * 2) * 255f);
+                buff[i + 1] = ToLdrByte(BitConverter.ToSingle(image_data, i * 2 + 4));
+                buff[i + 2] = ToLdrByte(BitConverter.ToSingle(image_data, i * 2));
                 buff[i + 3] = 255;
             }
             return true;
@@ -492,10 +492,10 @@ namespace AssetStudio
         {
             for (var i = 0; i < outPutSize; i += 4)
             {
-                buff[i] = (byte)Math.Round(BitConverter.ToSingle(image_data, i * 4 + 8) * 255f);
-                buff[i + 1] = (byte)Math.Round(BitConverter.ToSingle(image_data, i * 4 + 4) * 255f);
-                buff[i + 2] = (byte)Math.Round(BitConverter.ToSingle(image_data, i * 4) * 255f);
-                buff[i + 3] = (byte)Math.Round(BitConverter.ToSingle(image_data, i * 4 + 12) * 255f);
+                buff[i] = ToLdrByte(BitConverter.ToSingle(image_data, i * 4 + 8));
+                buff[i + 1] = ToLdrByte(BitConverter.ToSingle(image_data, i * 4 + 4));
+                buff[i + 2] = ToLdrByte(BitConverter.ToSingle(image_data, i * 4));
+                buff[i + 3] = ToLdrByte(BitConverter.ToSingle(image_data, i * 4 + 12));
             }
             return true;
         }
@@ -505,9 +505,9 @@ namespace AssetStudio
             for (var i = 0; i < outPutSize; i += 4)
             {
                 var sourceOffset = i * 3;
-                buff[i] = (byte)Math.Round(BitConverter.ToSingle(image_data, sourceOffset + 8) * 255f);
-                buff[i + 1] = (byte)Math.Round(BitConverter.ToSingle(image_data, sourceOffset + 4) * 255f);
-                buff[i + 2] = (byte)Math.Round(BitConverter.ToSingle(image_data, sourceOffset) * 255f);
+                buff[i] = ToLdrByte(BitConverter.ToSingle(image_data, sourceOffset + 8));
+                buff[i + 1] = ToLdrByte(BitConverter.ToSingle(image_data, sourceOffset + 4));
+                buff[i + 2] = ToLdrByte(BitConverter.ToSingle(image_data, sourceOffset));
                 buff[i + 3] = 255;
             }
             return true;
@@ -519,34 +519,43 @@ namespace AssetStudio
             return (byte)(byte.MaxValue < x ? byte.MaxValue : (x > byte.MinValue ? x : byte.MinValue));
         }
 
+        private static byte ToLdrByte(double value)
+        {
+            if (double.IsNaN(value))
+                return 0;
+            return (byte)Math.Round(Math.Clamp(value, 0d, 1d) * byte.MaxValue);
+        }
+
         private bool DecodeYUY2(byte[] image_data, byte[] buff)
         {
             int p = 0;
             int o = 0;
-            int halfWidth = m_Width / 2;
+            int pairsWide = (m_Width + 1) / 2;
             for (int j = 0; j < m_Height; j++)
             {
-                for (int i = 0; i < halfWidth; ++i)
+                for (int i = 0; i < pairsWide; ++i)
                 {
                     int y0 = image_data[p++];
                     int u0 = image_data[p++];
                     int y1 = image_data[p++];
                     int v0 = image_data[p++];
-                    int c = y0 - 16;
-                    int d = u0 - 128;
-                    int e = v0 - 128;
-                    buff[o++] = ClampByte((298 * c + 516 * d + 128) >> 8);            // b
-                    buff[o++] = ClampByte((298 * c - 100 * d - 208 * e + 128) >> 8);  // g
-                    buff[o++] = ClampByte((298 * c + 409 * e + 128) >> 8);            // r
-                    buff[o++] = 255;
-                    c = y1 - 16;
-                    buff[o++] = ClampByte((298 * c + 516 * d + 128) >> 8);            // b
-                    buff[o++] = ClampByte((298 * c - 100 * d - 208 * e + 128) >> 8);  // g
-                    buff[o++] = ClampByte((298 * c + 409 * e + 128) >> 8);            // r
-                    buff[o++] = 255;
+                    WriteYuy2Pixel(y0, u0, v0, buff, ref o);
+                    if (i * 2 + 1 < m_Width)
+                        WriteYuy2Pixel(y1, u0, v0, buff, ref o);
                 }
             }
             return true;
+        }
+
+        private static void WriteYuy2Pixel(int y, int u, int v, byte[] output, ref int offset)
+        {
+            var c = y - 16;
+            var d = u - 128;
+            var e = v - 128;
+            output[offset++] = ClampByte((298 * c + 516 * d + 128) >> 8);
+            output[offset++] = ClampByte((298 * c - 100 * d - 208 * e + 128) >> 8);
+            output[offset++] = ClampByte((298 * c + 409 * e + 128) >> 8);
+            output[offset++] = 255;
         }
 
         private bool DecodeRGB9e5Float(byte[] image_data, byte[] buff)
@@ -559,9 +568,9 @@ namespace AssetStudio
                 var b = n >> 18 & 0x1ff;
                 var g = n >> 9 & 0x1ff;
                 var r = n & 0x1ff;
-                buff[i] = (byte)Math.Round(b * scalef * 255f);
-                buff[i + 1] = (byte)Math.Round(g * scalef * 255f);
-                buff[i + 2] = (byte)Math.Round(r * scalef * 255f);
+                buff[i] = ToLdrByte(b * scalef);
+                buff[i + 1] = ToLdrByte(g * scalef);
+                buff[i + 2] = ToLdrByte(r * scalef);
                 buff[i + 3] = 255;
             }
             return true;
