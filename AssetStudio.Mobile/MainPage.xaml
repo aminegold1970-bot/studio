@@ -9,7 +9,7 @@
                     <Button Text="Options" Clicked="OnOptionsMenuClicked" Style="{StaticResource MenuButton}"/>
                     <Button Text="Model" Clicked="OnModelMenuClicked" Style="{StaticResource MenuButton}"/>
                     <Button Text="Export" Clicked="OnExportMenuClicked" Style="{StaticResource MenuButton}"/>
-                    <Button Text="Filter Type" Clicked="OnFilterMenuClicked" Style="{StaticResource MenuButton}"/>
+                    <Button x:Name="FilterTypeMenuButton" Text="Filter Type" Clicked="OnFilterMenuClicked" Style="{StaticResource MenuButton}"/>
                     <Button Text="Debug" Clicked="OnDebugMenuClicked" Style="{StaticResource MenuButton}"/>
                 </HorizontalStackLayout>
             </ScrollView>

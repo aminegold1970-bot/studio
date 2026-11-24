@@ -12,8 +12,44 @@ namespace Texture2DDecoder
         {
 #if NETFRAMEWORK
             DllLoader.PreloadDll(T2DDll.DllName);
+#elif NET6_0_OR_GREATER
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                NativeLibrary.SetDllImportResolver(
+                    typeof(TextureDecoder).Assembly, ResolveWindowsNativeLibrary);
 #endif
         }
+
+#if NET6_0_OR_GREATER
+        private static IntPtr ResolveWindowsNativeLibrary(
+            string libraryName,
+            System.Reflection.Assembly assembly,
+            DllImportSearchPath? searchPath)
+        {
+            if (!string.Equals(libraryName, T2DDll.DllName, StringComparison.Ordinal)
+                || !RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                return IntPtr.Zero;
+
+            var runtimeIdentifier = RuntimeInformation.ProcessArchitecture switch
+            {
+                Architecture.X86 => "win-x86",
+                Architecture.X64 => "win-x64",
+                Architecture.Arm64 => "win-arm64",
+                _ => null
+            };
+            if (runtimeIdentifier == null)
+                return IntPtr.Zero;
+
+            var assemblyDirectory = Path.GetDirectoryName(assembly.Location);
+            var baseDirectory = string.IsNullOrEmpty(assemblyDirectory)
+                ? AppContext.BaseDirectory
+                : assemblyDirectory;
+            var nativeLibraryPath = Path.Combine(
+                baseDirectory, "runtimes", runtimeIdentifier, "native", $"{T2DDll.DllName}.dll");
+            return File.Exists(nativeLibraryPath)
+                ? NativeLibrary.Load(nativeLibraryPath)
+                : IntPtr.Zero;
+        }
+#endif
 
         public static bool DecodeDXT1(byte[] data, int width, int height, byte[] image)
         {

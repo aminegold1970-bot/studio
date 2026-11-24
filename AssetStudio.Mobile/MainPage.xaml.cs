@@ -1784,12 +1784,17 @@ public partial class MainPage : ContentPage
             var animatorAndClips = _selectedAssets
                 .Where(row => row.SourceAsset is AssetStudio.Animator or AssetStudio.AnimationClip)
                 .ToList();
-            if (!animatorAndClips.Any(row => row.SourceAsset is AssetStudio.Animator))
+            var selectedAnimators = animatorAndClips
+                .Where(row => row.SourceAsset is AssetStudio.Animator)
+                .Select(row => (AssetStudio.Animator)row.SourceAsset!)
+                .ToArray();
+            if (selectedAnimators.Length != 1)
             {
-                StatusLabel.Text = "Select an Animator and any AnimationClips to export them as raw Unity data";
+                StatusLabel.Text = "Select exactly one Animator and any AnimationClips to export them";
                 return;
             }
-            await RunAssetExportAsync("Raw", "Selected assets", animatorAndClips);
+            await RunAssetExportAsync(
+                "Convert", "Selected assets", animatorAndClips, selectedAnimators[0]);
             return;
         }
         if (choice is "Raw" or "Dump" or "Asset list to XML")
@@ -1860,7 +1865,8 @@ public partial class MainPage : ContentPage
     private async Task RunAssetExportAsync(
         string exportKind,
         string scope,
-        IReadOnlyList<AssetRow>? explicitTargets = null)
+        IReadOnlyList<AssetRow>? explicitTargets = null,
+        AssetStudio.Animator? animationContext = null)
     {
         IReadOnlyList<AssetRow> targets = explicitTargets ?? scope switch
         {
@@ -1889,7 +1895,11 @@ public partial class MainPage : ContentPage
                     string.IsNullOrWhiteSpace(update.Message) ? $"Exporting {targets.Count} assets…" : update.Message));
             var exportItems = targets.Select(row =>
                 row.SourceAsset is AssetStudio.Object sourceAsset
-                    ? new MobileExportItem(sourceAsset, row.Container, row.SourceFile)
+                    ? new MobileExportItem(
+                        sourceAsset,
+                        row.Container,
+                        row.SourceFile,
+                        sourceAsset is AssetStudio.AnimationClip ? animationContext : null)
                     : throw new InvalidOperationException(
                         "One or more selected rows are not backed by parsed Unity assets."))
                 .ToArray();
@@ -2207,6 +2217,9 @@ public partial class MainPage : ContentPage
     private void ApplyAssetFilter()
     {
         var query = AssetSearch?.Text?.Trim() ?? "";
+        FilterTypeMenuButton.Text = _selectedTypes == null
+            ? "Filter Type"
+            : $"Filter Type ({_selectedTypes.Count})";
         // Mirror the original WinForms FilterAssetList search scope: Name,
         // Container and PathID. Type filtering is a separate filter-menu state;
         // searching Size, Type or SourceFile here changes desktop semantics.

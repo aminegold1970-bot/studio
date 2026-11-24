@@ -111,6 +111,8 @@ internal static class MobileAssetExporter
             };
             using (var archive = new ZipArchive(File.Create(archivePath), ZipArchiveMode.Create))
             {
+                var animationPathBindingsByAnimator =
+                    new Dictionary<Animator, IReadOnlyDictionary<uint, string>>();
                 for (var index = 0; index < sourceItems.Count; index++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -118,10 +120,23 @@ internal static class MobileAssetExporter
                         ?? throw new InvalidDataException($"Asset {index + 1} is null.");
                     var asset = item.Asset
                         ?? throw new InvalidDataException($"Asset {index + 1} has no parsed object.");
+                    IReadOnlyDictionary<uint, string>? animationPathBindings = null;
+                    if (kind == MobileExportKind.Converted
+                        && asset is AnimationClip { m_Legacy: false }
+                        && item.AnimationContext is { } animationContext)
+                    {
+                        if (!animationPathBindingsByAnimator.TryGetValue(
+                                animationContext, out animationPathBindings))
+                        {
+                            animationPathBindings = GetAnimationPathBindings(
+                                animationContext, cancellationToken);
+                            animationPathBindingsByAnimator.Add(animationContext, animationPathBindings);
+                        }
+                    }
                     var payload = CreateExportPayload(
                         asset, kind, item.Container, cancellationToken,
                         monoBehaviourAssemblyService, imageFormat,
-                        convertTextures, convertAudio, restoreTextAssetExtension);
+                        convertTextures, convertAudio, restoreTextAssetExtension, animationPathBindings);
                     var entryName = GetUniqueArchiveEntryName(
                         entryNames,
                         GetArchiveAssetName(item, payload.Extension, archiveGrouping),
@@ -1337,7 +1352,8 @@ internal static class MobileAssetExporter
         MobileImageFormat imageFormat,
         bool convertTextures,
         bool convertAudio,
-        bool restoreTextAssetExtension)
+        bool restoreTextAssetExtension,
+        IReadOnlyDictionary<uint, string>? animationPathBindings = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         try
@@ -1348,7 +1364,7 @@ internal static class MobileAssetExporter
                 MobileExportKind.Dump => GetDumpData(asset, monoBehaviourAssemblyService),
                 _ => ExportConverted(
                     asset, container, cancellationToken, monoBehaviourAssemblyService, imageFormat,
-                    convertTextures, convertAudio, restoreTextAssetExtension)
+                    convertTextures, convertAudio, restoreTextAssetExtension, animationPathBindings)
             };
             cancellationToken.ThrowIfCancellationRequested();
             return new ExportPayload(data, extension, false, null);
@@ -1389,6 +1405,753 @@ internal static class MobileAssetExporter
         return (Encoding.UTF8.GetBytes(dump), ".txt");
     }
 
+    private static (byte[] Data, string Extension) ExportAnimationClip(
+        AnimationClip clip,
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<uint, string>? animationPathBindings = null)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!clip.m_Legacy)
+            return ExportMuscleStreamAnimationClip(clip, cancellationToken, animationPathBindings);
+
+        var exportData = new
+        {
+            schemaVersion = 1,
+            name = clip.m_Name,
+            coordinateSpace = "Unity",
+            isLegacy = clip.m_Legacy,
+            animationType = clip.m_AnimationType.ToString(),
+            compressed = clip.m_Compressed,
+            sampleRate = RequireFinite(clip.m_SampleRate, "sample rate"),
+            wrapMode = clip.m_WrapMode,
+            rotationCurves = (clip.m_RotationCurves ?? Array.Empty<QuaternionCurve>())
+                .Select(curve =>
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return new
+                    {
+                        path = curve.path,
+                        preInfinity = curve.curve.m_PreInfinity,
+                        postInfinity = curve.curve.m_PostInfinity,
+                        rotationOrder = curve.curve.m_RotationOrder,
+                        keys = curve.curve.m_Curve
+                            .Select(key => ExportQuaternionKey(key, cancellationToken))
+                    };
+                }),
+            compressedRotationCurves = (clip.m_CompressedRotationCurves ?? Array.Empty<CompressedAnimationCurve>())
+                .Select(curve => ExportCompressedRotationCurve(curve, cancellationToken)),
+            eulerCurves = (clip.m_EulerCurves ?? Array.Empty<Vector3Curve>())
+                .Select(curve => ExportVector3Curve(curve, cancellationToken)),
+            positionCurves = (clip.m_PositionCurves ?? Array.Empty<Vector3Curve>())
+                .Select(curve => ExportVector3Curve(curve, cancellationToken)),
+            scaleCurves = (clip.m_ScaleCurves ?? Array.Empty<Vector3Curve>())
+                .Select(curve => ExportVector3Curve(curve, cancellationToken)),
+            floatCurves = (clip.m_FloatCurves ?? Array.Empty<FloatCurve>())
+                .Select(curve =>
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return new
+                    {
+                        path = curve.path,
+                        attribute = curve.attribute,
+                        classId = (int)curve.classID,
+                        preInfinity = curve.curve.m_PreInfinity,
+                        postInfinity = curve.curve.m_PostInfinity,
+                        rotationOrder = curve.curve.m_RotationOrder,
+                        keys = curve.curve.m_Curve
+                            .Select(key => ExportFloatKey(key, cancellationToken))
+                    };
+                }),
+            objectReferenceCurves = (clip.m_PPtrCurves ?? Array.Empty<PPtrCurve>())
+                .Select(curve =>
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return new
+                    {
+                        path = curve.path,
+                        attribute = curve.attribute,
+                        classId = curve.classID,
+                        keys = curve.curve.Select(key =>
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            return new
+                            {
+                                time = RequireFinite(key.time, "object-reference key time"),
+                                fileId = key.value.m_FileID,
+                                pathId = key.value.m_PathID
+                            };
+                        })
+                    };
+                }),
+            events = (clip.m_Events ?? Array.Empty<AnimationEvent>())
+                .Select(animationEvent =>
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return new
+                    {
+                        time = RequireFinite(animationEvent.time, "event time"),
+                        functionName = animationEvent.functionName,
+                        data = animationEvent.data,
+                        floatParameter = RequireFinite(animationEvent.floatParameter, "event float parameter"),
+                        intParameter = animationEvent.intParameter,
+                        messageOptions = animationEvent.messageOptions,
+                        objectReferenceFileId = animationEvent.objectReferenceParameter.m_FileID,
+                        objectReferencePathId = animationEvent.objectReferenceParameter.m_PathID
+                    };
+                })
+        };
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return (
+            Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(exportData, Formatting.Indented)),
+            ".anim.json");
+    }
+
+    private static (byte[] Data, string Extension) ExportMuscleStreamAnimationClip(
+        AnimationClip clip,
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<uint, string>? animationPathBindings)
+    {
+        var muscleClip = clip.m_MuscleClip
+            ?? throw new NotSupportedException("This AnimationClip has no decoded muscle-stream data.");
+        var serializedClip = muscleClip.m_Clip
+            ?? throw new NotSupportedException("This AnimationClip has no decoded curve stream.");
+        var bindingConstant = clip.m_ClipBindingConstant;
+        if (bindingConstant == null)
+        {
+            if (serializedClip.m_Binding == null)
+                throw new NotSupportedException("This AnimationClip has no serialized curve bindings.");
+            bindingConstant = serializedClip.ConvertValueArrayToGenericBinding();
+        }
+        if (bindingConstant.genericBindings is not { } genericBindings)
+            throw new InvalidDataException("This AnimationClip has no usable curve bindings.");
+
+        var (bindingRows, bindingByValueIndex) =
+            BuildMuscleCurveBindings(genericBindings, animationPathBindings);
+        var streamedClip = serializedClip.m_StreamedClip
+            ?? throw new InvalidDataException("This AnimationClip has no streamed-curve table.");
+        var decodedFrames = ReadMuscleStreamFrames(streamedClip, cancellationToken);
+        var streamedFrames = new object[decodedFrames.Count];
+        for (var frameIndex = 0; frameIndex < decodedFrames.Count; frameIndex++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var frame = decodedFrames[frameIndex];
+            var keys = new object[frame.keyList.Length];
+            for (var keyIndex = 0; keyIndex < frame.keyList.Length; keyIndex++)
+            {
+                if ((keyIndex & 1023) == 0)
+                    cancellationToken.ThrowIfCancellationRequested();
+                var key = frame.keyList[keyIndex];
+                if (float.IsNaN(key.inSlope) || float.IsNegativeInfinity(key.inSlope))
+                    throw new InvalidDataException("A streamed animation key has an invalid in-slope.");
+                keys[keyIndex] = new
+                {
+                    valueIndex = key.index,
+                    binding = bindingByValueIndex.TryGetValue(key.index, out var binding) ? binding : null,
+                    time = RequireFinite(frame.time, "streamed frame time"),
+                    value = RequireFinite(key.value, "streamed key value"),
+                    inSlope = float.IsFinite(key.inSlope) ? key.inSlope : (float?)null,
+                    stepped = float.IsPositiveInfinity(key.inSlope),
+                    outSlope = RequireFinite(key.outSlope, "streamed key out-slope"),
+                    coefficients = key.coeff.Select(
+                        coefficient => RequireFinite(coefficient, "streamed key coefficient")).ToArray()
+                };
+            }
+            streamedFrames[frameIndex] = new { time = RequireFinite(frame.time, "streamed frame time"), keys };
+        }
+
+        var denseClip = serializedClip.m_DenseClip
+            ?? throw new InvalidDataException("This AnimationClip has no dense-curve table.");
+        if (denseClip.m_FrameCount < 0)
+            throw new InvalidDataException("This AnimationClip has a negative dense frame count.");
+        var denseSampleCount = (long)denseClip.m_FrameCount * denseClip.m_CurveCount;
+        var denseSamples = denseClip.m_SampleArray
+            ?? throw new InvalidDataException("This AnimationClip has no dense sample data.");
+        if (denseSampleCount > int.MaxValue || denseSampleCount != denseSamples.Length)
+            throw new InvalidDataException("This AnimationClip has an invalid dense sample count.");
+        if (denseClip.m_FrameCount > 0
+            && (!float.IsFinite(denseClip.m_SampleRate) || denseClip.m_SampleRate <= 0))
+        {
+            throw new InvalidDataException("This AnimationClip has an invalid dense sample rate.");
+        }
+        var constantBaseValueIndex = (long)streamedClip.curveCount + denseClip.m_CurveCount;
+        if (constantBaseValueIndex > int.MaxValue)
+            throw new InvalidDataException("This AnimationClip has an oversized curve binding index.");
+
+        var denseFrames = new object[denseClip.m_FrameCount];
+        var samplesPerFrame = checked((int)denseClip.m_CurveCount);
+        for (var frameIndex = 0; frameIndex < denseClip.m_FrameCount; frameIndex++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var frameTime = denseClip.m_BeginTime + frameIndex / denseClip.m_SampleRate;
+            var frameValues = new float[samplesPerFrame];
+            var sampleOffset = frameIndex * samplesPerFrame;
+            for (var sampleIndex = 0; sampleIndex < samplesPerFrame; sampleIndex++)
+            {
+                if ((sampleIndex & 1023) == 0)
+                    cancellationToken.ThrowIfCancellationRequested();
+                frameValues[sampleIndex] = RequireFinite(
+                    denseSamples[sampleOffset + sampleIndex],
+                    "dense animation sample");
+            }
+            denseFrames[frameIndex] = new
+            {
+                time = RequireFinite(frameTime, "dense frame time"),
+                values = frameValues
+            };
+        }
+
+        var constantValues = serializedClip.m_ConstantClip?.data ?? Array.Empty<float>();
+        var constantFrameValues = new float[constantValues.Length];
+        for (var index = 0; index < constantValues.Length; index++)
+        {
+            if ((index & 1023) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
+            constantFrameValues[index] = RequireFinite(constantValues[index], "constant animation value");
+        }
+
+        var exportData = new
+        {
+            schemaVersion = 1,
+            name = clip.m_Name,
+            coordinateSpace = "Unity",
+            isLegacy = false,
+            animationType = clip.m_AnimationType.ToString(),
+            compressed = clip.m_Compressed,
+            sampleRate = RequireFinite(clip.m_SampleRate, "sample rate"),
+            wrapMode = clip.m_WrapMode,
+            bindingPathEncoding = animationPathBindings == null
+                ? "Unity CRC path hash; hierarchy names are not resolved"
+                : "Unity CRC path hash; resolved paths are included when available",
+            objectReferenceCurves = (clip.m_PPtrCurves ?? Array.Empty<PPtrCurve>())
+                .Select(curve =>
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return new
+                    {
+                        path = curve.path,
+                        attribute = curve.attribute,
+                        classId = curve.classID,
+                        keys = curve.curve.Select(key =>
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            return new
+                            {
+                                time = RequireFinite(key.time, "object-reference key time"),
+                                fileId = key.value.m_FileID,
+                                pathId = key.value.m_PathID
+                            };
+                        })
+                    };
+                }),
+            pointerCurveMapping = (bindingConstant.pptrCurveMapping ?? Array.Empty<PPtr<AssetStudio.Object>>())
+                .Select(pointer => new
+                {
+                    fileId = pointer.m_FileID,
+                    pathId = pointer.m_PathID
+                }),
+            events = (clip.m_Events ?? Array.Empty<AnimationEvent>())
+                .Select(animationEvent =>
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return new
+                    {
+                        time = RequireFinite(animationEvent.time, "event time"),
+                        functionName = animationEvent.functionName,
+                        data = animationEvent.data,
+                        floatParameter = RequireFinite(animationEvent.floatParameter, "event float parameter"),
+                        intParameter = animationEvent.intParameter,
+                        messageOptions = animationEvent.messageOptions,
+                        objectReferenceFileId = animationEvent.objectReferenceParameter.m_FileID,
+                        objectReferencePathId = animationEvent.objectReferenceParameter.m_PathID
+                    };
+                }),
+            bindings = bindingRows,
+            muscleClip = new
+            {
+                startTime = RequireFinite(muscleClip.m_StartTime, "clip start time"),
+                stopTime = RequireFinite(muscleClip.m_StopTime, "clip stop time"),
+                cycleOffset = RequireFinite(muscleClip.m_CycleOffset, "clip cycle offset"),
+                orientationOffsetY = RequireFinite(muscleClip.m_OrientationOffsetY, "orientation offset"),
+                averageAngularSpeed = RequireFinite(muscleClip.m_AverageAngularSpeed, "average angular speed"),
+                averageSpeed = ExportVector(muscleClip.m_AverageSpeed),
+                level = RequireFinite(muscleClip.m_Level, "clip level"),
+                mirror = muscleClip.m_Mirror,
+                loopTime = muscleClip.m_LoopTime,
+                loopBlend = muscleClip.m_LoopBlend,
+                loopBlendOrientation = muscleClip.m_LoopBlendOrientation,
+                loopBlendPositionY = muscleClip.m_LoopBlendPositionY,
+                loopBlendPositionXZ = muscleClip.m_LoopBlendPositionXZ,
+                startAtOrigin = muscleClip.m_StartAtOrigin,
+                keepOriginalOrientation = muscleClip.m_KeepOriginalOrientation,
+                keepOriginalPositionY = muscleClip.m_KeepOriginalPositionY,
+                keepOriginalPositionXZ = muscleClip.m_KeepOriginalPositionXZ,
+                heightFromFeet = muscleClip.m_HeightFromFeet,
+                deltaPose = ExportHumanPose(muscleClip.m_DeltaPose, cancellationToken),
+                startTransform = ExportXform(muscleClip.m_StartX),
+                stopTransform = ExportXform(muscleClip.m_StopX),
+                leftFootStartTransform = ExportXform(muscleClip.m_LeftFootStartX),
+                rightFootStartTransform = ExportXform(muscleClip.m_RightFootStartX),
+                motionStartTransform = ExportXform(muscleClip.m_MotionStartX),
+                motionStopTransform = ExportXform(muscleClip.m_MotionStopX),
+                indexArray = muscleClip.m_IndexArray ?? Array.Empty<int>(),
+                valueDeltas = (muscleClip.m_ValueArrayDelta ?? Array.Empty<ValueDelta>())
+                    .Select(delta => new
+                    {
+                        start = RequireFinite(delta.m_Start, "muscle value start"),
+                        stop = RequireFinite(delta.m_Stop, "muscle value stop")
+                    }),
+                referencePose = (muscleClip.m_ValueArrayReferencePose ?? Array.Empty<float>())
+                    .Select(value => RequireFinite(value, "muscle reference-pose value"))
+            },
+            streamedCurveCount = streamedClip.curveCount,
+            streamedFrames,
+            denseClip = new
+            {
+                frameCount = denseClip.m_FrameCount,
+                curveCount = denseClip.m_CurveCount,
+                baseValueIndex = streamedClip.curveCount,
+                sampleRate = RequireFinite(denseClip.m_SampleRate, "dense sample rate"),
+                beginTime = RequireFinite(denseClip.m_BeginTime, "dense begin time"),
+                frames = denseFrames
+            },
+            constantValues = new
+            {
+                baseValueIndex = constantBaseValueIndex,
+                values = constantFrameValues
+            }
+        };
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return (
+            Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(exportData, Formatting.Indented)),
+            ".anim.json");
+    }
+
+    private static (object[] Rows, Dictionary<int, object> ByValueIndex) BuildMuscleCurveBindings(
+        IReadOnlyList<GenericBinding> bindings,
+        IReadOnlyDictionary<uint, string>? animationPathBindings)
+    {
+        var rows = new List<object>();
+        var byValueIndex = new Dictionary<int, object>();
+        var valueIndex = 0;
+        for (var bindingIndex = 0; bindingIndex < bindings.Count; bindingIndex++)
+        {
+            var binding = bindings[bindingIndex];
+            var componentCount = binding.typeID == ClassIDType.Transform
+                ? binding.attribute switch
+                {
+                    1 or 3 or 4 => 3,
+                    2 => 4,
+                    _ => 1
+                }
+                : 1;
+            for (var componentIndex = 0; componentIndex < componentCount; componentIndex++)
+            {
+                var row = new
+                {
+                    valueIndex,
+                    bindingIndex,
+                    pathHash = binding.path,
+                    resolvedPath = animationPathBindings != null
+                        && animationPathBindings.TryGetValue(binding.path, out var resolvedPath)
+                            ? resolvedPath
+                            : null,
+                    attribute = binding.attribute,
+                    typeId = (int)binding.typeID,
+                    type = binding.typeID.ToString(),
+                    componentIndex,
+                    customType = binding.customType,
+                    isPointerCurve = binding.isPPtrCurve != 0,
+                    isIntegerCurve = binding.isIntCurve != 0,
+                    scriptFileId = binding.script?.m_FileID,
+                    scriptPathId = binding.script?.m_PathID
+                };
+                rows.Add(row);
+                byValueIndex.Add(valueIndex, row);
+                valueIndex++;
+            }
+        }
+
+        return (rows.ToArray(), byValueIndex);
+    }
+
+    private static IReadOnlyDictionary<uint, string> GetAnimationPathBindings(
+        Animator animator,
+        CancellationToken cancellationToken)
+    {
+        var pathBindings = new Dictionary<uint, string>();
+        if (animator.m_GameObject.TryGet(out var gameObject)
+            && gameObject.m_Transform is { } rootTransform)
+        {
+            var rootPath = GetTransformPathFromParents(rootTransform, cancellationToken);
+            var pendingTransforms = new Stack<(Transform Transform, string Path)>();
+            var visitedTransforms = new HashSet<Transform>();
+            pendingTransforms.Push((rootTransform, rootPath));
+            while (pendingTransforms.Count > 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var (transform, path) = pendingTransforms.Pop();
+                if (!visitedTransforms.Add(transform))
+                    throw new InvalidDataException(
+                        "The Animator transform hierarchy contains a cycle or duplicate child reference.");
+
+                AddTransformPathBindings(path, pathBindings);
+                var children = transform.m_Children ?? Array.Empty<PPtr<Transform>>();
+                for (var childIndex = children.Length - 1; childIndex >= 0; childIndex--)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (children[childIndex].TryGet(out var child)
+                        && child.m_GameObject.TryGet(out var childGameObject))
+                    {
+                        pendingTransforms.Push((child, $"{path}/{childGameObject.m_Name}"));
+                    }
+                }
+            }
+        }
+
+        if (animator.m_Avatar.TryGet(out var avatar))
+        {
+            foreach (var (hash, path) in avatar.m_TOS ?? Array.Empty<KeyValuePair<uint, string>>())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                pathBindings.TryAdd(hash, path);
+            }
+        }
+
+        return pathBindings;
+    }
+
+    private static string GetTransformPathFromParents(
+        Transform transform,
+        CancellationToken cancellationToken)
+    {
+        var segments = new List<string>();
+        var visitedTransforms = new HashSet<Transform>();
+        var current = transform;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!visitedTransforms.Add(current))
+                throw new InvalidDataException("The Animator transform parent hierarchy contains a cycle.");
+            if (!current.m_GameObject.TryGet(out var gameObject))
+                throw new InvalidDataException("An Animator transform has no resolvable GameObject.");
+            segments.Add(gameObject.m_Name);
+            if (!current.m_Father.TryGet(out var parent))
+                break;
+            current = parent;
+        }
+
+        segments.Reverse();
+        return string.Join("/", segments);
+    }
+
+    private static void AddTransformPathBindings(
+        string fullPath,
+        Dictionary<uint, string> pathBindings)
+    {
+        var path = fullPath;
+        while (true)
+        {
+            var bytes = Encoding.UTF8.GetBytes(path);
+            var crc = new SevenZip.CRC();
+            crc.Update(bytes, 0, (uint)bytes.Length);
+            pathBindings[crc.GetDigest()] = path;
+
+            var separatorIndex = path.IndexOf("/", StringComparison.Ordinal);
+            if (separatorIndex < 0)
+                return;
+            path = path[(separatorIndex + 1)..];
+        }
+    }
+
+    private static List<StreamedClip.StreamedFrame> ReadMuscleStreamFrames(
+        StreamedClip streamedClip,
+        CancellationToken cancellationToken)
+    {
+        var words = streamedClip.data
+            ?? throw new InvalidDataException("This AnimationClip has no streamed-curve bytes.");
+        var byteLength = (long)words.Length * sizeof(uint);
+        if (byteLength > int.MaxValue)
+            throw new InvalidDataException("This AnimationClip's streamed-curve data is too large.");
+
+        var bytes = new byte[(int)byteLength];
+        Buffer.BlockCopy(words, 0, bytes, 0, bytes.Length);
+        using var reader = new BinaryReader(new MemoryStream(bytes, writable: false));
+        var frames = new List<StreamedClip.StreamedFrame>();
+        while (reader.BaseStream.Position < reader.BaseStream.Length)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var frameStart = reader.BaseStream.Position;
+            if (reader.BaseStream.Length - frameStart < sizeof(float) + sizeof(int))
+                throw new InvalidDataException("This AnimationClip has a truncated streamed frame header.");
+
+            _ = reader.ReadSingle();
+            var keyCount = reader.ReadInt32();
+            var remainingBytes = reader.BaseStream.Length - reader.BaseStream.Position;
+            if (keyCount < 0 || (long)keyCount * 20 > remainingBytes)
+                throw new InvalidDataException("This AnimationClip has an invalid streamed frame key count.");
+
+            reader.BaseStream.Position = frameStart;
+            try
+            {
+                frames.Add(new StreamedClip.StreamedFrame(reader));
+            }
+            catch (EndOfStreamException exception)
+            {
+                throw new InvalidDataException("This AnimationClip has truncated streamed-frame data.", exception);
+            }
+        }
+
+        var previousKeys = new Dictionary<int, (StreamedClip.StreamedCurveKey Key, float Time)>();
+        for (var frameIndex = 0; frameIndex < Math.Min(2, frames.Count); frameIndex++)
+            UpdatePreviousStreamedKeys(frames[frameIndex], previousKeys, cancellationToken);
+
+        for (var frameIndex = 2; frameIndex < frames.Count - 1; frameIndex++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var frame = frames[frameIndex];
+            for (var keyIndex = 0; keyIndex < frame.keyList.Length; keyIndex++)
+            {
+                if ((keyIndex & 1023) == 0)
+                    cancellationToken.ThrowIfCancellationRequested();
+                var key = frame.keyList[keyIndex];
+                if (previousKeys.TryGetValue(key.index, out var previous))
+                    key.inSlope = previous.Key.CalculateNextInSlope(frame.time - previous.Time, key);
+            }
+            UpdatePreviousStreamedKeys(frame, previousKeys, cancellationToken);
+        }
+
+        return frames;
+    }
+
+    private static void UpdatePreviousStreamedKeys(
+        StreamedClip.StreamedFrame frame,
+        Dictionary<int, (StreamedClip.StreamedCurveKey Key, float Time)> previousKeys,
+        CancellationToken cancellationToken)
+    {
+        var updatedIndices = new HashSet<int>();
+        foreach (var key in frame.keyList)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (updatedIndices.Add(key.index))
+                previousKeys[key.index] = (key, frame.time);
+        }
+    }
+
+    private static object? ExportHumanPose(HumanPose? pose, CancellationToken cancellationToken)
+    {
+        if (pose == null)
+            return null;
+
+        return new
+        {
+            rootTransform = ExportXform(pose.m_RootX),
+            lookAtPosition = ExportVector(pose.m_LookAtPosition),
+            lookAtWeight = ExportVector4(pose.m_LookAtWeight),
+            goals = (pose.m_GoalArray ?? Array.Empty<HumanGoal>())
+                .Select(goal =>
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return new
+                    {
+                        transform = ExportXform(goal.m_X),
+                        translationWeight = RequireFinite(goal.m_WeightT, "human goal translation weight"),
+                        rotationWeight = RequireFinite(goal.m_WeightR, "human goal rotation weight"),
+                        hintTranslation = ExportVector(goal.m_HintT),
+                        hintTranslationWeight = RequireFinite(
+                            goal.m_HintWeightT,
+                            "human goal hint translation weight")
+                    };
+                }),
+            leftHand = ExportHandPose(pose.m_LeftHandPose, cancellationToken),
+            rightHand = ExportHandPose(pose.m_RightHandPose, cancellationToken),
+            degreesOfFreedom = ExportFiniteValues(pose.m_DoFArray, cancellationToken),
+            translationDegreesOfFreedom = (pose.m_TDoFArray ?? Array.Empty<Vector3>())
+                .Select(ExportVector)
+        };
+    }
+
+    private static object? ExportHandPose(HandPose? pose, CancellationToken cancellationToken)
+    {
+        if (pose == null)
+            return null;
+
+        return new
+        {
+            grabTransform = ExportXform(pose.m_GrabX),
+            degreesOfFreedom = ExportFiniteValues(pose.m_DoFArray, cancellationToken),
+            overrideWeight = RequireFinite(pose.m_Override, "hand override"),
+            closeOpen = RequireFinite(pose.m_CloseOpen, "hand close/open"),
+            inOut = RequireFinite(pose.m_InOut, "hand in/out"),
+            grab = RequireFinite(pose.m_Grab, "hand grab")
+        };
+    }
+
+    private static object? ExportXform(xform? value) => value == null
+        ? null
+        : new
+        {
+            translation = ExportVector(value.t),
+            rotation = ExportQuaternion(value.q),
+            scale = ExportVector(value.s)
+        };
+
+    private static object ExportVector4(Vector4 value) => new
+    {
+        x = RequireFinite(value.X, "vector component"),
+        y = RequireFinite(value.Y, "vector component"),
+        z = RequireFinite(value.Z, "vector component"),
+        w = RequireFinite(value.W, "vector component")
+    };
+
+    private static float[] ExportFiniteValues(float[]? values, CancellationToken cancellationToken)
+    {
+        if (values == null)
+            return Array.Empty<float>();
+        var result = new float[values.Length];
+        for (var index = 0; index < values.Length; index++)
+        {
+            if ((index & 1023) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
+            result[index] = RequireFinite(values[index], "pose value");
+        }
+        return result;
+    }
+
+    private static object ExportVector3Curve(Vector3Curve curve, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return new
+        {
+            path = curve.path,
+            preInfinity = curve.curve.m_PreInfinity,
+            postInfinity = curve.curve.m_PostInfinity,
+            rotationOrder = curve.curve.m_RotationOrder,
+            keys = curve.curve.m_Curve
+                .Select(key => ExportVector3Key(key, cancellationToken))
+        };
+    }
+
+    private static object ExportVector3Key(Keyframe<Vector3> key, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return new
+        {
+            time = RequireFinite(key.time, "vector key time"),
+            value = ExportVector(key.value),
+            inSlope = ExportVector(key.inSlope),
+            outSlope = ExportVector(key.outSlope),
+            key.weightedMode,
+            inWeight = ExportVector(key.inWeight),
+            outWeight = ExportVector(key.outWeight)
+        };
+    }
+
+    private static object ExportQuaternionKey(Keyframe<Quaternion> key, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return new
+        {
+            time = RequireFinite(key.time, "rotation key time"),
+            value = ExportQuaternion(key.value),
+            inSlope = ExportQuaternion(key.inSlope),
+            outSlope = ExportQuaternion(key.outSlope),
+            key.weightedMode,
+            inWeight = ExportQuaternion(key.inWeight),
+            outWeight = ExportQuaternion(key.outWeight)
+        };
+    }
+
+    private static object ExportFloatKey(Keyframe<float> key, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return new
+        {
+            time = RequireFinite(key.time, "float key time"),
+            value = RequireFinite(key.value, "float key value"),
+            inSlope = RequireFinite(key.inSlope, "float key in-slope"),
+            outSlope = RequireFinite(key.outSlope, "float key out-slope"),
+            key.weightedMode,
+            inWeight = RequireFinite(key.inWeight, "float key in-weight"),
+            outWeight = RequireFinite(key.outWeight, "float key out-weight")
+        };
+    }
+
+    private static object ExportCompressedRotationCurve(
+        CompressedAnimationCurve curve,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var packedTimes = curve.m_Times.UnpackInts();
+        var rotations = curve.m_Values.UnpackQuats();
+        if (packedTimes.Length != rotations.Length)
+            throw new InvalidDataException("A compressed rotation curve has mismatched time and value counts.");
+
+        var cumulativeTime = 0L;
+        var keys = new object[packedTimes.Length];
+        for (var index = 0; index < packedTimes.Length; index++)
+        {
+            if ((index & 1023) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
+            cumulativeTime = checked(cumulativeTime + packedTimes[index]);
+            keys[index] = new
+            {
+                time = RequireFinite(cumulativeTime * 0.01f, "compressed rotation key time"),
+                value = ExportQuaternion(rotations[index])
+            };
+        }
+
+        return new
+        {
+            path = curve.m_Path,
+            preInfinity = curve.m_PreInfinity,
+            postInfinity = curve.m_PostInfinity,
+            packedTimes = new
+            {
+                itemCount = curve.m_Times.m_NumItems,
+                bitSize = curve.m_Times.m_BitSize,
+                dataBase64 = Convert.ToBase64String(curve.m_Times.m_Data)
+            },
+            packedValues = new
+            {
+                itemCount = curve.m_Values.m_NumItems,
+                dataBase64 = Convert.ToBase64String(curve.m_Values.m_Data)
+            },
+            packedSlopes = new
+            {
+                itemCount = curve.m_Slopes.m_NumItems,
+                range = RequireFinite(curve.m_Slopes.m_Range, "compressed rotation slope range"),
+                start = RequireFinite(curve.m_Slopes.m_Start, "compressed rotation slope start"),
+                bitSize = curve.m_Slopes.m_BitSize,
+                dataBase64 = Convert.ToBase64String(curve.m_Slopes.m_Data)
+            },
+            keys
+        };
+    }
+
+    private static object ExportVector(Vector3 value) => new
+    {
+        x = RequireFinite(value.X, "vector component"),
+        y = RequireFinite(value.Y, "vector component"),
+        z = RequireFinite(value.Z, "vector component")
+    };
+
+    private static object ExportQuaternion(Quaternion value) => new
+    {
+        x = RequireFinite(value.X, "quaternion component"),
+        y = RequireFinite(value.Y, "quaternion component"),
+        z = RequireFinite(value.Z, "quaternion component"),
+        w = RequireFinite(value.W, "quaternion component")
+    };
+
+    private static float RequireFinite(float value, string fieldName)
+    {
+        if (!float.IsFinite(value))
+            throw new InvalidDataException($"Animation clip contains a non-finite {fieldName}.");
+        return value;
+    }
+
     private static (byte[] Data, string Extension) ExportConverted(
         AssetStudio.Object asset,
         string? container = null,
@@ -1397,7 +2160,8 @@ internal static class MobileAssetExporter
         MobileImageFormat imageFormat = MobileImageFormat.Png,
         bool convertTextures = true,
         bool convertAudio = true,
-        bool restoreTextAssetExtension = true) =>
+        bool restoreTextAssetExtension = true,
+        IReadOnlyDictionary<uint, string>? animationPathBindings = null) =>
         asset switch
         {
             Texture2D texture => convertTextures
@@ -1408,6 +2172,8 @@ internal static class MobileAssetExporter
             VideoClip video => ExportVideo(video, cancellationToken),
             MonoBehaviour behaviour => ExportMonoBehaviour(
                 behaviour, cancellationToken, monoBehaviourAssemblyService),
+            AnimationClip animationClip => ExportAnimationClip(
+                animationClip, cancellationToken, animationPathBindings),
             Mesh mesh => (Encoding.UTF8.GetBytes(ExportObj(mesh, cancellationToken)), ".obj"),
             AssetStudio.Font font => ExportFont(font),
             MovieTexture movie => ExportMovieTexture(movie),
@@ -2490,7 +3256,8 @@ internal enum MobileArchiveGrouping
 internal sealed record MobileExportItem(
     AssetStudio.Object Asset,
     string? Container,
-    string? SourceFile = null);
+    string? SourceFile = null,
+    AssetStudio.Animator? AnimationContext = null);
 
 internal sealed record MobileSingleExportResult(string FilePath, bool UsedRawFallback, string? Warning);
 
