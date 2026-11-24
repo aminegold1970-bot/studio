@@ -818,6 +818,19 @@ public partial class MainPage : ContentPage
         }
     }
 
+    private async Task<List<FileResult>> PickFilesForExtractionAsync()
+    {
+#if IOS
+        // Match Load File: Apple's native document picker dismisses correctly after selection.
+        await WaitForActionSheetDismissalAsync();
+        return await AssetStudioNativeFilePicker.PickAsync(allowMultiple: true);
+#else
+        var picked = await FilePicker.Default.PickMultipleAsync(
+            new PickOptions { PickerTitle = "Select files to extract" });
+        return picked?.ToList() ?? new List<FileResult>();
+#endif
+    }
+
     private async Task ExtractFilesAsync()
     {
         if (ExtractFilesRequested == null)
@@ -830,8 +843,7 @@ public partial class MainPage : ContentPage
 
             try
             {
-                var pickedSources = await FilePicker.PickMultipleAsync(new PickOptions { PickerTitle = "Select files to extract" });
-                var sources = pickedSources?.ToList() ?? new List<FileResult>();
+                var sources = await PickFilesForExtractionAsync();
                 if (sources.Count == 0) return;
 
                 var persisted = new List<FileResult>();
@@ -861,8 +873,7 @@ public partial class MainPage : ContentPage
 
         try
         {
-            var pickedSources = await FilePicker.PickMultipleAsync(new PickOptions { PickerTitle = "Select files to extract" });
-            var sources = pickedSources?.ToList() ?? new List<FileResult>();
+            var sources = await PickFilesForExtractionAsync();
             if (sources.Count == 0) return;
             var destination = await AssetFolderPickerRequested.Invoke();
             if (string.IsNullOrWhiteSpace(destination)) return;
@@ -1797,7 +1808,8 @@ public partial class MainPage : ContentPage
             {
                 Text = option,
                 TextColor = Color.FromArgb("#202020"),
-                FontSize = 14,
+                FontSize = 11,
+                FontAutoScalingEnabled = false,
                 VerticalTextAlignment = TextAlignment.Center,
                 HorizontalTextAlignment = TextAlignment.Start
             });
@@ -1807,7 +1819,8 @@ public partial class MainPage : ContentPage
                 {
                     Text = "▸",
                     TextColor = Color.FromArgb("#555555"),
-                    FontSize = 16,
+                    FontSize = 12,
+                    FontAutoScalingEnabled = false,
                     VerticalTextAlignment = TextAlignment.Center,
                     HorizontalTextAlignment = TextAlignment.End
                 }, 1);
@@ -1855,7 +1868,7 @@ public partial class MainPage : ContentPage
 
     private void PositionMenuPopup(int itemCount)
     {
-        var popupWidth = Math.Min(360, Math.Max(220, Width - 16));
+        var popupWidth = Math.Min(280, Math.Max(200, Width - 16));
         var maxLeft = Math.Max(4, Width - popupWidth - 4);
         var left = _menuAnchor == null
             ? 4
@@ -1863,8 +1876,8 @@ public partial class MainPage : ContentPage
         MenuPopupFrame.WidthRequest = popupWidth;
         MenuPopupFrame.Margin = new Thickness(Math.Clamp(left, 4, maxLeft), MenuScroll.Height, 4, 0);
         MenuOptionsScroll.HeightRequest = Math.Min(
-            itemCount * 42,
-            Math.Max(84, Height - MenuScroll.Height - 64));
+            itemCount * 30,
+            Math.Max(60, Height - MenuScroll.Height - 48));
     }
 
     private void OnMenuOverlayBackgroundTapped(object? sender, TappedEventArgs e) =>
