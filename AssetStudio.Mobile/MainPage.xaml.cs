@@ -26,20 +26,7 @@ public partial class MainPage : ContentPage
     public event Action<bool>? AudioLoopChanged;
     public event Action<double>? AudioSeekRequested;
     public event Action<double>? AudioVolumeChanged;
-    // Host integration events: the UI selects inputs; the AssetStudio host performs parsing/extraction.
-    public event Func<IReadOnlyList<FileResult>, IProgress<AssetLoadProgress>, CancellationToken, Task>? AssetFilesSelected;
     private CancellationTokenSource? _loadCancellation;
-    // Folder selection is host-provided because MAUI has no universal native folder picker.
-    public event Func<Task<string?>>? AssetFolderPickerRequested;
-    public event Func<string, IProgress<AssetLoadProgress>, CancellationToken, Task>? AssetFolderSelected;
-    // Extraction remains host-executed; the page gathers source/destination paths and forwards real progress.
-    public event Func<IReadOnlyList<FileResult>, string, IProgress<AssetLoadProgress>, CancellationToken, Task<int>>? ExtractFilesRequested;
-    public event Func<string, string, IProgress<AssetLoadProgress>, CancellationToken, Task<int>>? ExtractFolderRequested;
-    // Export is executed by the host AssetStudio exporter; this page resolves the exact scope.
-    public event Func<string, IReadOnlyList<AssetRow>, string, IProgress<AssetLoadProgress>, CancellationToken, Task<int>>? ExportAssetsRequested;
-    // Separate contract for the original Studio.ExportAssetsList(..., XML) operation.
-    public event Func<IReadOnlyList<AssetListExportRow>, string, IProgress<AssetLoadProgress>, CancellationToken, Task<int>>? ExportAssetListXmlRequested;
-    public event Action<string, IReadOnlyList<AssetRow>>? AssetContextActionRequested;
     private bool _audioLoopEnabled;
     private bool _updatingAudioPosition;
     private readonly ObservableCollection<AssetRow> _allAssets = new();
@@ -91,7 +78,6 @@ public partial class MainPage : ContentPage
             SetHierarchy(hierarchy);
             SetClasses(classes);
         };
-        AssetFilesSelected += _assetLoader.LoadFilesAsync;
         AudioPlayRequested += OnAudioPlaybackRequested;
         AudioPauseRequested += OnAudioPauseRequested;
         AudioStopRequested += OnAudioStopRequested;
@@ -407,13 +393,8 @@ public partial class MainPage : ContentPage
     private async Task LoadPersistentFilesAsync(IReadOnlyList<FileResult> selected, string sourceLabel)
     {
         _lastLoadedFiles = selected.ToList();
+        _lastLoadedFolderPath = null;
         _lastLoadSourceLabel = sourceLabel;
-        if (AssetFilesSelected == null)
-        {
-            StatusLabel.Text = "Files are safely saved, but the AssetStudio Unity loader is not connected";
-            await DisplayAlert("Loader not connected", "The files are now stored in this app's Documents library. The host still needs to connect AssetFilesSelected to the AssetStudio parser before they can be displayed as Unity assets.", "OK");
-            return;
-        }
         ResetLoadedWorkspace();
         using var cancellation = new CancellationTokenSource();
         _loadCancellation = cancellation;
@@ -421,7 +402,7 @@ public partial class MainPage : ContentPage
         var progress = new Progress<AssetLoadProgress>(update => SetLoadingProgress(Math.Clamp(update.Percent, 0, 100), update.Message));
         try
         {
-            await AssetFilesSelected.Invoke(selected, progress, cancellation.Token);
+            await _assetLoader.LoadFilesAsync(selected, progress, cancellation.Token);
             SetBusy(false, $"{sourceLabel} loaded · {_allAssets.Count} assets");
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
@@ -434,6 +415,38 @@ public partial class MainPage : ContentPage
             await DisplayAlert("Asset loading failed", ex.Message, "OK");
         }
         finally { _loadCancellation = null; }
+    }
+
+    private async Task LoadPersistentFolderAsync(string folderPath, string sourceLabel)
+    {
+        _lastLoadedFolderPath = folderPath;
+        _lastLoadedFiles = Array.Empty<FileResult>();
+        _lastLoadSourceLabel = sourceLabel;
+
+        ResetLoadedWorkspace();
+        using var cancellation = new CancellationTokenSource();
+        _loadCancellation = cancellation;
+        SetBusy(true, $"Loading folder {Path.GetFileName(Path.TrimEndingDirectorySeparator(folderPath))}…");
+        var progress = new Progress<AssetLoadProgress>(update =>
+            SetLoadingProgress(Math.Clamp(update.Percent, 0, 100), update.Message));
+        try
+        {
+            await _assetLoader.LoadFolderAsync(folderPath, progress, cancellation.Token);
+            SetBusy(false, $"{sourceLabel} loaded · {_allAssets.Count} assets");
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            SetBusy(false, "Folder loading cancelled");
+        }
+        catch (Exception exception)
+        {
+            SetBusy(false, $"Folder load failed: {exception.Message}");
+            await DisplayAlert("Folder loading failed", exception.Message, "OK");
+        }
+        finally
+        {
+            _loadCancellation = null;
+        }
     }
 
     // Integration points for the real mobile asset-loading layer.
@@ -868,174 +881,97 @@ public partial class MainPage : ContentPage
 
     private async Task ExtractFilesAsync()
     {
-        if (ExtractFilesRequested == null)
-        {
-            if (AssetFolderPickerRequested != null)
-            {
-                ReportUnwired("Extract file");
-                return;
-            }
-
-            try
-            {
-                var sources = await PickFilesForExtractionAsync();
-                if (sources.Count == 0) return;
-
-                var persisted = new List<FileResult>();
-                foreach (var source in sources)
-                    persisted.Add(await _documentLibrary.ImportAsync(source));
-
-                SetBusy(true, $"Unpacking {persisted.Count} file(s)…");
-                var archivePath = await Task.Run(() => MobileBundleExtractor.CreateArchive(
-                    persisted.Select(file => file.FullPath).ToArray()));
-                await Share.Default.RequestAsync(new ShareFileRequest(
-                    "AssetStudio unpacked files", new ShareFile(archivePath)));
-                SetBusy(false, "Unpacked files are ready to share.");
-            }
-            catch (Exception ex)
-            {
-                SetBusy(false, $"File extraction failed: {ex.Message}");
-                if (_showErrorMessages) await DisplayAlert("File extraction failed", ex.Message, "OK");
-            }
-            return;
-        }
-
-        if (AssetFolderPickerRequested == null)
-        {
-            ReportUnwired("Extract file");
-            return;
-        }
-
         try
         {
             var sources = await PickFilesForExtractionAsync();
             if (sources.Count == 0) return;
-            var destination = await AssetFolderPickerRequested.Invoke();
-            if (string.IsNullOrWhiteSpace(destination)) return;
 
             using var cancellation = new CancellationTokenSource();
             _loadCancellation = cancellation;
-            SetBusy(true, "Extracting files…");
-            var progress = new Progress<AssetLoadProgress>(update =>
-                SetLoadingProgress(Math.Clamp(update.Percent, 0, 100), string.IsNullOrWhiteSpace(update.Message) ? "Extracting files…" : update.Message));
-            try
+            SetBusy(true, $"Unpacking {sources.Count} file(s)…");
+
+            var persisted = new List<FileResult>(sources.Count);
+            foreach (var source in sources)
             {
-                var count = await ExtractFilesRequested.Invoke(sources, destination, progress, cancellation.Token);
-                SetBusy(false, $"Finished extracting {count} files.");
+                cancellation.Token.ThrowIfCancellationRequested();
+                persisted.Add(await _documentLibrary.ImportAsync(source, cancellation.Token));
             }
-            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
-            {
-                SetBusy(false, "File extraction cancelled.");
-            }
-            catch (Exception ex)
-            {
-                SetBusy(false, $"File extraction failed: {ex.Message}");
-                if (_showErrorMessages) await DisplayAlert("File extraction failed", ex.Message, "OK");
-            }
-            finally { _loadCancellation = null; }
+
+            var archivePath = await Task.Run(
+                () => MobileBundleExtractor.CreateArchive(
+                    persisted.Select(file => file.FullPath).ToArray(),
+                    cancellation.Token),
+                cancellation.Token);
+            cancellation.Token.ThrowIfCancellationRequested();
+            await Share.Default.RequestAsync(new ShareFileRequest(
+                "AssetStudio unpacked files", new ShareFile(archivePath)));
+            SetBusy(false, "Unpacked files are ready to share.");
         }
-        catch (Exception ex)
+        catch (OperationCanceledException)
         {
-            SetBusy(false, "Ready");
-            StatusLabel.Text = $"File extraction selection failed: {ex.Message}";
+            SetBusy(false, "File extraction cancelled.");
+        }
+        catch (Exception exception)
+        {
+            SetBusy(false, $"File extraction failed: {exception.Message}");
+            if (_showErrorMessages)
+                await DisplayAlert("File extraction failed", exception.Message, "OK");
+        }
+        finally
+        {
+            _loadCancellation = null;
         }
     }
 
     private async Task ExtractFolderAsync()
     {
-        if (ExtractFolderRequested == null || AssetFolderPickerRequested == null)
-        {
-            await DisplayAlert("Extract folder",
-                "On iPhone, choose Extract file and select the Unity bundles or ZIP files to unpack.",
-                "Choose files");
-            await ExtractFilesAsync();
-            return;
-        }
-
         try
         {
-            var source = await AssetFolderPickerRequested.Invoke();
+            var source = await MobileFolderPicker.PickAsync(_documentLibrary);
             if (string.IsNullOrWhiteSpace(source)) return;
-            var destination = await AssetFolderPickerRequested.Invoke();
-            if (string.IsNullOrWhiteSpace(destination)) return;
 
             using var cancellation = new CancellationTokenSource();
             _loadCancellation = cancellation;
             SetBusy(true, "Extracting folder…");
-            var progress = new Progress<AssetLoadProgress>(update =>
-                SetLoadingProgress(Math.Clamp(update.Percent, 0, 100), string.IsNullOrWhiteSpace(update.Message) ? "Extracting folder…" : update.Message));
-            try
-            {
-                var count = await ExtractFolderRequested.Invoke(source, destination, progress, cancellation.Token);
-                SetBusy(false, $"Finished extracting {count} files.");
-            }
-            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
-            {
-                SetBusy(false, "Folder extraction cancelled.");
-            }
-            catch (Exception ex)
-            {
-                SetBusy(false, $"Folder extraction failed: {ex.Message}");
-                if (_showErrorMessages) await DisplayAlert("Folder extraction failed", ex.Message, "OK");
-            }
-            finally { _loadCancellation = null; }
+            var archivePath = await Task.Run(
+                () => MobileBundleExtractor.CreateArchiveFromFolder(source, cancellation.Token),
+                cancellation.Token);
+            cancellation.Token.ThrowIfCancellationRequested();
+            await Share.Default.RequestAsync(new ShareFileRequest(
+                "AssetStudio unpacked files", new ShareFile(archivePath)));
+            SetBusy(false, "Unpacked folder files are ready to share.");
         }
-        catch (Exception ex)
+        catch (OperationCanceledException)
         {
-            SetBusy(false, "Ready");
-            StatusLabel.Text = $"Folder extraction selection failed: {ex.Message}";
+            SetBusy(false, "Folder extraction cancelled.");
+        }
+        catch (Exception exception)
+        {
+            SetBusy(false, $"Folder extraction failed: {exception.Message}");
+            if (_showErrorMessages)
+                await DisplayAlert("Folder extraction failed", exception.Message, "OK");
+        }
+        finally
+        {
+            _loadCancellation = null;
         }
     }
 
     private async Task PickAssetFolderAsync()
     {
-        if (AssetFolderPickerRequested == null || AssetFolderSelected == null)
-        {
-            await DisplayAlert("Load folder",
-                "Folder picking is not available here. Select multiple Unity files from Files instead.",
-                "Choose files");
-            await PickAssetFilesAsync(allowMultiple: true);
-            return;
-        }
-
         try
         {
-            var folderPath = await AssetFolderPickerRequested.Invoke();
+            var folderPath = await MobileFolderPicker.PickAsync(_documentLibrary);
             if (string.IsNullOrWhiteSpace(folderPath)) return; // Keep the current workspace on cancel.
 
-            ResetLoadedWorkspace();
-            using var cancellation = new CancellationTokenSource();
-            _loadCancellation = cancellation;
-            SetBusy(true, "Loading folder…");
-            var progress = new Progress<AssetLoadProgress>(update =>
-            {
-                var percent = Math.Clamp(update.Percent, 0, 100);
-                SetLoadingProgress(percent, string.IsNullOrWhiteSpace(update.Message) ? "Loading folder…" : update.Message);
-            });
-            try
-            {
-                await AssetFolderSelected.Invoke(folderPath, progress, cancellation.Token);
-                SetBusy(false, $"Folder load finished · {_allAssets.Count} assets");
-            }
-            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
-            {
-                SetBusy(false, $"Folder loading cancelled · {_allAssets.Count} assets currently loaded");
-            }
-            catch (Exception loadError)
-            {
-                SetBusy(false, $"Folder load failed: {loadError.Message}");
-                if (_showErrorMessages)
-                    await DisplayAlert("Folder loading failed", loadError.Message, "OK");
-            }
-            finally
-            {
-                _loadCancellation = null;
-            }
+            await LoadPersistentFolderAsync(folderPath, "Loaded folder");
         }
-        catch (Exception ex)
+        catch (Exception exception)
         {
             SetBusy(false, "Ready");
-            StatusLabel.Text = $"Folder selection failed: {ex.Message}";
+            StatusLabel.Text = $"Folder selection failed: {exception.Message}";
+            if (_showErrorMessages)
+                await DisplayAlert("Folder selection failed", exception.Message, "OK");
         }
     }
 
@@ -1279,7 +1215,9 @@ public partial class MainPage : ContentPage
             case "Export options":
                 await ChooseDefaultExportKindAsync();
                 break;
-            default: ReportUnwired(choice); break;
+            default:
+                StatusLabel.Text = $"Unsupported options action: {choice}";
+                break;
         }
     }
 
@@ -1359,6 +1297,12 @@ public partial class MainPage : ContentPage
             return;
 
         _assetLoader.SpecifyUnityVersion = version.Trim();
+        if (!string.IsNullOrEmpty(_lastLoadedFolderPath))
+        {
+            await LoadPersistentFolderAsync(_lastLoadedFolderPath, _lastLoadSourceLabel);
+            return;
+        }
+
         if (_lastLoadedFiles.Count == 0)
         {
             StatusLabel.Text = string.IsNullOrEmpty(_assetLoader.SpecifyUnityVersion)
@@ -1604,27 +1548,11 @@ public partial class MainPage : ContentPage
         try
         {
             SetBusy(true, $"Exporting XML asset list ({snapshot.Count})…");
-            var progress = new Progress<AssetLoadProgress>(update =>
-                SetLoadingProgress(Math.Clamp(update.Percent, 0, 100),
-                    string.IsNullOrWhiteSpace(update.Message) ? "Exporting XML asset list…" : update.Message));
-            int count;
-            if (ExportAssetListXmlRequested != null)
-            {
-                if (AssetFolderPickerRequested == null)
-                    throw new InvalidOperationException("The connected XML exporter requires a destination folder picker.");
-                var destination = await AssetFolderPickerRequested.Invoke();
-                if (string.IsNullOrWhiteSpace(destination)) return;
-                count = await ExportAssetListXmlRequested.Invoke(snapshot, destination, progress, cancellation.Token);
-            }
-            else
-            {
-                var outputPath = await Task.Run(
-                    () => MobileAssetExporter.ExportAssetListXml(snapshot), cancellation.Token);
-                await Share.Default.RequestAsync(new ShareFileRequest(
-                    "AssetStudio asset list", new ShareFile(outputPath)));
-                count = snapshot.Count;
-            }
-            StatusLabel.Text = $"Exported XML asset list · {count} item(s) · {scope}";
+            var outputPath = await Task.Run(
+                () => MobileAssetExporter.ExportAssetListXml(snapshot), cancellation.Token);
+            await Share.Default.RequestAsync(new ShareFileRequest(
+                "AssetStudio asset list", new ShareFile(outputPath)));
+            StatusLabel.Text = $"Exported XML asset list · {snapshot.Count} item(s) · {scope}";
         }
         catch (OperationCanceledException)
         {
@@ -1665,67 +1593,54 @@ public partial class MainPage : ContentPage
         try
         {
             SetBusy(true, $"Exporting {targets.Count} assets…");
-            int count;
+            var count = targets.Count;
             var rawFallbackCount = 0;
             string? fallbackWarning = null;
             var progress = new Progress<AssetLoadProgress>(update =>
                 SetLoadingProgress(Math.Clamp(update.Percent, 0, 100),
                     string.IsNullOrWhiteSpace(update.Message) ? $"Exporting {targets.Count} assets…" : update.Message));
-            if (ExportAssetsRequested != null)
-            {
-                if (AssetFolderPickerRequested == null)
-                    throw new InvalidOperationException("The connected exporter requires a destination folder picker.");
+            var exportItems = targets.Select(row =>
+                row.SourceAsset is AssetStudio.Object sourceAsset
+                    ? new MobileExportItem(sourceAsset, row.Container)
+                    : throw new InvalidOperationException(
+                        "One or more selected rows are not backed by parsed Unity assets."))
+                .ToArray();
 
-                var destination = await AssetFolderPickerRequested.Invoke();
-                if (string.IsNullOrWhiteSpace(destination)) return;
-                count = await ExportAssetsRequested.Invoke(exportKind, targets, destination, progress, cancellation.Token);
+            var kind = exportKind switch
+            {
+                "Raw" => MobileExportKind.Raw,
+                "Dump" => MobileExportKind.Dump,
+                _ => MobileExportKind.Converted
+            };
+            string outputPath;
+            if (exportItems.Length == 1)
+            {
+                var item = exportItems[0];
+                var result = await Task.Run(
+                    () => MobileAssetExporter.ExportForShare(
+                        item.Asset,
+                        kind,
+                        item.Container,
+                        cancellation.Token,
+                        _monoBehaviourAssemblyService),
+                    cancellation.Token);
+                outputPath = result.FilePath;
+                rawFallbackCount = result.UsedRawFallback ? 1 : 0;
+                fallbackWarning = result.Warning;
             }
             else
             {
-                var exportItems = targets.Select(row =>
-                    row.SourceAsset is AssetStudio.Object sourceAsset
-                        ? new MobileExportItem(sourceAsset, row.Container)
-                        : throw new InvalidOperationException(
-                            "One or more selected rows are not backed by parsed Unity assets."))
-                    .ToArray();
-
-                var kind = exportKind switch
-                {
-                    "Raw" => MobileExportKind.Raw,
-                    "Dump" => MobileExportKind.Dump,
-                    _ => MobileExportKind.Converted
-                };
-                string outputPath;
-                if (exportItems.Length == 1)
-                {
-                    var item = exportItems[0];
-                    var result = await Task.Run(
-                        () => MobileAssetExporter.ExportForShare(
-                            item.Asset,
-                            kind,
-                            item.Container,
-                            cancellation.Token,
-                            _monoBehaviourAssemblyService),
-                        cancellation.Token);
-                    outputPath = result.FilePath;
-                    rawFallbackCount = result.UsedRawFallback ? 1 : 0;
-                    fallbackWarning = result.Warning;
-                }
-                else
-                {
-                    var result = await Task.Run(
-                        () => MobileAssetExporter.ExportArchive(
-                            exportItems, kind, progress, cancellation.Token, _monoBehaviourAssemblyService),
-                        cancellation.Token);
-                    outputPath = result.ArchivePath;
-                    rawFallbackCount = result.RawFallbackCount;
-                }
-
-                cancellation.Token.ThrowIfCancellationRequested();
-                await Share.Default.RequestAsync(new ShareFileRequest(
-                    $"AssetStudio {exportKind} export", new ShareFile(outputPath)));
-                count = exportItems.Length;
+                var result = await Task.Run(
+                    () => MobileAssetExporter.ExportArchive(
+                        exportItems, kind, progress, cancellation.Token, _monoBehaviourAssemblyService),
+                    cancellation.Token);
+                outputPath = result.ArchivePath;
+                rawFallbackCount = result.RawFallbackCount;
             }
+
+            cancellation.Token.ThrowIfCancellationRequested();
+            await Share.Default.RequestAsync(new ShareFileRequest(
+                $"AssetStudio {exportKind} export", new ShareFile(outputPath)));
             StatusLabel.Text = rawFallbackCount == 0
                 ? $"Exported {count} item(s) · {exportKind} · {scope}"
                 : rawFallbackCount == 1 && fallbackWarning != null
@@ -1783,7 +1698,7 @@ public partial class MainPage : ContentPage
         else if (choice == "Export class structures")
             await ExportClassStructuresAsync();
         else if (choice != null)
-            ReportUnwired(choice);
+            StatusLabel.Text = $"Unsupported debug action: {choice}";
     }
 
     private async Task ExportClassStructuresAsync()
@@ -1938,28 +1853,11 @@ public partial class MainPage : ContentPage
         completion?.TrySetResult(choice);
     }
 
-    private void ReportUnwired(string action) =>
-        StatusLabel.Text = $"{action} — requires connection to the host asset service";
-
     private HashSet<string>? _selectedTypes;
     private IReadOnlyList<FileResult> _lastLoadedFiles = Array.Empty<FileResult>();
+    private string? _lastLoadedFolderPath;
     private string _lastLoadSourceLabel = "Loaded files";
     private string _defaultExportKind = "Convert";
-
-    private async Task ShowMenu(string title, params string[] options)
-    {
-        var choice = await Choose(title, options);
-        if (choice == null) return;
-
-        // Explicitly report that this is a UI shell until the corresponding
-        // original mobile service is wired into the host project.
-        StatusLabel.Text = $"{choice}: action requires host-service integration";
-        if (title == "Options" && choice == "Display all assets")
-        {
-            _showAllAssets = !_showAllAssets;
-            StatusLabel.Text = $"Display all assets: {(_showAllAssets ? "On" : "Off")}";
-        }
-    }
 
     private void OnBrowserTabClicked(object sender, EventArgs e)
     {
@@ -2269,8 +2167,7 @@ public partial class MainPage : ContentPage
             return;
         }
 
-        AssetContextActionRequested?.Invoke(action, targets);
-        StatusLabel.Text = $"{action}: requires host AssetStudio integration";
+        StatusLabel.Text = $"Unsupported asset action: {action}";
     }
 
     private void NavigateToHierarchyNode(AssetRow row)

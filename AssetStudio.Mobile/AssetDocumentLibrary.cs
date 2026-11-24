@@ -10,6 +10,10 @@ public sealed class AssetDocumentLibrary
         Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
         "AssetStudio", "Library");
 
+    private string ImportedFoldersPath { get; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+        "AssetStudio", "Folders");
+
     public AssetDocumentLibrary() => Directory.CreateDirectory(LibraryPath);
 
     public async Task<FileResult> ImportAsync(FileResult source, CancellationToken cancellationToken = default)
@@ -24,6 +28,64 @@ public sealed class AssetDocumentLibrary
         if (!File.Exists(sourcePath)) throw new FileNotFoundException("Dropped source file was not found.", sourcePath);
         await using var input = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true);
         return await CopyToLibraryAsync(input, Path.GetFileName(sourcePath), cancellationToken);
+    }
+
+    public async Task<string> ImportFolderAsync(string sourcePath, CancellationToken cancellationToken = default)
+    {
+        if (!Directory.Exists(sourcePath))
+            throw new DirectoryNotFoundException($"Selected folder was not found: {sourcePath}");
+
+        var sourceRoot = Path.GetFullPath(sourcePath);
+        var files = await Task.Run(
+            () => Directory.EnumerateFiles(sourceRoot, "*", new EnumerationOptions
+            {
+                RecurseSubdirectories = true,
+                AttributesToSkip = FileAttributes.ReparsePoint
+            }).ToList(),
+            cancellationToken);
+        if (files.Count == 0)
+            throw new InvalidDataException("The selected folder does not contain any files.");
+
+        var folderName = Path.GetFileName(Path.TrimEndingDirectorySeparator(sourceRoot));
+        if (string.IsNullOrWhiteSpace(folderName))
+            folderName = "AssetStudioFolder";
+        folderName = SanitizeFileName(folderName);
+        Directory.CreateDirectory(ImportedFoldersPath);
+        var staging = Path.Combine(ImportedFoldersPath, $".incoming_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(staging);
+        try
+        {
+            foreach (var sourceFile in files)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var relativePath = Path.GetRelativePath(sourceRoot, sourceFile);
+                if (Path.IsPathRooted(relativePath)
+                    || relativePath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                        .Any(segment => segment is "" or "." or ".."))
+                {
+                    throw new InvalidDataException($"The selected folder contains an unsafe path: {relativePath}");
+                }
+
+                var destination = Path.Combine(staging, relativePath);
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                await using var input = new FileStream(
+                    sourceFile, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true);
+                await using var output = new FileStream(
+                    destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, useAsync: true);
+                await input.CopyToAsync(output, 81920, cancellationToken);
+            }
+
+            var importedFolder = Path.Combine(
+                ImportedFoldersPath, $"{DateTime.UtcNow:yyyyMMddHHmmss}_{Guid.NewGuid():N}_{folderName}");
+            Directory.Move(staging, importedFolder);
+            return importedFolder;
+        }
+        catch
+        {
+            if (Directory.Exists(staging))
+                Directory.Delete(staging, recursive: true);
+            throw;
+        }
     }
 
     private async Task<FileResult> CopyToLibraryAsync(Stream input, string originalName, CancellationToken cancellationToken)

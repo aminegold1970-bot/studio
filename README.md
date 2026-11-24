@@ -30,9 +30,9 @@ AssetStudio is a tool for exploring, extracting and exporting assets and assetbu
 - AssetStudio.net6
    - [.NET Desktop Runtime 6.0](https://dotnet.microsoft.com/download/dotnet/6.0)
 
-## iOS app (in progress)
+## iOS and MAUI app (functional port; not full Windows feature parity)
 
-`AssetStudio.Mobile` is the MAUI front end in the original AssetStudio solution and reuses its Unity asset parser. It can import multiple files, Unity bundles, WebData, and ZIP files; search parsed assets; unpack bundles into a shareable ZIP; and export all, selected, or filtered assets as converted files, raw data, or dumps. Menu and asset-context choices use compact, PC-style dropdowns rather than native iOS action sheets. On iOS, files can also be dragged from Files or another app onto the workspace; provider-owned temporary files are copied immediately, imported into the app's library, and then cleaned up. Multi-asset exports are ZIP files containing uniquely named entries and an `AssetStudio_Export_Report.json` manifest; the app reports when an unsupported conversion is preserved as raw asset data. Asset-list and class-structure XML exports are also available. Individual Mesh assets can be viewed as an interactive wireframe and supported textures can be previewed. Exports and extracted bundles are handed to the native iOS share sheet, where they can be saved to Files or shared with another app.
+`AssetStudio.Mobile` is the MAUI front end in the original AssetStudio solution and reuses its Unity asset parser. It can load multiple files or entire folders, unpack bundles, WebData, and ZIP archives, search parsed assets, and export all, selected, or filtered assets as converted files, raw data, or dumps. Native folder pickers are implemented for iOS, Mac Catalyst, Android, and Windows; selected folders are copied into persistent app storage before parsing. File and folder extraction produces a shareable ZIP. Menu and asset-context choices use compact, PC-style popup menus. On iOS, files can also be dragged from Files or another app onto the workspace; provider-owned temporary files are copied immediately, imported into the app's library, and then cleaned up. Multi-asset exports are ZIP files containing uniquely named entries and an `AssetStudio_Export_Report.json` manifest; the app reports when an unsupported conversion is preserved as raw asset data. Asset-list and class-structure XML exports are also available. Individual Mesh assets can be viewed as an interactive wireframe and supported textures can be previewed. Exports and extracted bundles are handed to the platform share sheet, where they can be saved or shared with another app.
 
 The iPhone app supports portrait and landscape. Portrait uses one navigation strip for **Hierarchy**, **Assets**, **Classes**, **Preview**, and **Dump**; the preview starts hidden so the browser uses the full screen. Landscape opens with the desktop-style split workspace and a visible preview pane. Narrow layouts hide the inner pane tab bars to avoid duplicate navigation, and asset rows collapse into compact summaries. The top menu shows a right-pointing arrow when more commands are available by scrolling.
 
@@ -57,13 +57,13 @@ The [GitHub Actions workflow](.github/workflows/build-ios.yml) builds the `net10
 
 ### Load Assets/AssetBundles
 
-Use **File-Load file** or **File-Load folder**.
+Use **File → Load file**, **Load multiple files**, or **Load folder**. Folder imports preserve their directory layout in the app's `Documents/AssetStudio/Folders` storage so the parser can resolve external Unity assets.
 
-When AssetStudio loads AssetBundles, it decompresses and reads it directly in memory, which may cause a large amount of memory to be used. You can use **File-Extract file** or **File-Extract folder** to extract AssetBundles to another folder, and then read.
+When AssetStudio loads AssetBundles, it decompresses and reads them directly in memory, which may use substantial memory. **File → Extract file** and **Extract folder** unpack supported contents into a ZIP and open the platform share sheet; save the ZIP to Files or another location before loading its contents.
 
 ### Extract/Decompress AssetBundles
 
-Use **File-Extract file** or **File-Extract folder**.
+Use **File → Extract file** or **Extract folder**. The app creates a ZIP archive and shares it through the platform share sheet.
 
 ### Export Assets
 

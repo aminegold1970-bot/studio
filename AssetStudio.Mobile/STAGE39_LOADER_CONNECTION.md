@@ -1,17 +1,16 @@
-# Stage 39 — AssetStudio loader connection
+# Mobile loader and folder operations
 
 ## Changes
-- Added `AssetStudioMobileLoader`, which receives the persisted `FileResult` items and passes their full paths to the original `AssetStudio.AssetsManager.LoadFiles()` parser.
-- Converts each parsed `AssetStudio.Object` into the existing mobile `MainPage.AssetRow`, retaining the original object reference for later preview/export operations.
-- Uses the Unity object's name when available, otherwise its Unity class/type name; includes source file, class ID, PathID and byte size.
-- Runs the synchronous parser on a worker thread and reports progress around parsing.
-- Subscribes the loader to `MainPage.AssetFilesSelected` during page initialization.
-- Makes file-import and parser errors visible even when optional error-message display is disabled, so failures are not silent.
+- Connects file and folder loading directly to the original `AssetStudio.AssetsManager`.
+- Builds mobile asset rows, scene hierarchy, and class-tree rows from parsed Unity data.
+- Adds native folder selection on iOS, Mac Catalyst, Android, and Windows. Selected folders are copied into persistent app storage with their directory layout preserved before loading.
+- Implements folder extraction by scanning nested files and sharing a ZIP of supported Unity bundle, WebData, and ZIP contents.
+- Uses the built-in mobile exporter and share sheet directly; removes unused host-service callbacks that could leave menu actions unwired.
+- Preserves the last loaded folder so changing the Unity version override can reload it.
 
-## Verification status
-Source wiring was added and reviewed against the APIs in this repository (`AssetsManager.LoadFiles`, `assetsFileList`, `SerializedFile.Objects`, `Object.type`, `Object.m_PathID`, and `Object.byteSize`). This environment does not have the .NET SDK / iOS workload, so no compile, IPA build, or on-device parsing test is claimed. The original parser may log and skip malformed/unsupported files internally; a real Unity file should be used to verify the resulting asset count on device.
+## Verification
+The Android build was attempted, but the installed .NET SDK lacks the required `maui-android` workload. Restoring it was denied by the environment for insufficient permissions. No successful compile, iOS device run, or folder-provider runtime test is claimed.
 
-## Remaining
-- Add folder loading to the same service path.
-- Connect preview/export actions to the retained `SourceAsset` references and implement platform-compatible decoders where required.
-- Add cancellation within the original synchronous parser; the current cancellation checks run before and after `LoadFiles()`.
+## Remaining desktop feature differences
+- The port is not full Windows GUI feature parity. Audio decoding/transcoding beyond native player codecs, editable model rigs and animation export, and some platform-specific conversions remain limited as described in `README.md`.
+- The original synchronous parser can only be cancelled before and after `AssetsManager.LoadFiles` or `LoadFolder`; cancellation inside the parser remains upstream work.

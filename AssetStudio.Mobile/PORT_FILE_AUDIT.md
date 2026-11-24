@@ -4,7 +4,7 @@ Audit basis: original `AssetStudio-master-original.zip` extracted at `/mnt/data/
 
 ## Current status
 
-This report describes the earlier v27 reconstruction and is historical, not an audit of the current source tree. The current MAUI project has a `.csproj`, references the `AssetStudio` parser, and connects `AssetStudioMobileLoader` to the page. See `AssetStudioMobile.csproj` and `AssetStudioMobileLoader.cs`.
+This report describes the earlier v27 reconstruction and is historical, not an audit of the current source tree. The current MAUI project references the `AssetStudio` parser and invokes `AssetStudioMobileLoader` for both file and folder loading. Native folder pickers, persistent folder import, and folder extraction are implemented in the mobile project. See `AssetStudioMobile.csproj`, `AssetStudioMobileLoader.cs`, and `MobileFolderPicker.cs`.
 
 ## Historical finding from v27
 

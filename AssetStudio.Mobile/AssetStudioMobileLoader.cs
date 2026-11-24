@@ -26,8 +26,38 @@ public sealed class AssetStudioMobileLoader : IDisposable
         if (paths.Length == 0)
             throw new FileNotFoundException("No readable files were selected from the AssetStudio library.");
 
+        await LoadAsync(
+            $"Preparing {paths.Length} file(s)…",
+            () => _manager.LoadFiles(paths),
+            progress,
+            cancellationToken);
+    }
+
+    public async Task LoadFolderAsync(
+        string folderPath,
+        IProgress<MainPage.AssetLoadProgress> progress,
+        CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (string.IsNullOrWhiteSpace(folderPath) || !Directory.Exists(folderPath))
+            throw new DirectoryNotFoundException($"Selected folder was not found: {folderPath}");
+
+        var fullPath = Path.GetFullPath(folderPath);
+        await LoadAsync(
+            $"Preparing folder {Path.GetFileName(Path.TrimEndingDirectorySeparator(fullPath))}…",
+            () => _manager.LoadFolder(fullPath),
+            progress,
+            cancellationToken);
+    }
+
+    private async Task LoadAsync(
+        string preparingMessage,
+        Action load,
+        IProgress<MainPage.AssetLoadProgress> progress,
+        CancellationToken cancellationToken)
+    {
         cancellationToken.ThrowIfCancellationRequested();
-        progress?.Report(new MainPage.AssetLoadProgress(5, $"Preparing {paths.Length} file(s)…"));
+        progress?.Report(new MainPage.AssetLoadProgress(5, preparingMessage));
 
         var host = MainPageHost ?? throw new InvalidOperationException("The mobile asset browser is not connected.");
         var snapshot = await Task.Run(() =>
@@ -35,11 +65,11 @@ public sealed class AssetStudioMobileLoader : IDisposable
             cancellationToken.ThrowIfCancellationRequested();
             _manager.Clear();
             _manager.SpecifyUnityVersion = SpecifyUnityVersion ?? string.Empty;
-            _manager.LoadFiles(paths);
+            load();
             cancellationToken.ThrowIfCancellationRequested();
 
             if (_manager.assetsFileList.Count == 0)
-                throw new InvalidDataException("No Unity asset files were found in the selected file(s).");
+                throw new InvalidDataException("No Unity asset files were found in the selected input.");
 
             var result = BuildBrowseData(_manager);
             progress?.Report(new MainPage.AssetLoadProgress(
