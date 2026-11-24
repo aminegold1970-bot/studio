@@ -1886,7 +1886,7 @@ public partial class MainPage : ContentPage
     {
         // Size to the longest menu label instead of stretching across the phone.
         // The arrow column is included in the estimate for nested Export menus.
-        var longest = options.Length == 0 ? 12 : options.Max(option => option.Length);
+        var longest = options.Count == 0 ? 12 : options.Max(option => option.Length);
         var popupWidth = Math.Clamp(longest * 6.1 + 30, 190, 270);
         popupWidth = Math.Min(popupWidth, Math.Max(180, Width - 8));
         var maxLeft = Math.Max(4, Width - popupWidth - 4);
@@ -1897,7 +1897,7 @@ public partial class MainPage : ContentPage
         // Never compress rows to fit. Show at most five complete menu options;
         // the rest remain reachable by scrolling vertically.
         var visibleItems = Math.Min(options.Count, 5);
-        var separators = title == "Export" ? options.Take(visibleItems).Count((_, index) => index is 2 or 3 or 5) : 0;
+        var separators = title == "Export" ? new[] { 2, 3, 5 }.Count(index => index < visibleItems) : 0;
         MenuOptionsScroll.HeightRequest = visibleItems * 24 + separators;
     }
 
