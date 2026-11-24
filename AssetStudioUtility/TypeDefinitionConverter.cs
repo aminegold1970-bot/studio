@@ -250,7 +250,10 @@ namespace AssetStudio
             }
             else if (UnityEngineTypePredicates.IsSerializableUnityClass(typeRef) || UnityEngineTypePredicates.IsSerializableUnityStruct(typeRef))
             {
-                switch (typeRef.FullName)
+                var unityTypeName = typeRef is GenericInstanceType genericType
+                    ? genericType.ElementType.FullName
+                    : typeRef.FullName;
+                switch (unityTypeName)
                 {
                     case "UnityEngine.AnimationCurve":
                         Helper.AddAnimationCurve(nodes, name, indent);
@@ -276,6 +279,14 @@ namespace AssetStudio
                     case "UnityEngine.PropertyName":
                         Helper.AddPropertyName(nodes, name, indent);
                         break;
+                    case "UnityEngine.LazyLoadReference`1":
+                        var typeDef = typeRef.Resolve()
+                            ?? throw new NotSupportedException($"Could not resolve serialized Unity type '{typeRef.FullName}'.");
+                        nodes.Add(new TypeTreeNode(typeRef.Name, name, indent, align));
+                        nodes.AddRange(new TypeDefinitionConverter(typeDef, Helper, indent + 1).ConvertToTypeTreeNodes());
+                        break;
+                    default:
+                        throw new NotSupportedException($"Serialized Unity type '{typeRef.FullName}' has no type-tree mapping.");
                 }
             }
             else

@@ -5,6 +5,7 @@ using FbxSharp;
 using ModelIO;
 using NumericsMatrix4x4 = System.Numerics.Matrix4x4;
 using NumericsVector3 = System.Numerics.Vector3;
+using NumericsVector4 = System.Numerics.Vector4;
 
 namespace AssetStudioMobile;
 
@@ -22,7 +23,7 @@ internal static class MobileFbxExporter
                 mesh,
                 NumericsMatrix4x4.Identity,
                 string.IsNullOrWhiteSpace(mesh.m_Name) ? "Mesh" : mesh.m_Name,
-                Array.Empty<Material>(),
+                Array.Empty<AssetStudio.Material?>(),
                 null,
                 null,
                 null,
@@ -58,6 +59,7 @@ internal static class MobileFbxExporter
         {
             using var allocator = new MDLMeshBufferDataAllocator();
             using var asset = new MDLAsset(allocator);
+            var materialCache = new Dictionary<AssetStudio.Material, MDLMaterial>();
             foreach (var geometry in meshes)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -65,6 +67,8 @@ internal static class MobileFbxExporter
                     geometry.Mesh,
                     geometry.WorldTransform,
                     geometry.Name,
+                    geometry.Materials,
+                    materialCache,
                     geometry.SkinTransforms,
                     geometry.SkinNormalTransforms,
                     geometry.BlendShapePositionDeltas,
@@ -94,10 +98,116 @@ internal static class MobileFbxExporter
         }
     }
 
+    private static MDLMaterial? GetModelIoMaterial(
+        AssetStudio.Material? source,
+        Dictionary<AssetStudio.Material, MDLMaterial> materialCache)
+    {
+        if (source == null)
+            return null;
+        if (materialCache.TryGetValue(source, out var cached))
+            return cached;
+
+        var savedProperties = source.m_SavedProperties;
+        var baseColor = GetMaterialColor(
+            savedProperties.m_Colors,
+            ["_Color", "_BaseColor"],
+            new AssetStudio.Color(1, 1, 1, 1));
+        var emission = GetMaterialColor(
+            savedProperties.m_Colors,
+            ["_EmissionColor"],
+            new AssetStudio.Color(0, 0, 0, 1));
+        var specular = GetMaterialColor(
+            savedProperties.m_Colors,
+            ["_SpecColor", "_SpecularColor"],
+            new AssetStudio.Color(0, 0, 0, 1));
+        ValidateMaterialColor(source, baseColor);
+        ValidateMaterialColor(source, emission);
+        ValidateMaterialColor(source, specular);
+
+        var metallic = GetMaterialFloat(savedProperties.m_Floats, ["_Metallic"], 0);
+        var smoothness = GetMaterialFloat(
+            savedProperties.m_Floats,
+            ["_Glossiness", "_Smoothness"],
+            0.5f);
+        if (!float.IsFinite(metallic) || !float.IsFinite(smoothness))
+            throw new InvalidDataException($"Material '{source.m_Name}' contains a non-finite PBR value.");
+
+        var name = string.IsNullOrWhiteSpace(source.m_Name)
+            ? $"Material_{source.m_PathID}"
+            : $"{source.m_Name}_{source.m_PathID}";
+        var material = new MDLMaterial(name, new MDLPhysicallyPlausibleScatteringFunction());
+        material.SetProperty(new MDLMaterialProperty(
+            "baseColor",
+            MDLMaterialSemantic.BaseColor,
+            ToNumericsColor(baseColor)));
+        material.SetProperty(new MDLMaterialProperty(
+            "emission",
+            MDLMaterialSemantic.Emission,
+            ToNumericsColor(emission)));
+        material.SetProperty(new MDLMaterialProperty(
+            "specular",
+            MDLMaterialSemantic.Specular,
+            ToNumericsColor(specular)));
+        material.SetProperty(new MDLMaterialProperty(
+            "metallic",
+            MDLMaterialSemantic.Metallic,
+            Math.Clamp(metallic, 0, 1)));
+        material.SetProperty(new MDLMaterialProperty(
+            "roughness",
+            MDLMaterialSemantic.Roughness,
+            1 - Math.Clamp(smoothness, 0, 1)));
+        material.SetProperty(new MDLMaterialProperty(
+            "opacity",
+            MDLMaterialSemantic.Opacity,
+            Math.Clamp(baseColor.A, 0, 1)));
+        materialCache.Add(source, material);
+        return material;
+    }
+
+    private static NumericsVector4 ToNumericsColor(AssetStudio.Color color) =>
+        new(color.R, color.G, color.B, color.A);
+
+    private static AssetStudio.Color GetMaterialColor(
+        KeyValuePair<string, AssetStudio.Color>[] properties,
+        string[] names,
+        AssetStudio.Color fallback)
+    {
+        foreach (var property in properties)
+        {
+            if (names.Contains(property.Key, StringComparer.Ordinal))
+                return property.Value;
+        }
+        return fallback;
+    }
+
+    private static float GetMaterialFloat(
+        KeyValuePair<string, float>[] properties,
+        string[] names,
+        float fallback)
+    {
+        foreach (var property in properties)
+        {
+            if (names.Contains(property.Key, StringComparer.Ordinal))
+                return property.Value;
+        }
+        return fallback;
+    }
+
+    private static void ValidateMaterialColor(AssetStudio.Material material, AssetStudio.Color color)
+    {
+        if (!float.IsFinite(color.R) || !float.IsFinite(color.G)
+            || !float.IsFinite(color.B) || !float.IsFinite(color.A))
+        {
+            throw new InvalidDataException($"Material '{material.m_Name}' contains a non-finite color.");
+        }
+    }
+
     private static MDLMesh CreateModelIoMesh(
         Mesh source,
         NumericsMatrix4x4 worldTransform,
         string objectName,
+        IReadOnlyList<AssetStudio.Material?> materials,
+        Dictionary<AssetStudio.Material, MDLMaterial> materialCache,
         NumericsMatrix4x4[]? skinTransforms,
         NumericsMatrix4x4[]? skinNormalTransforms,
         NumericsVector3[]? blendShapePositionDeltas,
@@ -252,9 +362,10 @@ internal static class MobileFbxExporter
 
         var submeshes = new List<MDLSubmesh>(sourceSubmeshes.Length);
         var indexOffset = 0;
-        foreach (var sourceSubmesh in sourceSubmeshes)
+        for (var submeshIndex = 0; submeshIndex < sourceSubmeshes.Length; submeshIndex++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var sourceSubmesh = sourceSubmeshes[submeshIndex];
             var indexCount = checked((int)sourceSubmesh.indexCount);
             if (indexCount == 0)
                 continue;
@@ -282,12 +393,15 @@ internal static class MobileFbxExporter
             Buffer.BlockCopy(indices, 0, indexBytes, 0, indexBytes.Length);
             using var indexData = NSData.FromArray(indexBytes);
             var indexBuffer = allocator.CreateBuffer(indexData, MDLMeshBufferType.Index);
+            var material = submeshIndex < materials.Count
+                ? GetModelIoMaterial(materials[submeshIndex], materialCache)
+                : null;
             submeshes.Add(new MDLSubmesh(
                 indexBuffer,
                 (nuint)indexCount,
                 MDLIndexBitDepth.UInt32,
                 MDLGeometryType.Triangles,
-                null));
+                material));
             indexOffset += indexCount;
         }
 

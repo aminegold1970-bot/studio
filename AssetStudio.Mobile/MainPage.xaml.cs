@@ -1412,7 +1412,7 @@ public partial class MainPage : ContentPage
             {
                 StatusLabel.Text = sceneObjects == null
                     ? $"Exported {meshes.Count} mesh(es) as static FBX; transforms, materials, rigs and animations are not included"
-                    : $"Exported {meshes.Count} mesh(es) as static FBX with scene transforms and baked skin/blend-shape pose; rigs, materials and animation are not included";
+                    : $"Exported {meshes.Count} mesh(es) as static FBX with scene transforms, material colors/PBR values and baked skin/blend-shape pose; textures, rigs and animation are not included";
             }
             else if (sceneObjects != null)
             {
