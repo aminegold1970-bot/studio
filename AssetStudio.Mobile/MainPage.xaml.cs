@@ -42,6 +42,10 @@ public partial class MainPage : ContentPage
     public event Action<string, IReadOnlyList<AssetRow>>? AssetContextActionRequested;
     private bool _audioLoopEnabled;
     private bool _updatingAudioPosition;
+    private string? _texturePreviewPath;
+    private int _texturePreviewWidth;
+    private int _texturePreviewHeight;
+    private string _texturePreviewFormat = string.Empty;
     private readonly ObservableCollection<AssetRow> _allAssets = new();
     private readonly ObservableCollection<AssetRow> _visibleAssets = new();
     // _hierarchy contains only rows currently visible in the expanded tree.
@@ -81,6 +85,9 @@ public partial class MainPage : ContentPage
     public MainPage()
     {
         InitializeComponent();
+        var textureTap = new TapGestureRecognizer();
+        textureTap.Tapped += OnTexturePreviewTapped;
+        AssetImagePreview.GestureRecognizers.Add(textureTap);
         _assetLoader.MainPageHost = (assets, hierarchy, classes) =>
         {
             SetAssets(assets);
@@ -612,12 +619,16 @@ public partial class MainPage : ContentPage
     // method after decoding the selected Unity object. These methods deliberately
     // accept decoded display data rather than depending on Windows Forms types.
     public void ShowTexturePreview(string title, ImageSource image, int width, int height,
-        string format, string additionalInfo = "")
+        string format, string additionalInfo = "", string? imagePath = null)
     {
         MainThread.BeginInvokeOnMainThread(() =>
         {
             _showingEmptyPreview = false;
             ResetPreviewSurface();
+            _texturePreviewPath = imagePath;
+            _texturePreviewWidth = width;
+            _texturePreviewHeight = height;
+            _texturePreviewFormat = format ?? string.Empty;
             PreviewTitle.Text = title;
             PreviewKind.Text = "Texture / Sprite";
             ImagePreviewFrame.IsVisible = image != null;
@@ -713,8 +724,34 @@ public partial class MainPage : ContentPage
         });
     }
 
+    private async void OnTexturePreviewTapped(object? sender, TappedEventArgs e)
+    {
+        var path = _texturePreviewPath;
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            return;
+
+        try
+        {
+            var viewer = new TexturePreviewPage(
+                _selectedAsset?.Name ?? "Texture",
+                path,
+                _texturePreviewWidth,
+                _texturePreviewHeight,
+                _texturePreviewFormat);
+            await Navigation.PushModalAsync(new NavigationPage(viewer));
+        }
+        catch (Exception ex)
+        {
+            await DisplayAlert("Texture preview", $"Could not open the full-screen viewer: {ex.Message}", "OK");
+        }
+    }
+
     private void ResetPreviewSurface()
     {
+        _texturePreviewPath = null;
+        _texturePreviewWidth = 0;
+        _texturePreviewHeight = 0;
+        _texturePreviewFormat = string.Empty;
 #if IOS
         UnregisterEmbeddedPreviewFont();
 #endif
@@ -2238,7 +2275,7 @@ public partial class MainPage : ContentPage
                     var imagePath = await Task.Run(() => MobileAssetExporter.Export(texture));
                     if (_selectedAsset?.Id != row.Id) return;
                     ShowTexturePreview(row.Name, ImageSource.FromFile(imagePath), texture.m_Width,
-                        texture.m_Height, texture.m_TextureFormat.ToString());
+                        texture.m_Height, texture.m_TextureFormat.ToString(), imagePath: imagePath);
                     break;
                 case AssetStudio.Mesh mesh:
                     ShowModelPreview(row.Name,
@@ -2294,7 +2331,7 @@ public partial class MainPage : ContentPage
                     if (_selectedAsset?.Id != row.Id) return;
                     ShowTexturePreview(row.Name, ImageSource.FromFile(spriteImage),
                         (int)sprite.m_Rect.width, (int)sprite.m_Rect.height,
-                        "PNG sprite crop", PreviewDetails.Text);
+                        "PNG sprite crop", PreviewDetails.Text, spriteImage);
                     break;
                 case AssetStudio.VideoClip:
                     ShowUnsupportedPreview(row.Name, "VideoClip",
