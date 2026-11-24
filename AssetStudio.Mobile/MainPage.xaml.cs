@@ -55,6 +55,10 @@ public partial class MainPage : ContentPage
     private readonly List<AssetRow> _selectedAssets = new();
     private bool _showingDump;
     private bool _showingEmptyPreview = true;
+    private string? _previewImagePath;
+    private int _previewImageWidth;
+    private int _previewImageHeight;
+    private string _previewImageFormat = string.Empty;
     private readonly AssetDocumentLibrary _documentLibrary = new();
     private readonly AssetStudioMobileLoader _assetLoader = new();
     private readonly MobileMonoBehaviourAssemblyService _monoBehaviourAssemblyService = new();
@@ -449,7 +453,7 @@ public partial class MainPage : ContentPage
         }
     }
 
-    // Integration points for the real mobile asset-loading layer.
+    // Publishes parsed assets and scene data to the workspace.
     public void SetAssets(IEnumerable<AssetRow> assets)
     {
         var incoming = assets?.ToList() ?? new List<AssetRow>();
@@ -658,20 +662,23 @@ public partial class MainPage : ContentPage
         });
     }
 
-    // GUI adapter methods. The existing asset service should call the matching
-    // method after decoding the selected Unity object. These methods deliberately
-    // accept decoded display data rather than depending on Windows Forms types.
+    // Preview methods accept decoded data without depending on Windows Forms types.
     public void ShowTexturePreview(string title, ImageSource image, int width, int height,
-        string format, string additionalInfo = "")
+        string format, string additionalInfo = "", string? imagePath = null)
     {
         MainThread.BeginInvokeOnMainThread(() =>
         {
             _showingEmptyPreview = false;
             ResetPreviewSurface();
+            _previewImagePath = imagePath;
+            _previewImageWidth = width;
+            _previewImageHeight = height;
+            _previewImageFormat = format ?? string.Empty;
             PreviewTitle.Text = title;
             PreviewKind.Text = "Texture / Sprite";
             ImagePreviewFrame.IsVisible = image != null;
             AssetImagePreview.Source = image;
+            OpenFullTexturePreviewButton.IsVisible = !string.IsNullOrWhiteSpace(imagePath);
             SetAssetMetadata(new[] { new MetadataRow("Width", width.ToString()),
                 new MetadataRow("Height", height.ToString()), new MetadataRow("Format", format) });
             PreviewDetails.Text = additionalInfo ?? string.Empty;
@@ -758,7 +765,9 @@ public partial class MainPage : ContentPage
             ResetPreviewSurface();
             PreviewTitle.Text = title;
             PreviewKind.Text = type;
-            PreviewDetails.Text = message;
+            TextPreviewFrame.IsVisible = true;
+            AssetTextPreview.Text = message;
+            PreviewDetails.Text = "The source asset remains selected. Export actions are available where supported.";
             RefreshPreviewSurfaceVisibility();
         });
     }
@@ -769,6 +778,11 @@ public partial class MainPage : ContentPage
         UnregisterEmbeddedPreviewFont();
 #endif
         ImagePreviewFrame.IsVisible = false;
+        OpenFullTexturePreviewButton.IsVisible = false;
+        _previewImagePath = null;
+        _previewImageWidth = 0;
+        _previewImageHeight = 0;
+        _previewImageFormat = string.Empty;
         MetadataFrame.IsVisible = false;
         _metadataRows.Clear();
         TextPreviewFrame.IsVisible = false;
@@ -842,7 +856,8 @@ public partial class MainPage : ContentPage
     private async void OnFileMenuClicked(object sender, EventArgs e)
     {
         _menuAnchor = sender as Button;
-        var choice = await Choose("File", "Load file", "Load multiple files", "Load folder", "Extract file", "Extract folder");
+        var choice = await Choose("File", "Load file", "Load multiple files", "Load folder",
+            "Open Asset Library", "Extract file", "Extract folder");
         if (choice == null) return;
 
         switch (choice)
@@ -855,6 +870,9 @@ public partial class MainPage : ContentPage
                 break;
             case "Load folder":
                 await PickAssetFolderAsync();
+                break;
+            case "Open Asset Library":
+                await OpenLibraryAsync();
                 break;
             case "Extract file":
                 await ExtractFilesAsync();
@@ -2208,11 +2226,11 @@ public partial class MainPage : ContentPage
         ResetPreviewSurface();
         PreviewTitle.Text = row.Name;
         PreviewKind.Text = row.Type;
-        PreviewDetails.Text = $"Container: {row.Container}\nType: {row.Type}\nPathID: {row.PathId}\nSize: {row.Size}\n\nDecoded preview data has not been supplied by the host asset service.";
+        PreviewDetails.Text = BuildAssetSummary(row);
         try
         {
             DumpText.Text = row.SourceAsset is AssetStudio.Object source
-                ? source.Dump() ?? string.Empty
+                ? source.Dump() ?? "No serialized type tree is available for this asset."
                 : "No parsed asset data is available for this row.";
         }
         catch (Exception ex)
@@ -2239,7 +2257,7 @@ public partial class MainPage : ContentPage
                     var imagePath = await Task.Run(() => MobileAssetExporter.Export(texture));
                     if (_selectedAsset?.Id != row.Id) return;
                     ShowTexturePreview(row.Name, ImageSource.FromFile(imagePath), texture.m_Width,
-                        texture.m_Height, texture.m_TextureFormat.ToString());
+                        texture.m_Height, texture.m_TextureFormat.ToString(), imagePath: imagePath);
                     break;
                 case AssetStudio.Mesh mesh:
                     ShowModelPreview(row.Name,
@@ -2295,19 +2313,19 @@ public partial class MainPage : ContentPage
                     if (_selectedAsset?.Id != row.Id) return;
                     ShowTexturePreview(row.Name, ImageSource.FromFile(spriteImage),
                         (int)sprite.m_Rect.width, (int)sprite.m_Rect.height,
-                        "PNG sprite crop", PreviewDetails.Text);
+                        "PNG sprite crop", PreviewDetails.Text, spriteImage);
                     break;
                 case AssetStudio.VideoClip:
-                    ShowUnsupportedPreview(row.Name, "VideoClip",
-                        "Video data can be exported in its stored format.");
+                    await ShowAssetDumpOrSummaryAsync(row,
+                        "Video data is available through Export in its stored format.");
                     break;
                 case AssetStudio.MovieTexture:
-                    ShowUnsupportedPreview(row.Name, "MovieTexture",
-                        "Movie data can be exported in its stored OGV format.");
+                    await ShowAssetDumpOrSummaryAsync(row,
+                        "Movie data is available through Export in its stored OGV format.");
                     break;
                 default:
-                    ShowUnsupportedPreview(row.Name, row.Type,
-                        $"No mobile preview is available for {row.Type}. Use Export to save the asset.");
+                    await ShowAssetDumpOrSummaryAsync(row,
+                        "Use the Dump tab to inspect serialized fields when available, or Export to save this asset.");
                     break;
             }
         }
@@ -2331,6 +2349,63 @@ public partial class MainPage : ContentPage
         {
             await DisplayAlert("Mesh preview failed", ex.Message, "OK");
         }
+    }
+
+    private async void OnFullTexturePreviewClicked(object sender, EventArgs e)
+    {
+        var imagePath = _previewImagePath;
+        if (string.IsNullOrWhiteSpace(imagePath) || !File.Exists(imagePath))
+        {
+            await DisplayAlert("Texture preview",
+                "The decoded preview image is no longer available. Select the asset again to regenerate it.", "OK");
+            return;
+        }
+
+        try
+        {
+            await Navigation.PushModalAsync(CreateModalNavigationPage(new TexturePreviewPage(
+                PreviewTitle.Text, imagePath, _previewImageWidth, _previewImageHeight, _previewImageFormat)));
+        }
+        catch (Exception exception)
+        {
+            await DisplayAlert("Texture preview failed", exception.Message, "OK");
+        }
+    }
+
+    private async Task ShowAssetDumpOrSummaryAsync(AssetRow row, string details)
+    {
+        var dump = row.SourceAsset is AssetStudio.Object asset
+            ? await Task.Run(() => asset.Dump())
+            : null;
+        if (_selectedAsset?.Id != row.Id)
+            return;
+
+        if (!string.IsNullOrWhiteSpace(dump))
+            ShowTextPreview(row.Name, $"{row.Type} serialized data", dump, details);
+        else
+            ShowTextPreview(row.Name, $"{row.Type} details", BuildAssetSummary(row), details);
+    }
+
+    private static string BuildAssetSummary(AssetRow row)
+    {
+        var lines = new List<string>
+        {
+            $"Type: {row.Type}",
+            $"Class ID: {row.TypeId}",
+            $"Path ID: {row.PathId}",
+            $"Size: {row.Size}"
+        };
+        if (!string.IsNullOrWhiteSpace(row.Container))
+            lines.Add($"Container: {row.Container}");
+        if (!string.IsNullOrWhiteSpace(row.SourceFile))
+            lines.Add($"Source file: {Path.GetFileName(row.SourceFile)}");
+        if (row.SourceAsset is AssetStudio.Object asset)
+        {
+            lines.Add($"Serialized size: {asset.byteSize:N0} bytes");
+            lines.Add($"Platform: {asset.platform}");
+            lines.Add($"Type tree: {(asset.serializedType?.m_Type == null ? "not available" : "available")}");
+        }
+        return string.Join(Environment.NewLine, lines);
     }
 
 #if IOS
@@ -2582,7 +2657,7 @@ public partial class MainPage : ContentPage
         };
 
     // Returns the current multi-selection in the same order reported by CollectionView.
-    // Export commands can consume this list once connected to the real exporter.
+    // Returns the current multi-selection in CollectionView order.
     public IReadOnlyList<AssetRow> GetSelectedAssets() => _selectedAssets.ToList();
 
     private void ClearSelectedAsset()
@@ -2901,8 +2976,7 @@ public partial class MainPage : ContentPage
         }
     }
 
-    // Progress adapter for the real AssetStudio host. Percent must come from
-    // the loader's actual work; this page never estimates it.
+    // Progress comes from the parser; this page never estimates completion.
     public sealed record AssetLoadProgress(int Percent, string Message);
 
     public sealed class AssetRow : BindableObject

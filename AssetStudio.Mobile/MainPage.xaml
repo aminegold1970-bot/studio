@@ -142,7 +142,7 @@
                     <Button x:Name="DumpTab" Grid.Column="1" Text="Dump" Clicked="OnDumpTabClicked" Style="{StaticResource TabButton}"/>
                 </Grid>
                 <Grid x:Name="EmptyPreviewSurface" Grid.Row="1" BackgroundColor="#A7A5A6" IsVisible="True">
-                    <Label Text="Preview&#10;not&#10;available" TextColor="#666466" FontSize="26"
+                    <Label Text="Select an asset&#10;to preview" TextColor="#666466" FontSize="26"
                            FontAttributes="Bold" HorizontalTextAlignment="Center"
                            VerticalTextAlignment="Center" HorizontalOptions="Center" VerticalOptions="Center"/>
                 </Grid>
@@ -151,7 +151,11 @@
                         <Label x:Name="PreviewTitle" Text="Preview" TextColor="#202020" FontSize="16" FontAttributes="Bold"/>
                         <Label x:Name="PreviewKind" Text="Select an asset" TextColor="#666666" FontSize="11"/>
                         <Border x:Name="ImagePreviewFrame" IsVisible="False" BackgroundColor="#FFFFFF" Stroke="#C8C8C8" StrokeThickness="1" Padding="6">
-                            <Image x:Name="AssetImagePreview" Aspect="AspectFit" HeightRequest="230"/>
+                            <VerticalStackLayout Spacing="6">
+                                <Image x:Name="AssetImagePreview" Aspect="AspectFit" HeightRequest="230"/>
+                                <Button x:Name="OpenFullTexturePreviewButton" Text="Open full-screen" Clicked="OnFullTexturePreviewClicked"
+                                        IsVisible="False" Style="{StaticResource TabButton}"/>
+                            </VerticalStackLayout>
                         </Border>
                         <Border x:Name="TextPreviewFrame" IsVisible="False" BackgroundColor="#FFFFFF" Stroke="#C8C8C8" StrokeThickness="1" Padding="8">
                             <ScrollView Orientation="Both" HeightRequest="210">
@@ -190,13 +194,13 @@
                                     <Label Text="Volume" TextColor="#444444" FontSize="11" VerticalTextAlignment="Center"/>
                                     <Slider x:Name="AudioVolumeSlider" Grid.Column="1" Minimum="0" Maximum="1" Value="1" ValueChanged="OnAudioVolumeChanged"/>
                                 </Grid>
-                                <Label Text="Playback supports audio formats provided to the native iOS player; export remains available for other formats." TextColor="#666666" FontSize="10"/>
+                                <Label Text="Playback uses the platform's native audio player; export remains available for other formats." TextColor="#666666" FontSize="10"/>
                             </VerticalStackLayout>
                         </Border>
                         <Border x:Name="ModelPreviewFrame" IsVisible="False" BackgroundColor="#FFFFFF" Stroke="#C8C8C8" StrokeThickness="1" Padding="8">
                             <VerticalStackLayout Spacing="6">
                                 <Label Text="3D model preview" TextColor="#202020" FontAttributes="Bold"/>
-                                <Label x:Name="ModelPreviewInfo" Text="A native iOS 3D renderer must be connected." TextColor="#444444" FontSize="12"/>
+                                <Label x:Name="ModelPreviewInfo" Text="Select a Mesh asset to open its wireframe viewer." TextColor="#444444" FontSize="12"/>
                                 <Button x:Name="OpenMeshPreviewButton" Text="Open wireframe preview" Clicked="OnMeshPreviewClicked" IsVisible="False" Style="{StaticResource TabButton}"/>
                             </VerticalStackLayout>
                         </Border>
