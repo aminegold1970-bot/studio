@@ -1797,7 +1797,7 @@ public partial class MainPage : ContentPage
             {
                 Text = option,
                 TextColor = Color.FromArgb("#202020"),
-                FontSize = 12,
+                FontSize = 10,
                 FontAutoScalingEnabled = false,
                 VerticalTextAlignment = TextAlignment.Center,
                 HorizontalTextAlignment = TextAlignment.Start
@@ -1808,7 +1808,7 @@ public partial class MainPage : ContentPage
                 {
                     Text = "▸",
                     TextColor = Color.FromArgb("#555555"),
-                    FontSize = 12,
+                    FontSize = 10,
                     FontAutoScalingEnabled = false,
                     VerticalTextAlignment = TextAlignment.Center,
                     HorizontalTextAlignment = TextAlignment.End
@@ -1857,8 +1857,8 @@ public partial class MainPage : ContentPage
 
     private void PositionMenuPopup(int itemCount)
     {
-        // Desktop AssetStudio menus are compact; on mobile keep a readable fixed
-        // menu width while allowing the option list to scroll vertically.
+        // Keep the shared desktop-style menu compact on mobile. The option list
+        // remains vertically scrollable when it exceeds the available screen height.
         var popupWidth = Math.Min(480, Math.Max(220, Width - 16));
         var maxLeft = Math.Max(4, Width - popupWidth - 4);
         var left = _menuAnchor == null
@@ -1867,7 +1867,7 @@ public partial class MainPage : ContentPage
         MenuPopupFrame.WidthRequest = popupWidth;
         MenuPopupFrame.Margin = new Thickness(Math.Clamp(left, 4, maxLeft), MenuScroll.Height, 4, 0);
         var availableHeight = Math.Max(120, Height - MenuScroll.Height - 20);
-        MenuOptionsScroll.HeightRequest = Math.Min(itemCount * 38, availableHeight);
+        MenuOptionsScroll.HeightRequest = Math.Min(itemCount * 28, availableHeight);
     }
 
     private void OnMenuOverlayBackgroundTapped(object? sender, TappedEventArgs e) =>

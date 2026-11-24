@@ -229,9 +229,9 @@
                     Margin="4,44,4,0" WidthRequest="480" BackgroundColor="#FFFFFF"
                     Stroke="#888888" StrokeThickness="1" Padding="0" ZIndex="201">
                 <Grid RowDefinitions="Auto,1,*">
-                    <Label x:Name="MenuPopupTitle" TextColor="#202020" FontSize="12"
+                    <Label x:Name="MenuPopupTitle" TextColor="#202020" FontSize="10"
                            FontAutoScalingEnabled="False" FontAttributes="Bold"
-                           Padding="10,7" BackgroundColor="#F0F0F0"/>
+                           Padding="7,5" BackgroundColor="#F0F0F0"/>
                     <BoxView Grid.Row="1" HeightRequest="1" BackgroundColor="#B7B7B7"/>
                     <ScrollView x:Name="MenuOptionsScroll" Grid.Row="2" VerticalOptions="Fill"
                                 VerticalScrollBarVisibility="Always">
@@ -263,12 +263,12 @@
                 <Setter Property="MinimumHeightRequest" Value="44"/><Setter Property="MinimumWidthRequest" Value="0"/>
             </Style>
             <Style x:Key="PopupMenuItem" TargetType="Border">
-                <Setter Property="Padding" Value="10,0"/>
+                <Setter Property="Padding" Value="6,0"/>
                 <Setter Property="BackgroundColor" Value="#FFFFFF"/>
                 <Setter Property="Stroke" Value="Transparent"/>
                 <Setter Property="StrokeThickness" Value="0"/>
-                <Setter Property="HeightRequest" Value="38"/>
-                <Setter Property="MinimumHeightRequest" Value="38"/><Setter Property="MinimumWidthRequest" Value="0"/>
+                <Setter Property="HeightRequest" Value="28"/>
+                <Setter Property="MinimumHeightRequest" Value="28"/><Setter Property="MinimumWidthRequest" Value="0"/>
             </Style>
             <Style x:Key="HeaderButton" TargetType="Button">
                 <Setter Property="Padding" Value="2,1"/><Setter Property="CornerRadius" Value="0"/>
