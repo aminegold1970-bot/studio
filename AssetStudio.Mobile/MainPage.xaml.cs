@@ -72,9 +72,9 @@ public partial class MainPage : ContentPage
     private bool? _compactWorkspace;
     private bool _showingPreviewPane;
     private const double WorkspaceDividerWidth = 28;
-    private double _workspaceBrowserRatio = 0.62;
+    private double _workspaceBrowserRatio = 1.0;
     private double _workspaceExpandedBrowserRatio = 0.62;
-    private double _workspaceDragStartRatio = 0.62;
+    private double _workspaceDragStartRatio = 1.0;
     private TaskCompletionSource<string?>? _menuChoiceCompletion;
     private Button? _menuAnchor;
 
@@ -240,7 +240,7 @@ public partial class MainPage : ContentPage
             if (availableWidth <= 0)
                 return;
             var ratio = _workspaceDragStartRatio + e.TotalX / availableWidth;
-            _workspaceBrowserRatio = Math.Clamp(ratio, 0.25, 1.0);
+            _workspaceBrowserRatio = Math.Clamp(ratio, 0.10, 1.0);
             if (_workspaceBrowserRatio < 0.99)
                 _workspaceExpandedBrowserRatio = _workspaceBrowserRatio;
             ApplyWorkspacePaneRatio();
@@ -796,7 +796,7 @@ public partial class MainPage : ContentPage
     private async void OnFileMenuClicked(object sender, EventArgs e)
     {
         _menuAnchor = sender as Button;
-        var choice = await Choose("File", "Load file", "Load multiple files", "Load folder", "Asset Library", "Extract file", "Extract folder");
+        var choice = await Choose("File", "Load file", "Load multiple files", "Load folder", "Extract file", "Extract folder");
         if (choice == null) return;
 
         switch (choice)
@@ -809,9 +809,6 @@ public partial class MainPage : ContentPage
                 break;
             case "Load folder":
                 await PickAssetFolderAsync();
-                break;
-            case "Asset Library":
-                await OpenLibraryAsync();
                 break;
             case "Extract file":
                 await ExtractFilesAsync();
@@ -1182,7 +1179,9 @@ public partial class MainPage : ContentPage
         {
             BusyIndicator.IsVisible = safePercent < 100;
             BusyIndicator.IsRunning = safePercent < 100;
-            StatusLabel.Text = $"{safePercent}% · {message}";
+            StatusLabel.Text = message;
+            LoadingProgressBar.Progress = safePercent / 100.0;
+            LoadingProgressBar.IsVisible = safePercent < 100;
         });
     }
 
@@ -1198,6 +1197,8 @@ public partial class MainPage : ContentPage
         CancelLoadButton.IsVisible = busy && _loadCancellation != null;
         CancelLoadButton.IsEnabled = true;
         StatusLabel.Text = message;
+        LoadingProgressBar.Progress = 0;
+        LoadingProgressBar.IsVisible = busy;
     }
 
     private void OnCancelLoadClicked(object sender, EventArgs e)

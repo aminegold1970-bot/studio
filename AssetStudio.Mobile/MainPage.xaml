@@ -214,10 +214,11 @@
                     <Label x:Name="DumpText" Text="Select an asset to view its dump." TextColor="#202020" FontFamily="monospace" FontSize="11"/>
                 </ScrollView>
             </Grid>
-        </Grid></Grid>        <Grid Grid.Row="3" ColumnDefinitions="*,Auto,Auto" Padding="5,2" ColumnSpacing="6" BackgroundColor="#F0F0F0">
-            <Label x:Name="StatusLabel" Text="Ready to go" TextColor="#444444" FontSize="12" VerticalTextAlignment="Center"/>
-            <Button x:Name="CancelLoadButton" Grid.Column="1" Text="Cancel load" IsVisible="False" Clicked="OnCancelLoadClicked" Padding="8,3" HeightRequest="26" MinimumHeightRequest="0" MinimumWidthRequest="0" FontSize="10" BackgroundColor="#7B3438" TextColor="White"/>
-            <ActivityIndicator x:Name="BusyIndicator" Grid.Column="2" IsRunning="False" IsVisible="False" HeightRequest="20"/>
+        </Grid></Grid>        <Grid Grid.Row="3" RowDefinitions="2,Auto" ColumnDefinitions="*,Auto,Auto" Padding="5,2" ColumnSpacing="6" BackgroundColor="#F0F0F0">
+            <ProgressBar x:Name="LoadingProgressBar" Grid.Row="0" Grid.ColumnSpan="3" Progress="0" IsVisible="False" ProgressColor="#2E8B57" HeightRequest="2"/>
+            <Label x:Name="StatusLabel" Grid.Row="1" Text="Ready to go" TextColor="#444444" FontSize="12" VerticalTextAlignment="Center"/>
+            <Button x:Name="CancelLoadButton" Grid.Row="1" Grid.Column="1" Text="Cancel load" IsVisible="False" Clicked="OnCancelLoadClicked" Padding="8,3" HeightRequest="26" MinimumHeightRequest="0" MinimumWidthRequest="0" FontSize="10" BackgroundColor="#7B3438" TextColor="White"/>
+            <ActivityIndicator x:Name="BusyIndicator" Grid.Row="1" Grid.Column="2" IsRunning="False" IsVisible="False" HeightRequest="20"/>
         </Grid>
         <Grid x:Name="MenuOverlay" Grid.RowSpan="4" IsVisible="False" ZIndex="200">
             <BoxView BackgroundColor="#01000000">
