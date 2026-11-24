@@ -162,6 +162,15 @@
                                 <Label x:Name="AssetTextPreview" TextColor="#202020" FontFamily="monospace" FontSize="11" LineBreakMode="NoWrap"/>
                             </ScrollView>
                         </Border>
+                        <Border x:Name="VideoPreviewFrame" IsVisible="False" BackgroundColor="#111111" Stroke="#C8C8C8" StrokeThickness="1" Padding="6">
+                            <VerticalStackLayout Spacing="8">
+                                <ContentView x:Name="VideoPlayerHost" HeightRequest="240" IsVisible="False"/>
+                                <Button x:Name="LoadVideoPlaybackButton" Text="Load video for playback"
+                                        Clicked="OnVideoPlayerClicked" IsVisible="False" Style="{StaticResource TabButton}"/>
+                                <Label x:Name="VideoPlaybackStatus" Text="Select Load video to start playback."
+                                       TextColor="#EEEEEE" FontSize="11"/>
+                            </VerticalStackLayout>
+                        </Border>
                         <Border x:Name="FontPreviewFrame" IsVisible="False" BackgroundColor="#F4F4F4" Stroke="#C8C8C8" StrokeThickness="1" Padding="10">
                             <VerticalStackLayout Spacing="7">
                                 <Label Text="Font specimen" TextColor="#333333" FontSize="11"/>

@@ -65,6 +65,7 @@ public partial class MainPage : ContentPage
     private int _previewImageWidth;
     private int _previewImageHeight;
     private string _previewImageFormat = string.Empty;
+    private CommunityToolkit.Maui.Views.MediaElement? _videoPlayer;
     private readonly AssetDocumentLibrary _documentLibrary = new();
     private readonly AssetStudioMobileLoader _assetLoader = new();
     private readonly MobileMonoBehaviourAssemblyService _monoBehaviourAssemblyService = new();
@@ -823,8 +824,15 @@ public partial class MainPage : ContentPage
             foreach (var row in metadata)
                 _metadataRows.Add(row);
             MetadataFrame.IsVisible = _metadataRows.Count > 0 && _displayAssetInformation;
+            VideoPreviewFrame.IsVisible = video.m_VideoData?.Size > 0;
+            LoadVideoPlaybackButton.IsVisible = VideoPreviewFrame.IsVisible;
+            VideoPlaybackStatus.Text = VideoPreviewFrame.IsVisible
+                ? "Load video to use the embedded player."
+                : "This video has no readable stored stream.";
             PreviewDetails.Text =
-                "The stored video stream can be exported unchanged. In-app video playback is not available.";
+                VideoPreviewFrame.IsVisible
+                    ? "Playback uses the device's supported codecs. You can still export the stored stream unchanged."
+                    : "This video has no readable stored stream to play or export.";
             RefreshPreviewSurfaceVisibility();
         });
     }
@@ -869,6 +877,14 @@ public partial class MainPage : ContentPage
 #endif
         ImagePreviewFrame.IsVisible = false;
         OpenFullTexturePreviewButton.IsVisible = false;
+        if (_videoPlayer?.Source != null)
+            _videoPlayer.Stop();
+        _videoPlayer = null;
+        VideoPlayerHost.Content = null;
+        VideoPlayerHost.IsVisible = false;
+        VideoPreviewFrame.IsVisible = false;
+        LoadVideoPlaybackButton.IsVisible = false;
+        VideoPlaybackStatus.Text = string.Empty;
         _previewImagePath = null;
         _previewImageWidth = 0;
         _previewImageHeight = 0;
@@ -2693,6 +2709,102 @@ public partial class MainPage : ContentPage
         {
             await DisplayAlert("Texture preview failed", exception.Message, "OK");
         }
+    }
+
+    private async void OnVideoPlayerClicked(object sender, EventArgs e)
+    {
+        if (_selectedAsset?.SourceAsset is not AssetStudio.VideoClip video)
+            return;
+        if (!EnsureVideoPlayer())
+            return;
+
+        using var cancellation = new CancellationTokenSource();
+        _loadCancellation = cancellation;
+        CancelLoadButton.Text = "Cancel open";
+        try
+        {
+            SetBusy(true, "Preparing video for playback…");
+            var result = await Task.Run(
+                () => MobileAssetExporter.ExportForShare(
+                    video,
+                    MobileExportKind.Converted,
+                    cancellationToken: cancellation.Token),
+                cancellation.Token);
+            cancellation.Token.ThrowIfCancellationRequested();
+            if (result.UsedRawFallback)
+                throw new NotSupportedException(
+                    result.Warning ?? "The video stream could not be prepared for playback.");
+
+            if (_selectedAsset?.SourceAsset != video)
+                return;
+
+            _videoPlayer!.ShouldAutoPlay = true;
+            _videoPlayer.Source = CommunityToolkit.Maui.Views.MediaSource.FromFile(result.FilePath);
+            VideoPlayerHost.IsVisible = true;
+            LoadVideoPlaybackButton.IsVisible = false;
+            VideoPlaybackStatus.Text = "Opening video…";
+            PreviewDetails.Text = "Playback uses the device's supported codecs.";
+        }
+        catch (OperationCanceledException)
+        {
+            StatusLabel.Text = "Video playback cancelled";
+        }
+        catch (Exception exception)
+        {
+            VideoPlaybackStatus.Text = $"Could not play video: {exception.Message}";
+            StatusLabel.Text = VideoPlaybackStatus.Text;
+            if (_showErrorMessages)
+                await DisplayAlert("Video playback unavailable", exception.Message, "OK");
+        }
+        finally
+        {
+            _loadCancellation = null;
+            CancelLoadButton.Text = "Cancel load";
+            SetBusy(false, StatusLabel.Text);
+        }
+    }
+
+    private void OnVideoMediaOpened(object? sender, EventArgs e)
+    {
+        VideoPlaybackStatus.Text = "Video ready";
+    }
+
+    private void OnVideoMediaFailed(object? sender, EventArgs e)
+    {
+        VideoPlaybackStatus.Text = "Playback failed; the codec may not be supported on this device.";
+        StatusLabel.Text = VideoPlaybackStatus.Text;
+    }
+
+    private void OnVideoMediaEnded(object? sender, EventArgs e)
+    {
+        VideoPlaybackStatus.Text = "Playback ended";
+    }
+
+    private bool EnsureVideoPlayer()
+    {
+        if (_videoPlayer != null)
+            return true;
+#if ANDROID
+        if (!OperatingSystem.IsAndroidVersionAtLeast(26))
+        {
+            VideoPlaybackStatus.Text = "Embedded video playback requires Android 8.0 or later.";
+            StatusLabel.Text = VideoPlaybackStatus.Text;
+            return false;
+        }
+#endif
+
+        _videoPlayer = new CommunityToolkit.Maui.Views.MediaElement
+        {
+            HeightRequest = 240,
+            Aspect = Aspect.AspectFit,
+            ShouldShowPlaybackControls = true,
+            ShouldAutoPlay = false
+        };
+        _videoPlayer.MediaOpened += OnVideoMediaOpened;
+        _videoPlayer.MediaFailed += OnVideoMediaFailed;
+        _videoPlayer.MediaEnded += OnVideoMediaEnded;
+        VideoPlayerHost.Content = _videoPlayer;
+        return true;
     }
 
     private async Task ShowAssetDumpOrSummaryAsync(AssetRow row, string details)
