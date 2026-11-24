@@ -202,6 +202,7 @@
                                 <Label Text="3D model preview" TextColor="#202020" FontAttributes="Bold"/>
                                 <Label x:Name="ModelPreviewInfo" Text="Select a Mesh asset to open its wireframe viewer." TextColor="#444444" FontSize="12"/>
                                 <Button x:Name="OpenMeshPreviewButton" Text="Open wireframe preview" Clicked="OnMeshPreviewClicked" IsVisible="False" Style="{StaticResource TabButton}"/>
+                                <Button x:Name="OpenSceneObjectPreviewButton" Text="Preview selected scene object" Clicked="OnSceneObjectPreviewClicked" IsVisible="False" Style="{StaticResource TabButton}"/>
                             </VerticalStackLayout>
                         </Border>
                         <Border x:Name="MetadataFrame" IsVisible="False" BackgroundColor="#FFFFFF" Stroke="#C8C8C8" StrokeThickness="1" Padding="0">

@@ -764,6 +764,71 @@ public partial class MainPage : ContentPage
         });
     }
 
+    private void ShowVideoClipPreview(string title, AssetStudio.VideoClip video)
+    {
+        var hasFrameRate = video.m_FrameRate > 0 && double.IsFinite(video.m_FrameRate);
+        var frameRate = hasFrameRate
+            ? $"{video.m_FrameRate:N3} fps"
+            : "Unknown";
+        var duration = hasFrameRate
+            ? $"{video.m_FrameCount / video.m_FrameRate:N2} seconds"
+            : "Unknown";
+        var channels = video.m_AudioChannelCount is { Length: > 0 }
+            ? string.Join(", ", video.m_AudioChannelCount)
+            : "None";
+        var sampleRates = video.m_AudioSampleRate is { Length: > 0 }
+            ? string.Join(", ", video.m_AudioSampleRate.Select(rate => $"{rate:N0} Hz"))
+            : "None";
+        var languages = video.m_AudioLanguage is { Length: > 0 }
+            ? string.Join(", ", video.m_AudioLanguage)
+            : "None";
+        var externalResource = string.IsNullOrWhiteSpace(video.m_ExternalResources?.m_Source)
+            ? "Embedded"
+            : video.m_ExternalResources.m_Source;
+        var storedDataSize = video.m_ExternalResources?.m_Size ?? -1;
+        var dataSize = storedDataSize >= 0
+            ? $"{storedDataSize:N0} bytes"
+            : "Unknown";
+        var pixelAspect = video.m_PixelAspectRatioNum > 0 && video.m_PixelAspectRatioDen > 0
+            ? $"{video.m_PixelAspectRatioNum}:{video.m_PixelAspectRatioDen}"
+            : "Not specified";
+        var metadata = new[]
+        {
+            new MetadataRow("Resolution", $"{video.m_Width} × {video.m_Height}"),
+            new MetadataRow("Proxy resolution", $"{video.m_ProxyWidth} × {video.m_ProxyHeight}"),
+            new MetadataRow("Frame rate", frameRate),
+            new MetadataRow("Frame count", video.m_FrameCount.ToString("N0")),
+            new MetadataRow("Duration", duration),
+            new MetadataRow("Format ID", video.m_Format.ToString()),
+            new MetadataRow("Pixel aspect ratio", pixelAspect),
+            new MetadataRow("Audio channels", channels),
+            new MetadataRow("Audio sample rates", sampleRates),
+            new MetadataRow("Audio languages", languages),
+            new MetadataRow("Split alpha", video.m_HasSplitAlpha.ToString()),
+            new MetadataRow(
+                "Original path",
+                string.IsNullOrWhiteSpace(video.m_OriginalPath) ? "Not specified" : video.m_OriginalPath),
+            new MetadataRow("External resource", externalResource),
+            new MetadataRow("Stored data size", dataSize)
+        };
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            _showingEmptyPreview = false;
+            ResetPreviewSurface();
+            PreviewTitle.Text = title;
+            PreviewKind.Text = "VideoClip metadata";
+            TextPreviewFrame.IsVisible = true;
+            AssetTextPreview.Text = string.Join(
+                Environment.NewLine, metadata.Select(row => $"{row.Key}: {row.Value}"));
+            foreach (var row in metadata)
+                _metadataRows.Add(row);
+            MetadataFrame.IsVisible = _metadataRows.Count > 0 && _displayAssetInformation;
+            PreviewDetails.Text =
+                "The stored video stream can be exported unchanged. In-app video playback is not available.";
+            RefreshPreviewSurfaceVisibility();
+        });
+    }
+
     public void ShowModelPreview(string title, string details)
     {
         MainThread.BeginInvokeOnMainThread(() =>
@@ -776,6 +841,7 @@ public partial class MainPage : ContentPage
             ModelPreviewInfo.Text = string.IsNullOrWhiteSpace(details)
                 ? "A wireframe preview is available for individual Mesh assets." : details;
             OpenMeshPreviewButton.IsVisible = _selectedAsset?.SourceAsset is AssetStudio.Mesh;
+            OpenSceneObjectPreviewButton.IsVisible = false;
             PreviewDetails.Text = "";
             RefreshPreviewSurfaceVisibility();
         });
@@ -814,6 +880,7 @@ public partial class MainPage : ContentPage
         AudioPreviewFrame.IsVisible = false;
         ModelPreviewFrame.IsVisible = false;
         OpenMeshPreviewButton.IsVisible = false;
+        OpenSceneObjectPreviewButton.IsVisible = false;
         AssetImagePreview.Source = null;
         AssetTextPreview.Text = string.Empty;
         FontSpecimenSmall.FontFamily = null;
@@ -1685,6 +1752,25 @@ public partial class MainPage : ContentPage
         }
     }
 
+    private static List<AssetStudio.GameObject> GetHierarchyGameObjects(HierarchyRow root)
+    {
+        var gameObjects = new List<AssetStudio.GameObject>();
+        var pending = new Stack<HierarchyRow>();
+        var visited = new HashSet<HierarchyRow>();
+        pending.Push(root);
+        while (pending.Count > 0)
+        {
+            var current = pending.Pop();
+            if (!visited.Add(current))
+                continue;
+            if (current.SourceAsset is AssetStudio.GameObject gameObject)
+                gameObjects.Add(gameObject);
+            for (var index = current.Children.Count - 1; index >= 0; index--)
+                pending.Push(current.Children[index]);
+        }
+        return gameObjects;
+    }
+
     private async void OnExportMenuClicked(object sender, EventArgs e)
     {
         _menuAnchor = sender as Button;
@@ -1889,6 +1975,8 @@ public partial class MainPage : ContentPage
         var dialog = new AssetTypeFilterPage(types, currentTypes, selected =>
         {
             _selectedTypes = selected.Count == types.Length ? null : selected;
+            _browserTab = "Asset List";
+            RefreshBrowserTab();
             ClearAssetListSelectionForFilterChange();
             ApplyAssetFilter();
         });
@@ -2136,7 +2224,7 @@ public partial class MainPage : ContentPage
             ClearSelectedAsset();
         }
         AssetEmptyLabel.Text = _allAssets.Count == 0
-            ? "No assets loaded. Use Open files to load Unity assets."
+            ? "No assets loaded. Use File → Load file, Load multiple files, or Load folder."
             : "No assets match the current search and filters.";
         if (StatusLabel != null && _browserTab == "Asset List")
             StatusLabel.Text = $"{_visibleAssets.Count} / {_allAssets.Count} assets" +
@@ -2506,9 +2594,8 @@ public partial class MainPage : ContentPage
                         (int)sprite.m_Rect.width, (int)sprite.m_Rect.height,
                         "PNG sprite crop", PreviewDetails.Text, spriteImage);
                     break;
-                case AssetStudio.VideoClip:
-                    await ShowAssetDumpOrSummaryAsync(row,
-                        "Video data is available through Export in its stored format.");
+                case AssetStudio.VideoClip video:
+                    ShowVideoClipPreview(row.Name, video);
                     break;
                 case AssetStudio.MovieTexture:
                     await ShowAssetDumpOrSummaryAsync(row,
@@ -2540,6 +2627,33 @@ public partial class MainPage : ContentPage
         catch (Exception ex)
         {
             await DisplayAlert("Mesh preview failed", ex.Message, "OK");
+        }
+    }
+
+    private async void OnSceneObjectPreviewClicked(object sender, EventArgs e)
+    {
+        if (HierarchyCollection.SelectedItem is not HierarchyRow node)
+            return;
+
+        try
+        {
+            var gameObjects = GetHierarchyGameObjects(node);
+            var geometries = await Task.Run(() =>
+                MobileAssetExporter.GetSceneMeshGeometries(gameObjects, CancellationToken.None));
+            if (geometries.Count == 0)
+            {
+                StatusLabel.Text = $"No renderable meshes in {node.DisplayName}";
+                return;
+            }
+
+            var drawable = await Task.Run(() => new MeshWireframeDrawable(geometries));
+            await Navigation.PushModalAsync(CreateModalNavigationPage(
+                new MeshPreviewPage(node.DisplayName, drawable)));
+        }
+        catch (Exception exception)
+        {
+            StatusLabel.Text = $"Scene object preview failed: {exception.Message}";
+            await DisplayAlert("Scene object preview failed", exception.Message, "OK");
         }
     }
 
@@ -2998,8 +3112,26 @@ public partial class MainPage : ContentPage
 
     private void OnHierarchySelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (e.CurrentSelection.FirstOrDefault() is HierarchyRow node)
-            StatusLabel.Text = $"Selected scene object: {node.DisplayName}";
+        if (_browserTab != "Scene Hierarchy"
+            || e.CurrentSelection.FirstOrDefault() is not HierarchyRow node)
+        {
+            return;
+        }
+
+        var gameObjects = GetHierarchyGameObjects(node);
+        var meshCount = gameObjects.SelectMany(GetMeshes).Distinct().Count();
+        _showingEmptyPreview = false;
+        ResetPreviewSurface();
+        PreviewTitle.Text = node.DisplayName;
+        PreviewKind.Text = "Scene Hierarchy Object";
+        ModelPreviewFrame.IsVisible = true;
+        ModelPreviewInfo.Text = meshCount > 0
+            ? $"{gameObjects.Count} object(s) in this subtree · {meshCount} mesh(es). Preview applies scene transforms and the stored skin/blend-shape pose."
+            : $"{gameObjects.Count} object(s) in this subtree · no renderable meshes.";
+        OpenSceneObjectPreviewButton.IsVisible = meshCount > 0;
+        PreviewDetails.Text = "Check objects to export or use Model → Preview checked scene objects for a combined preview.";
+        RefreshPreviewSurfaceVisibility();
+        StatusLabel.Text = $"Selected scene object: {node.DisplayName} · {meshCount} mesh(es)";
     }
 
     private void OnClassSearchTextChanged(object sender, TextChangedEventArgs e) => ApplyClassFilter();
