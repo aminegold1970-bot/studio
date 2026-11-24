@@ -1965,7 +1965,7 @@ internal static class MobileAssetExporter
                 FMODSoundType.S3M => ".s3m",
                 FMODSoundType.WAV => ".wav",
                 FMODSoundType.XM => ".xm",
-                FMODSoundType.XMA => ".wav",
+                FMODSoundType.XMA => ".xma",
                 FMODSoundType.VAG => ".vag",
                 FMODSoundType.AUDIOQUEUE => ".fsb",
                 _ => ".AudioClip"
