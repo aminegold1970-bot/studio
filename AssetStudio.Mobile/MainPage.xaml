@@ -228,16 +228,10 @@
             <Border x:Name="MenuPopupFrame" HorizontalOptions="Start" VerticalOptions="Start"
                     Margin="4,44,4,0" WidthRequest="480" BackgroundColor="#FFFFFF"
                     Stroke="#888888" StrokeThickness="1" Padding="0" ZIndex="201">
-                <Grid RowDefinitions="0,0,*">
-                    <Label x:Name="MenuPopupTitle" IsVisible="False" TextColor="#202020" FontSize="12"
-                           FontAutoScalingEnabled="False" FontAttributes="Bold"
-                           Padding="0" BackgroundColor="Transparent"/>
-                    <BoxView Grid.Row="1" IsVisible="False" HeightRequest="0"/>
-                    <ScrollView x:Name="MenuOptionsScroll" Grid.Row="2" VerticalOptions="Fill"
-                                VerticalScrollBarVisibility="Always">
-                        <VerticalStackLayout x:Name="MenuOptionsHost" Spacing="0"/>
-                    </ScrollView>
-                </Grid>
+                <ScrollView x:Name="MenuOptionsScroll" VerticalOptions="Fill"
+                            VerticalScrollBarVisibility="Always" HorizontalScrollBarVisibility="Never">
+                    <VerticalStackLayout x:Name="MenuOptionsHost" Spacing="0"/>
+                </ScrollView>
             </Border>
         </Grid>
         <Grid x:Name="DropTargetOverlay" Grid.RowSpan="4" IsVisible="False" InputTransparent="True"
@@ -256,14 +250,14 @@
     <ContentPage.Resources>
         <ResourceDictionary>
             <Style x:Key="MenuButton" TargetType="Button">
-                <Setter Property="Padding" Value="6,0"/><Setter Property="CornerRadius" Value="0"/>
+                <Setter Property="Padding" Value="10,0"/><Setter Property="CornerRadius" Value="0"/>
                 <Setter Property="FontSize" Value="13"/><Setter Property="TextColor" Value="#202020"/>
                 <Setter Property="BackgroundColor" Value="#F0F0F0"/><Setter Property="BorderColor" Value="Transparent"/>
                 <Setter Property="BorderWidth" Value="0"/><Setter Property="HeightRequest" Value="44"/>
                 <Setter Property="MinimumHeightRequest" Value="44"/><Setter Property="MinimumWidthRequest" Value="0"/>
             </Style>
             <Style x:Key="PopupMenuItem" TargetType="Border">
-                <Setter Property="Padding" Value="6,0"/>
+                <Setter Property="Padding" Value="8,0"/>
                 <Setter Property="BackgroundColor" Value="#FFFFFF"/>
                 <Setter Property="Stroke" Value="Transparent"/>
                 <Setter Property="StrokeThickness" Value="0"/>

@@ -302,6 +302,10 @@ public partial class MainPage : ContentPage
             controller.View is UIKit.UIView pageView)
         {
             AssetStudioDropBridge.Attach(pageView);
+            if (BrowserPane?.Handler?.PlatformView is UIKit.UIView browserView)
+                AssetStudioDropBridge.Attach(browserView);
+            if (WorkspaceGrid?.Handler?.PlatformView is UIKit.UIView workspaceView)
+                AssetStudioDropBridge.Attach(workspaceView);
             if (pageView.Window is UIKit.UIWindow window)
                 AssetStudioDropBridge.Attach(window);
         }
@@ -818,6 +822,20 @@ public partial class MainPage : ContentPage
         }
     }
 
+    private async Task<List<FileResult>> PickFilesForExtractionAsync()
+    {
+#if IOS
+        // Use the exact same native Files picker as Load file. This avoids the
+        // MAUI picker callback issue on iOS and keeps selection behavior identical.
+        await WaitForActionSheetDismissalAsync();
+        return await AssetStudioNativeFilePicker.PickAsync(allowMultiple: true);
+#else
+        var picked = await FilePicker.Default.PickMultipleAsync(
+            new PickOptions { PickerTitle = "Select files to extract" });
+        return picked?.ToList() ?? new List<FileResult>();
+#endif
+    }
+
     private async Task ExtractFilesAsync()
     {
         if (ExtractFilesRequested == null)
@@ -830,8 +848,7 @@ public partial class MainPage : ContentPage
 
             try
             {
-                var pickedSources = await FilePicker.PickMultipleAsync(new PickOptions { PickerTitle = "Select files to extract" });
-                var sources = pickedSources?.ToList() ?? new List<FileResult>();
+                var sources = await PickFilesForExtractionAsync();
                 if (sources.Count == 0) return;
 
                 var persisted = new List<FileResult>();
@@ -861,8 +878,7 @@ public partial class MainPage : ContentPage
 
         try
         {
-            var pickedSources = await FilePicker.PickMultipleAsync(new PickOptions { PickerTitle = "Select files to extract" });
-            var sources = pickedSources?.ToList() ?? new List<FileResult>();
+            var sources = await PickFilesForExtractionAsync();
             if (sources.Count == 0) return;
             var destination = await AssetFolderPickerRequested.Invoke();
             if (string.IsNullOrWhiteSpace(destination)) return;
@@ -1775,15 +1791,15 @@ public partial class MainPage : ContentPage
     private Task<string?> Choose(string title, params string[] options)
     {
         if (options.Length == 0)
-            return null;
+            return Task.FromResult<string?>(null);
 
         _menuChoiceCompletion?.TrySetResult(null);
         var completion = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         _menuChoiceCompletion = completion;
-        MenuPopupTitle.Text = title;
         MenuOptionsHost.Children.Clear();
-        foreach (var option in options)
+        for (var index = 0; index < options.Length; index++)
         {
+            var option = options[index];
             var hasSubmenu = title == "Export" && option is ("Raw" or "Dump" or "Asset list to XML");
             var content = new Grid
             {
@@ -1791,7 +1807,8 @@ public partial class MainPage : ContentPage
                 {
                     new ColumnDefinition(GridLength.Star),
                     new ColumnDefinition(GridLength.Auto)
-                }
+                },
+                HeightRequest = 24
             };
             content.Add(new Label
             {
@@ -1800,7 +1817,8 @@ public partial class MainPage : ContentPage
                 FontSize = 12,
                 FontAutoScalingEnabled = false,
                 VerticalTextAlignment = TextAlignment.Center,
-                HorizontalTextAlignment = TextAlignment.Start
+                HorizontalTextAlignment = TextAlignment.Start,
+                LineBreakMode = LineBreakMode.NoWrap
             });
             if (hasSubmenu)
             {
@@ -1811,7 +1829,8 @@ public partial class MainPage : ContentPage
                     FontSize = 12,
                     FontAutoScalingEnabled = false,
                     VerticalTextAlignment = TextAlignment.Center,
-                    HorizontalTextAlignment = TextAlignment.End
+                    HorizontalTextAlignment = TextAlignment.End,
+                    Margin = new Thickness(8, 0, 0, 0)
                 }, 1);
             }
             var item = new Border
@@ -1823,9 +1842,17 @@ public partial class MainPage : ContentPage
             tap.Tapped += (_, _) => FinishMenuChoice(option);
             item.GestureRecognizers.Add(tap);
             MenuOptionsHost.Children.Add(item);
+
+            // Match the desktop menu's visual grouping with thin separators.
+            if (title == "Export" && index is 2 or 3 or 5)
+                MenuOptionsHost.Children.Add(new BoxView
+                {
+                    HeightRequest = 1,
+                    BackgroundColor = Color.FromArgb("#B7B7B7")
+                });
         }
 
-        PositionMenuPopup(options.Length);
+        PositionMenuPopup(title, options);
         MenuOverlay.IsVisible = true;
         return completion.Task;
     }
@@ -1855,21 +1882,23 @@ public partial class MainPage : ContentPage
         await MenuScroll.ScrollToAsync(target, 0, true);
     }
 
-    private void PositionMenuPopup(int itemCount)
+    private void PositionMenuPopup(string title, IReadOnlyList<string> options)
     {
-        // Match the compact proportions of the desktop AssetStudio menus.
-        // Export's main menu is about 270 logical pixels wide; scope submenus are narrower.
-        var isSubmenu = MenuPopupTitle.Text is "Raw" or "Dump" or "Asset list to XML";
-        var desiredWidth = isSubmenu ? 155d : 270d;
-        var popupWidth = Math.Min(desiredWidth, Math.Max(150, Width - 16));
+        // Size to the longest menu label instead of stretching across the phone.
+        // The arrow column is included in the estimate for nested Export menus.
+        var longest = options.Length == 0 ? 12 : options.Max(option => option.Length);
+        var popupWidth = Math.Clamp(longest * 6.1 + 30, 190, 270);
+        popupWidth = Math.Min(popupWidth, Math.Max(180, Width - 8));
         var maxLeft = Math.Max(4, Width - popupWidth - 4);
-        var left = _menuAnchor == null
-            ? 4
-            : _menuAnchor.X - MenuScroll.ScrollX;
+        var left = _menuAnchor == null ? 4 : _menuAnchor.X - MenuScroll.ScrollX;
         MenuPopupFrame.WidthRequest = popupWidth;
         MenuPopupFrame.Margin = new Thickness(Math.Clamp(left, 4, maxLeft), MenuScroll.Height, 4, 0);
-        var availableHeight = Math.Max(120, Height - MenuScroll.Height - 20);
-        MenuOptionsScroll.HeightRequest = Math.Min(itemCount * 24, availableHeight);
+
+        // Never compress rows to fit. Show at most five complete menu options;
+        // the rest remain reachable by scrolling vertically.
+        var visibleItems = Math.Min(options.Count, 5);
+        var separators = title == "Export" ? options.Take(visibleItems).Count((_, index) => index is 2 or 3 or 5) : 0;
+        MenuOptionsScroll.HeightRequest = visibleItems * 24 + separators;
     }
 
     private void OnMenuOverlayBackgroundTapped(object? sender, TappedEventArgs e) =>
