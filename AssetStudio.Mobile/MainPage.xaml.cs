@@ -1023,14 +1023,18 @@ public partial class MainPage : ContentPage
         }
     }
 
-    private async Task<List<FileResult>> PickFilesForExtractionAsync()
+    private async Task<List<FileResult>> PickFilesForExtractionAsync(
+        IProgress<AssetLoadProgress> progress,
+        CancellationToken cancellationToken)
     {
 #if IOS
         // Use the exact same native Files picker as Load file. This avoids the
         // MAUI picker callback issue on iOS and keeps selection behavior identical.
-        await WaitForActionSheetDismissalAsync();
-        return await AssetStudioNativeFilePicker.PickAsync(allowMultiple: true);
+        await WaitForActionSheetDismissalAsync(cancellationToken);
+        return await AssetStudioNativeFilePicker.PickAsync(
+            allowMultiple: true, progress: progress, cancellationToken: cancellationToken);
 #else
+        cancellationToken.ThrowIfCancellationRequested();
         var picked = await FilePicker.Default.PickMultipleAsync(
             new PickOptions { PickerTitle = "Select files to extract" });
         return picked?.ToList() ?? new List<FileResult>();
@@ -1039,13 +1043,30 @@ public partial class MainPage : ContentPage
 
     private async Task ExtractFilesAsync()
     {
+        if (_loadCancellation != null)
+        {
+            StatusLabel.Text = "Wait for the current operation to finish before extracting files.";
+            return;
+        }
+
+        using var cancellation = new CancellationTokenSource();
+        _loadCancellation = cancellation;
+        var progress = new Progress<AssetLoadProgress>(update =>
+        {
+            if (ReferenceEquals(_loadCancellation, cancellation))
+                SetLoadingProgress(Math.Clamp(update.Percent, 0, 100), update.Message);
+        });
         try
         {
-            var sources = await PickFilesForExtractionAsync();
-            if (sources.Count == 0) return;
+            SetBusy(true, "Choose files to extract…");
+            var sources = await PickFilesForExtractionAsync(progress, cancellation.Token);
+            cancellation.Token.ThrowIfCancellationRequested();
+            if (sources.Count == 0)
+            {
+                SetBusy(false, "No files selected.");
+                return;
+            }
 
-            using var cancellation = new CancellationTokenSource();
-            _loadCancellation = cancellation;
             SetBusy(true, $"Unpacking {sources.Count} file(s)…");
 
             var persisted = new List<FileResult>(sources.Count);
@@ -1077,7 +1098,8 @@ public partial class MainPage : ContentPage
         }
         finally
         {
-            _loadCancellation = null;
+            if (ReferenceEquals(_loadCancellation, cancellation))
+                _loadCancellation = null;
         }
     }
 
@@ -1182,7 +1204,7 @@ public partial class MainPage : ContentPage
             var pickerCts = new CancellationTokenSource();
             pickerCancellation = pickerCts;
             _loadCancellation = pickerCts;
-            await WaitForActionSheetDismissalAsync();
+            await WaitForActionSheetDismissalAsync(pickerCts.Token);
 #endif
             SetBusy(true, allowMultiple ? "Choose Unity files…" : "Choose a Unity file…");
             List<FileResult> selected;
@@ -1246,7 +1268,7 @@ public partial class MainPage : ContentPage
     }
 
 #if IOS
-    private async Task WaitForActionSheetDismissalAsync()
+    private async Task WaitForActionSheetDismissalAsync(CancellationToken cancellationToken = default)
     {
         var fallbackPresenter = Handler?.PlatformView as UIKit.UIViewController;
         var rootPresenter = UIKit.UIApplication.SharedApplication.ConnectedScenes
@@ -1261,12 +1283,13 @@ public partial class MainPage : ContentPage
         var stableDismissalChecks = 0;
         for (var attempt = 0; attempt < 40; attempt++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var topPresenter = GetTopPresentedViewController(rootPresenter);
             if (topPresenter is not UIKit.UIAlertController)
             {
                 if (++stableDismissalChecks >= 3)
                 {
-                    await Task.Delay(300);
+                    await Task.Delay(300, cancellationToken);
                     if (GetTopPresentedViewController(rootPresenter) is not UIKit.UIAlertController)
                         return;
                     stableDismissalChecks = 0;
@@ -1277,7 +1300,7 @@ public partial class MainPage : ContentPage
                 stableDismissalChecks = 0;
             }
 
-            await Task.Delay(50);
+            await Task.Delay(50, cancellationToken);
         }
 
         throw new InvalidOperationException("The iOS menu did not dismiss before the file picker was opened. Try again.");
@@ -1561,7 +1584,7 @@ public partial class MainPage : ContentPage
             $"Texture image: {_textureExportFormat}",
             $"Texture2D data: {(_convertTextures ? "Converted" : "Original .tex")}",
             $"ZIP grouping: {GetArchiveGroupingLabel(_archiveGrouping)}",
-            $"Audio export: {(_convertAudio ? "PCM to WAV" : "Original data")}",
+            $"Audio export: {(_convertAudio ? "PCM/Vorbis to WAV" : "Original data")}",
             $"TextAsset extension: {(_restoreTextAssetExtension ? "Restore source" : ".txt")}");
         if (choice == null)
             return;
@@ -1617,13 +1640,13 @@ public partial class MainPage : ContentPage
         {
             var audioMode = await Choose(
                 "Audio export",
-                "Convert supported PCM to WAV",
+                "Convert supported PCM/Vorbis to WAV",
                 "Preserve original audio data");
             if (audioMode == null)
                 return;
-            _convertAudio = audioMode == "Convert supported PCM to WAV";
+            _convertAudio = audioMode == "Convert supported PCM/Vorbis to WAV";
             Preferences.Set("AssetStudio.ConvertAudio", _convertAudio);
-            StatusLabel.Text = $"Audio export: {(_convertAudio ? "supported PCM to WAV" : "original embedded data")}";
+            StatusLabel.Text = $"Audio export: {(_convertAudio ? "supported PCM/Vorbis to WAV" : "original embedded data")}";
             return;
         }
 
@@ -2732,7 +2755,7 @@ public partial class MainPage : ContentPage
                     _selectedAudioClip = audio;
 #endif
                     ShowAudioPreview(row.Name, audio.m_CompressionFormat.ToString(),
-                        $"Length: {audio.m_Length:N2} seconds · {audio.m_Channels} channel(s)\nPlay uses the native audio player; unsupported codecs can still be exported.");
+                        $"Length: {audio.m_Length:N2} seconds · {audio.m_Channels} channel(s)\nPCM and Vorbis convert to WAV; MP3 and AAC use native playback. Other codecs remain exportable as original data.");
                     break;
                 case AssetStudio.Font font:
                     ShowFontPreview(row.Name,

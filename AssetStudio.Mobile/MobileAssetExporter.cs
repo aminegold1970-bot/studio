@@ -2892,6 +2892,14 @@ internal static class MobileAssetExporter
                 cancellationToken), ".wav");
         }
 
+        if (convertAudio
+            && audio.version is { Length: > 0 }
+            && audio.version[0] >= 5
+            && audio.m_CompressionFormat == AudioCompressionFormat.Vorbis)
+        {
+            return (DecodeVorbisWave(data, cancellationToken), ".wav");
+        }
+
         var extension = audio.version is { Length: > 0 } && audio.version[0] < 5
             ? audio.m_Type switch
             {
@@ -2920,6 +2928,53 @@ internal static class MobileAssetExporter
         return (data, extension);
     }
 
+    private static byte[] DecodeVorbisWave(byte[] encodedAudio, CancellationToken cancellationToken)
+    {
+        using var input = new MemoryStream(encodedAudio, writable: false);
+        using var decoder = new NVorbis.VorbisReader(input, closeOnDispose: false);
+        var sampleRate = decoder.SampleRate;
+        var channels = decoder.Channels;
+        if (sampleRate <= 0 || channels <= 0 || channels > ushort.MaxValue)
+            throw new InvalidDataException("Vorbis audio has invalid sample-rate or channel metadata.");
+
+        using var output = new MemoryStream();
+        output.Write(new byte[44]);
+        var samples = new float[8192];
+        var pcmBytes = new byte[samples.Length * sizeof(short)];
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var sampleCount = decoder.ReadSamples(samples, 0, samples.Length);
+            if (sampleCount == 0)
+                break;
+
+            for (var index = 0; index < sampleCount; index++)
+            {
+                var sample = samples[index];
+                if (!float.IsFinite(sample))
+                    throw new InvalidDataException("Vorbis decoder produced a non-finite audio sample.");
+                sample = Math.Clamp(sample, -1f, 1f);
+                var pcmSample = sample <= -1f
+                    ? short.MinValue
+                    : (short)Math.Round(sample * short.MaxValue);
+                BinaryPrimitives.WriteInt16LittleEndian(
+                    pcmBytes.AsSpan(index * sizeof(short), sizeof(short)),
+                    pcmSample);
+            }
+            output.Write(pcmBytes.AsSpan(0, sampleCount * sizeof(short)));
+        }
+
+        var pcmLength = checked((int)(output.Length - 44));
+        if (pcmLength == 0)
+            throw new InvalidDataException("Vorbis audio contains no decoded samples.");
+
+        if (!output.TryGetBuffer(out var outputBuffer) || outputBuffer.Array == null)
+            throw new InvalidOperationException("Could not access the decoded Vorbis audio buffer.");
+        var header = CreatePcmWaveHeader(pcmLength, sampleRate, channels, 16);
+        header.CopyTo(outputBuffer.Array, outputBuffer.Offset);
+        return output.ToArray();
+    }
+
     private static byte[] EncodePcmWave(
         byte[] pcm,
         int sampleRate,
@@ -2942,19 +2997,9 @@ internal static class MobileAssetExporter
             throw new InvalidDataException("PCM audio data is inconsistent with its format metadata.");
         }
 
+        var header = CreatePcmWaveHeader(pcm.Length, sampleRate, channels, bitsPerSample);
         var wave = new byte[44 + pcm.Length];
-        Encoding.ASCII.GetBytes("RIFF").CopyTo(wave, 0);
-        BinaryPrimitives.WriteUInt32LittleEndian(wave.AsSpan(4, 4), checked((uint)(36 + pcm.Length)));
-        Encoding.ASCII.GetBytes("WAVEfmt ").CopyTo(wave, 8);
-        BinaryPrimitives.WriteUInt32LittleEndian(wave.AsSpan(16, 4), 16);
-        BinaryPrimitives.WriteUInt16LittleEndian(wave.AsSpan(20, 2), 1);
-        BinaryPrimitives.WriteUInt16LittleEndian(wave.AsSpan(22, 2), checked((ushort)channels));
-        BinaryPrimitives.WriteUInt32LittleEndian(wave.AsSpan(24, 4), checked((uint)sampleRate));
-        BinaryPrimitives.WriteUInt32LittleEndian(wave.AsSpan(28, 4), checked((uint)byteRate));
-        BinaryPrimitives.WriteUInt16LittleEndian(wave.AsSpan(32, 2), checked((ushort)blockAlign));
-        BinaryPrimitives.WriteUInt16LittleEndian(wave.AsSpan(34, 2), checked((ushort)bitsPerSample));
-        Encoding.ASCII.GetBytes("data").CopyTo(wave, 36);
-        BinaryPrimitives.WriteUInt32LittleEndian(wave.AsSpan(40, 4), checked((uint)pcm.Length));
+        header.CopyTo(wave, 0);
         const int chunkSize = 1024 * 1024;
         for (var offset = 0; offset < pcm.Length; offset += chunkSize)
         {
@@ -2963,6 +3008,43 @@ internal static class MobileAssetExporter
             Buffer.BlockCopy(pcm, offset, wave, 44 + offset, length);
         }
         return wave;
+    }
+
+    private static byte[] CreatePcmWaveHeader(
+        int pcmLength,
+        int sampleRate,
+        int channels,
+        int bitsPerSample)
+    {
+        if (sampleRate <= 0 || channels <= 0 || channels > ushort.MaxValue
+            || bitsPerSample is not (8 or 16 or 24 or 32))
+        {
+            throw new InvalidDataException("PCM audio has invalid sample-rate, channel, or bit-depth metadata.");
+        }
+
+        var blockAlign = checked(channels * (bitsPerSample / 8));
+        var byteRate = (long)sampleRate * blockAlign;
+        if (blockAlign > ushort.MaxValue || byteRate > uint.MaxValue
+            || pcmLength < 0 || pcmLength > int.MaxValue - 44
+            || pcmLength % blockAlign != 0)
+        {
+            throw new InvalidDataException("PCM audio data is inconsistent with its format metadata.");
+        }
+
+        var header = new byte[44];
+        Encoding.ASCII.GetBytes("RIFF").CopyTo(header, 0);
+        BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(4, 4), checked((uint)(36 + pcmLength)));
+        Encoding.ASCII.GetBytes("WAVEfmt ").CopyTo(header, 8);
+        BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(16, 4), 16);
+        BinaryPrimitives.WriteUInt16LittleEndian(header.AsSpan(20, 2), 1);
+        BinaryPrimitives.WriteUInt16LittleEndian(header.AsSpan(22, 2), checked((ushort)channels));
+        BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(24, 4), checked((uint)sampleRate));
+        BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(28, 4), checked((uint)byteRate));
+        BinaryPrimitives.WriteUInt16LittleEndian(header.AsSpan(32, 2), checked((ushort)blockAlign));
+        BinaryPrimitives.WriteUInt16LittleEndian(header.AsSpan(34, 2), checked((ushort)bitsPerSample));
+        Encoding.ASCII.GetBytes("data").CopyTo(header, 36);
+        BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(40, 4), checked((uint)pcmLength));
+        return header;
     }
 
     private static (byte[] Data, string Extension) ExportVideo(
