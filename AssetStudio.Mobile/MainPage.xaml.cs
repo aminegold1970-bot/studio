@@ -42,10 +42,6 @@ public partial class MainPage : ContentPage
     public event Action<string, IReadOnlyList<AssetRow>>? AssetContextActionRequested;
     private bool _audioLoopEnabled;
     private bool _updatingAudioPosition;
-    private string? _texturePreviewPath;
-    private int _texturePreviewWidth;
-    private int _texturePreviewHeight;
-    private string _texturePreviewFormat = string.Empty;
     private readonly ObservableCollection<AssetRow> _allAssets = new();
     private readonly ObservableCollection<AssetRow> _visibleAssets = new();
     // _hierarchy contains only rows currently visible in the expanded tree.
@@ -85,9 +81,6 @@ public partial class MainPage : ContentPage
     public MainPage()
     {
         InitializeComponent();
-        var textureTap = new TapGestureRecognizer();
-        textureTap.Tapped += OnTexturePreviewTapped;
-        AssetImagePreview.GestureRecognizers.Add(textureTap);
         _assetLoader.MainPageHost = (assets, hierarchy, classes) =>
         {
             SetAssets(assets);
@@ -619,16 +612,12 @@ public partial class MainPage : ContentPage
     // method after decoding the selected Unity object. These methods deliberately
     // accept decoded display data rather than depending on Windows Forms types.
     public void ShowTexturePreview(string title, ImageSource image, int width, int height,
-        string format, string additionalInfo = "", string? imagePath = null)
+        string format, string additionalInfo = "")
     {
         MainThread.BeginInvokeOnMainThread(() =>
         {
             _showingEmptyPreview = false;
             ResetPreviewSurface();
-            _texturePreviewPath = imagePath;
-            _texturePreviewWidth = width;
-            _texturePreviewHeight = height;
-            _texturePreviewFormat = format ?? string.Empty;
             PreviewTitle.Text = title;
             PreviewKind.Text = "Texture / Sprite";
             ImagePreviewFrame.IsVisible = image != null;
@@ -724,34 +713,8 @@ public partial class MainPage : ContentPage
         });
     }
 
-    private async void OnTexturePreviewTapped(object? sender, TappedEventArgs e)
-    {
-        var path = _texturePreviewPath;
-        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
-            return;
-
-        try
-        {
-            var viewer = new TexturePreviewPage(
-                _selectedAsset?.Name ?? "Texture",
-                path,
-                _texturePreviewWidth,
-                _texturePreviewHeight,
-                _texturePreviewFormat);
-            await Navigation.PushModalAsync(new NavigationPage(viewer));
-        }
-        catch (Exception ex)
-        {
-            await DisplayAlert("Texture preview", $"Could not open the full-screen viewer: {ex.Message}", "OK");
-        }
-    }
-
     private void ResetPreviewSurface()
     {
-        _texturePreviewPath = null;
-        _texturePreviewWidth = 0;
-        _texturePreviewHeight = 0;
-        _texturePreviewFormat = string.Empty;
 #if IOS
         UnregisterEmbeddedPreviewFont();
 #endif
@@ -855,19 +818,6 @@ public partial class MainPage : ContentPage
         }
     }
 
-    private async Task<List<FileResult>> PickFilesForExtractionAsync()
-    {
-#if IOS
-        // Match Load File: Apple's native document picker dismisses correctly after selection.
-        await WaitForActionSheetDismissalAsync();
-        return await AssetStudioNativeFilePicker.PickAsync(allowMultiple: true);
-#else
-        var picked = await FilePicker.Default.PickMultipleAsync(
-            new PickOptions { PickerTitle = "Select files to extract" });
-        return picked?.ToList() ?? new List<FileResult>();
-#endif
-    }
-
     private async Task ExtractFilesAsync()
     {
         if (ExtractFilesRequested == null)
@@ -880,7 +830,8 @@ public partial class MainPage : ContentPage
 
             try
             {
-                var sources = await PickFilesForExtractionAsync();
+                var pickedSources = await FilePicker.PickMultipleAsync(new PickOptions { PickerTitle = "Select files to extract" });
+                var sources = pickedSources?.ToList() ?? new List<FileResult>();
                 if (sources.Count == 0) return;
 
                 var persisted = new List<FileResult>();
@@ -910,7 +861,8 @@ public partial class MainPage : ContentPage
 
         try
         {
-            var sources = await PickFilesForExtractionAsync();
+            var pickedSources = await FilePicker.PickMultipleAsync(new PickOptions { PickerTitle = "Select files to extract" });
+            var sources = pickedSources?.ToList() ?? new List<FileResult>();
             if (sources.Count == 0) return;
             var destination = await AssetFolderPickerRequested.Invoke();
             if (string.IsNullOrWhiteSpace(destination)) return;
@@ -1557,12 +1509,12 @@ public partial class MainPage : ContentPage
     {
         _menuAnchor = sender as Button;
         var choice = await Choose("Export", "All assets", "Selected assets", "Filtered assets",
-            "Animator + selected AnimationClips (raw)", "Raw", "Dump", "Asset list to XML");
+            "Animator + selected AnimationClips", "Raw", "Dump", "Asset list to XML");
         if (choice == null) return;
 
         var exportKind = _defaultExportKind;
         var scope = choice;
-        if (choice == "Animator + selected AnimationClips (raw)")
+        if (choice == "Animator + selected AnimationClips")
         {
             var animatorAndClips = _selectedAssets
                 .Where(row => row.SourceAsset is AssetStudio.Animator or AssetStudio.AnimationClip)
@@ -1845,7 +1797,7 @@ public partial class MainPage : ContentPage
             {
                 Text = option,
                 TextColor = Color.FromArgb("#202020"),
-                FontSize = 11,
+                FontSize = 12,
                 FontAutoScalingEnabled = false,
                 VerticalTextAlignment = TextAlignment.Center,
                 HorizontalTextAlignment = TextAlignment.Start
@@ -1905,16 +1857,17 @@ public partial class MainPage : ContentPage
 
     private void PositionMenuPopup(int itemCount)
     {
-        var popupWidth = Math.Min(280, Math.Max(200, Width - 16));
+        // Desktop AssetStudio menus are compact; on mobile keep a readable fixed
+        // menu width while allowing the option list to scroll vertically.
+        var popupWidth = Math.Min(480, Math.Max(220, Width - 16));
         var maxLeft = Math.Max(4, Width - popupWidth - 4);
         var left = _menuAnchor == null
             ? 4
             : _menuAnchor.X - MenuScroll.ScrollX;
         MenuPopupFrame.WidthRequest = popupWidth;
         MenuPopupFrame.Margin = new Thickness(Math.Clamp(left, 4, maxLeft), MenuScroll.Height, 4, 0);
-        MenuOptionsScroll.HeightRequest = Math.Min(
-            itemCount * 30,
-            Math.Max(60, Height - MenuScroll.Height - 48));
+        var availableHeight = Math.Max(120, Height - MenuScroll.Height - 20);
+        MenuOptionsScroll.HeightRequest = Math.Min(itemCount * 38, availableHeight);
     }
 
     private void OnMenuOverlayBackgroundTapped(object? sender, TappedEventArgs e) =>
@@ -2275,7 +2228,7 @@ public partial class MainPage : ContentPage
                     var imagePath = await Task.Run(() => MobileAssetExporter.Export(texture));
                     if (_selectedAsset?.Id != row.Id) return;
                     ShowTexturePreview(row.Name, ImageSource.FromFile(imagePath), texture.m_Width,
-                        texture.m_Height, texture.m_TextureFormat.ToString(), imagePath: imagePath);
+                        texture.m_Height, texture.m_TextureFormat.ToString());
                     break;
                 case AssetStudio.Mesh mesh:
                     ShowModelPreview(row.Name,
@@ -2331,7 +2284,7 @@ public partial class MainPage : ContentPage
                     if (_selectedAsset?.Id != row.Id) return;
                     ShowTexturePreview(row.Name, ImageSource.FromFile(spriteImage),
                         (int)sprite.m_Rect.width, (int)sprite.m_Rect.height,
-                        "PNG sprite crop", PreviewDetails.Text, spriteImage);
+                        "PNG sprite crop", PreviewDetails.Text);
                     break;
                 case AssetStudio.VideoClip:
                     ShowUnsupportedPreview(row.Name, "VideoClip",
