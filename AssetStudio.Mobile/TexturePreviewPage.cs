@@ -94,8 +94,7 @@ internal sealed class TexturePreviewPage : ContentPage
 
         var dimensions = width > 0 && height > 0 ? $"{width:N0} × {height:N0}" : "Unknown dimensions";
         var formatText = string.IsNullOrWhiteSpace(format) ? "Unknown format" : format;
-        return $"{dimensions}  ·  {formatText}{size}
-Pinch or use +/− to zoom · Drag to move · Reset to fit";
+        return $"{dimensions}  ·  {formatText}{size}\nPinch or use +/− to zoom · Drag to move · Reset to fit";
     }
 
     private void OnPinchUpdated(object? sender, PinchGestureUpdatedEventArgs e)
