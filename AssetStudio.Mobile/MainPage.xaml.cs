@@ -1797,7 +1797,7 @@ public partial class MainPage : ContentPage
             {
                 Text = option,
                 TextColor = Color.FromArgb("#202020"),
-                FontSize = 10,
+                FontSize = 12,
                 FontAutoScalingEnabled = false,
                 VerticalTextAlignment = TextAlignment.Center,
                 HorizontalTextAlignment = TextAlignment.Start
@@ -1808,7 +1808,7 @@ public partial class MainPage : ContentPage
                 {
                     Text = "▸",
                     TextColor = Color.FromArgb("#555555"),
-                    FontSize = 10,
+                    FontSize = 12,
                     FontAutoScalingEnabled = false,
                     VerticalTextAlignment = TextAlignment.Center,
                     HorizontalTextAlignment = TextAlignment.End
@@ -1857,9 +1857,11 @@ public partial class MainPage : ContentPage
 
     private void PositionMenuPopup(int itemCount)
     {
-        // Keep the shared desktop-style menu compact on mobile. The option list
-        // remains vertically scrollable when it exceeds the available screen height.
-        var popupWidth = Math.Min(480, Math.Max(220, Width - 16));
+        // Match the compact proportions of the desktop AssetStudio menus.
+        // Export's main menu is about 270 logical pixels wide; scope submenus are narrower.
+        var isSubmenu = MenuPopupTitle.Text is "Raw" or "Dump" or "Asset list to XML";
+        var desiredWidth = isSubmenu ? 155d : 270d;
+        var popupWidth = Math.Min(desiredWidth, Math.Max(150, Width - 16));
         var maxLeft = Math.Max(4, Width - popupWidth - 4);
         var left = _menuAnchor == null
             ? 4
@@ -1867,7 +1869,7 @@ public partial class MainPage : ContentPage
         MenuPopupFrame.WidthRequest = popupWidth;
         MenuPopupFrame.Margin = new Thickness(Math.Clamp(left, 4, maxLeft), MenuScroll.Height, 4, 0);
         var availableHeight = Math.Max(120, Height - MenuScroll.Height - 20);
-        MenuOptionsScroll.HeightRequest = Math.Min(itemCount * 28, availableHeight);
+        MenuOptionsScroll.HeightRequest = Math.Min(itemCount * 24, availableHeight);
     }
 
     private void OnMenuOverlayBackgroundTapped(object? sender, TappedEventArgs e) =>
