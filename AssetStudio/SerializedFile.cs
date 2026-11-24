@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
+using System.Threading;
 
 namespace AssetStudio
 {
@@ -32,7 +33,16 @@ namespace AssetStudio
         public string userInformation;
 
         public SerializedFile(FileReader reader, AssetsManager assetsManager)
+            : this(reader, assetsManager, CancellationToken.None)
         {
+        }
+
+        public SerializedFile(
+            FileReader reader,
+            AssetsManager assetsManager,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
             this.assetsManager = assetsManager;
             this.reader = reader;
             fullName = reader.FullPath;
@@ -93,7 +103,8 @@ namespace AssetStudio
             m_Types = new List<SerializedType>(typeCount);
             for (int i = 0; i < typeCount; i++)
             {
-                m_Types.Add(ReadSerializedType(false));
+                cancellationToken.ThrowIfCancellationRequested();
+                m_Types.Add(ReadSerializedType(false, cancellationToken));
             }
 
             if (header.m_Version >= SerializedFileFormatVersion.Unknown_7 && header.m_Version < SerializedFileFormatVersion.Unknown_14)
@@ -108,6 +119,7 @@ namespace AssetStudio
             ObjectsDic = new Dictionary<long, Object>(objectCount);
             for (int i = 0; i < objectCount; i++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var objectInfo = new ObjectInfo();
                 if (bigIDEnabled != 0)
                 {
@@ -165,6 +177,7 @@ namespace AssetStudio
                 m_ScriptTypes = new List<LocalSerializedObjectIdentifier>(scriptCount);
                 for (int i = 0; i < scriptCount; i++)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     var m_ScriptType = new LocalSerializedObjectIdentifier();
                     m_ScriptType.localSerializedFileIndex = reader.ReadInt32();
                     if (header.m_Version < SerializedFileFormatVersion.Unknown_14)
@@ -184,6 +197,7 @@ namespace AssetStudio
             m_Externals = new List<FileIdentifier>(externalsCount);
             for (int i = 0; i < externalsCount; i++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var m_External = new FileIdentifier();
                 if (header.m_Version >= SerializedFileFormatVersion.Unknown_6)
                 {
@@ -205,7 +219,8 @@ namespace AssetStudio
                 m_RefTypes = new List<SerializedType>(refTypesCount);
                 for (int i = 0; i < refTypesCount; i++)
                 {
-                    m_RefTypes.Add(ReadSerializedType(true));
+                    cancellationToken.ThrowIfCancellationRequested();
+                    m_RefTypes.Add(ReadSerializedType(true, cancellationToken));
                 }
             }
 
@@ -229,8 +244,9 @@ namespace AssetStudio
             }
         }
 
-        private SerializedType ReadSerializedType(bool isRefType)
+        private SerializedType ReadSerializedType(bool isRefType, CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var type = new SerializedType();
 
             type.classID = reader.ReadInt32();
@@ -264,11 +280,11 @@ namespace AssetStudio
                 type.m_Type.m_Nodes = new List<TypeTreeNode>();
                 if (header.m_Version >= SerializedFileFormatVersion.Unknown_12 || header.m_Version == SerializedFileFormatVersion.Unknown_10)
                 {
-                    TypeTreeBlobRead(type.m_Type);
+                    TypeTreeBlobRead(type.m_Type, cancellationToken);
                 }
                 else
                 {
-                    ReadTypeTree(type.m_Type);
+                    ReadTypeTree(type.m_Type, cancellationToken);
                 }
                 if (header.m_Version >= SerializedFileFormatVersion.StoresTypeDependencies)
                 {
@@ -288,8 +304,12 @@ namespace AssetStudio
             return type;
         }
 
-        private void ReadTypeTree(TypeTree m_Type, int level = 0)
+        private void ReadTypeTree(
+            TypeTree m_Type,
+            CancellationToken cancellationToken,
+            int level = 0)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var typeTreeNode = new TypeTreeNode();
             m_Type.m_Nodes.Add(typeTreeNode);
             typeTreeNode.m_Level = level;
@@ -314,16 +334,17 @@ namespace AssetStudio
             int childrenCount = reader.ReadInt32();
             for (int i = 0; i < childrenCount; i++)
             {
-                ReadTypeTree(m_Type, level + 1);
+                ReadTypeTree(m_Type, cancellationToken, level + 1);
             }
         }
 
-        private void TypeTreeBlobRead(TypeTree m_Type)
+        private void TypeTreeBlobRead(TypeTree m_Type, CancellationToken cancellationToken)
         {
             int numberOfNodes = reader.ReadInt32();
             int stringBufferSize = reader.ReadInt32();
             for (int i = 0; i < numberOfNodes; i++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var typeTreeNode = new TypeTreeNode();
                 m_Type.m_Nodes.Add(typeTreeNode);
                 typeTreeNode.m_Version = reader.ReadUInt16();
@@ -345,6 +366,7 @@ namespace AssetStudio
             {
                 for (int i = 0; i < numberOfNodes; i++)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     var m_Node = m_Type.m_Nodes[i];
                     m_Node.m_Type = ReadString(stringBufferReader, m_Node.m_TypeStrOffset);
                     m_Node.m_Name = ReadString(stringBufferReader, m_Node.m_NameStrOffset);

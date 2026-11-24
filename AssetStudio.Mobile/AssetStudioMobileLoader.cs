@@ -18,14 +18,20 @@ public sealed class AssetStudioMobileLoader : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(selected);
-        var paths = selected
-            .Where(file => file != null && !string.IsNullOrWhiteSpace(file.FullPath) && File.Exists(file.FullPath))
-            .Select(file => file.FullPath)
+        var selectedPaths = selected.Select(file => file?.FullPath).ToArray();
+        if (selectedPaths.Any(string.IsNullOrWhiteSpace))
+            throw new InvalidDataException("One or more selected files did not provide a readable path.");
+
+        var paths = selectedPaths
+            .Select(path => path!)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
         if (paths.Length == 0)
             throw new FileNotFoundException("No readable files were selected from the AssetStudio library.");
+        var missingPaths = paths.Where(path => !File.Exists(path)).ToArray();
+        if (missingPaths.Length > 0)
+            throw new FileNotFoundException($"Selected file(s) are no longer accessible: {string.Join(", ", missingPaths)}");
 
         await LoadAsync(
             $"Preparing {paths.Length} file(s)…",
@@ -64,60 +70,79 @@ public sealed class AssetStudioMobileLoader : IDisposable
         await _loadGate.WaitAsync(cancellationToken);
         try
         {
-            var snapshot = await Task.Run(() =>
+            BrowseSnapshot snapshot;
+            try
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                _manager.Clear();
-                _manager.SpecifyUnityVersion = SpecifyUnityVersion ?? string.Empty;
-
-                var previousProgress = AssetStudio.Progress.Default;
-                var parserPhase = -1;
-                AssetStudio.Progress.Default = new System.Progress<int>(value =>
+                snapshot = await Task.Run(() =>
                 {
-                    if (value == 0)
-                        parserPhase = Math.Min(parserPhase + 1, 2);
-
-                    var boundedValue = Math.Clamp(value, 0, 100);
-                    var (start, end, label) = parserPhase switch
-                    {
-                        0 => (5, 28, "Importing files"),
-                        1 => (28, 76, "Reading asset objects"),
-                        _ => (76, 90, "Linking asset relationships")
-                    };
-                    var percent = start + (end - start) * boundedValue / 100;
-                    progress?.Report(new MainPage.AssetLoadProgress(
-                        percent, $"{label} · {boundedValue}%"));
-                });
-
-                try
-                {
-                    load(cancellationToken);
                     cancellationToken.ThrowIfCancellationRequested();
-
-                    if (_manager.assetsFileList.Count == 0)
-                        throw new InvalidDataException("No Unity asset files were found in the selected input.");
-
-                    progress?.Report(new MainPage.AssetLoadProgress(92, "Building asset browser…"));
-                    var result = BuildBrowseData(_manager, cancellationToken);
-                    cancellationToken.ThrowIfCancellationRequested();
-                    progress?.Report(new MainPage.AssetLoadProgress(
-                        96, $"Loaded {result.Assets.Count:N0} assets and {result.Hierarchy.Count:N0} scene entries…"));
-                    return result;
-                }
-                catch (OperationCanceledException)
-                {
                     _manager.Clear();
-                    throw;
-                }
-                finally
-                {
-                    AssetStudio.Progress.Default = previousProgress;
-                }
-            }, cancellationToken);
+                    _manager.SpecifyUnityVersion = SpecifyUnityVersion ?? string.Empty;
 
-            cancellationToken.ThrowIfCancellationRequested();
-            await MainThread.InvokeOnMainThreadAsync(() =>
-                host(snapshot.Assets, snapshot.Hierarchy, snapshot.Classes));
+                    var previousProgress = AssetStudio.Progress.Default;
+                    var parserPhase = -1;
+                    var parserPercent = 5;
+                    _manager.LoadingStatus = message =>
+                        progress?.Report(new MainPage.AssetLoadProgress(parserPercent, message));
+                    AssetStudio.Progress.Default = new InlineProgress<int>(value =>
+                    {
+                        if (value == 0)
+                            parserPhase = Math.Min(parserPhase + 1, 2);
+
+                        var boundedValue = Math.Clamp(value, 0, 100);
+                        var (start, end, label) = parserPhase switch
+                        {
+                            0 => (5, 28, "Importing files"),
+                            1 => (28, 76, "Reading asset objects"),
+                            _ => (76, 90, "Linking asset relationships")
+                        };
+                        var percent = start + (end - start) * boundedValue / 100;
+                        parserPercent = percent;
+                        progress?.Report(new MainPage.AssetLoadProgress(percent, $"{label} · {boundedValue}%"));
+                    });
+
+                    try
+                    {
+                        load(cancellationToken);
+                        cancellationToken.ThrowIfCancellationRequested();
+
+                        if (_manager.assetsFileList.Count == 0)
+                            throw new InvalidDataException("No Unity asset files were found in the selected input.");
+
+                        progress?.Report(new MainPage.AssetLoadProgress(90, "Building asset browser…"));
+                        var result = BuildBrowseData(_manager, cancellationToken, (percent, message) =>
+                            progress?.Report(new MainPage.AssetLoadProgress(percent, message)));
+                        cancellationToken.ThrowIfCancellationRequested();
+                        progress?.Report(new MainPage.AssetLoadProgress(
+                            96, $"Prepared {result.Assets.Count:N0} assets and {result.Hierarchy.Count:N0} scene entries…"));
+                        return result;
+                    }
+                    finally
+                    {
+                        _manager.LoadingStatus = null;
+                        AssetStudio.Progress.Default = previousProgress;
+                    }
+                }, cancellationToken);
+            }
+            catch
+            {
+                await Task.Run(_manager.Clear);
+                throw;
+            }
+
+            try
+            {
+                await MainThread.InvokeOnMainThreadAsync(() =>
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    host(snapshot.Assets, snapshot.Hierarchy, snapshot.Classes);
+                });
+            }
+            catch (OperationCanceledException)
+            {
+                await Task.Run(_manager.Clear);
+                throw;
+            }
             progress?.Report(new MainPage.AssetLoadProgress(
                 100, $"Loaded {snapshot.Assets.Count:N0} assets, {snapshot.Hierarchy.Count:N0} scene entries, and {snapshot.Classes.Count:N0} classes"));
         }
@@ -132,12 +157,18 @@ public sealed class AssetStudioMobileLoader : IDisposable
 
     private static BrowseSnapshot BuildBrowseData(
         AssetsManager manager,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<int, string> reportProgress)
     {
-        var containerByObject = BuildContainerMap(manager, cancellationToken);
+        var totalAssets = manager.assetsFileList.Sum(file => file.Objects.Count);
+        var containerByObject = BuildContainerMap(
+            manager,
+            cancellationToken,
+            (completed, total) => ReportBrowseProgress(reportProgress, 90, 92, completed, total, "Mapping containers"));
         var rowsByObject = new Dictionary<AssetStudio.Object, MainPage.AssetRow>();
         var assetRows = new List<MainPage.AssetRow>();
         var objectIndex = 0;
+        var processedAssets = 0;
 
         foreach (var file in manager.assetsFileList)
         {
@@ -158,19 +189,25 @@ public sealed class AssetStudioMobileLoader : IDisposable
                 rowsByObject.Add(asset, row);
                 assetRows.Add(row);
                 objectIndex++;
+                ReportBrowseProgress(reportProgress, 92, 94, ++processedAssets, totalAssets, "Building asset rows");
             }
         }
 
-        var hierarchyRows = BuildHierarchy(manager, rowsByObject, cancellationToken);
-        var classRows = BuildClassRows(manager, cancellationToken);
+        var hierarchyRows = BuildHierarchy(manager, rowsByObject, cancellationToken, (completed, total) =>
+            ReportBrowseProgress(reportProgress, 94, 95, completed, total, "Building scene hierarchy"));
+        var classRows = BuildClassRows(manager, cancellationToken, (completed, total) =>
+            ReportBrowseProgress(reportProgress, 95, 96, completed, total, "Building class browser"));
         return new BrowseSnapshot(assetRows, hierarchyRows, classRows);
     }
 
     private static Dictionary<AssetStudio.Object, string> BuildContainerMap(
         AssetsManager manager,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<int, int> reportProgress)
     {
         var containers = new Dictionary<AssetStudio.Object, string>();
+        var totalAssets = manager.assetsFileList.Sum(file => file.Objects.Count);
+        var processedAssets = 0;
         foreach (var file in manager.assetsFileList)
         {
             foreach (var asset in file.Objects)
@@ -202,6 +239,7 @@ public sealed class AssetStudioMobileLoader : IDisposable
                             containers[contained] = entry.Key;
                     }
                 }
+                reportProgress(++processedAssets, totalAssets);
             }
         }
 
@@ -211,10 +249,13 @@ public sealed class AssetStudioMobileLoader : IDisposable
     private static List<MainPage.HierarchyRow> BuildHierarchy(
         AssetsManager manager,
         IReadOnlyDictionary<AssetStudio.Object, MainPage.AssetRow> rowsByObject,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<int, int> reportProgress)
     {
         var rows = new List<MainPage.HierarchyRow>();
         var fileIndex = 0;
+        var processedFiles = 0;
+        var totalFiles = manager.assetsFileList.Count;
         foreach (var file in manager.assetsFileList)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -229,6 +270,7 @@ public sealed class AssetStudioMobileLoader : IDisposable
             if (gameObjects.Count == 0)
             {
                 fileIndex++;
+                reportProgress(++processedFiles, totalFiles);
                 continue;
             }
 
@@ -287,6 +329,7 @@ public sealed class AssetStudioMobileLoader : IDisposable
                 }
             }
             fileIndex++;
+            reportProgress(++processedFiles, totalFiles);
         }
 
         return rows;
@@ -294,9 +337,12 @@ public sealed class AssetStudioMobileLoader : IDisposable
 
     private static List<MainPage.ClassRow> BuildClassRows(
         AssetsManager manager,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<int, int> reportProgress)
     {
         var classesByVersion = new SortedDictionary<string, SortedDictionary<int, MainPage.ClassRow>>(StringComparer.Ordinal);
+        var totalTypes = manager.assetsFileList.Sum(file => file.m_Types.Count);
+        var processedTypes = 0;
         foreach (var file in manager.assetsFileList)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -311,7 +357,10 @@ public sealed class AssetStudioMobileLoader : IDisposable
                 cancellationToken.ThrowIfCancellationRequested();
                 var nodes = type.m_Type?.m_Nodes;
                 if (nodes == null)
+                {
+                    reportProgress(++processedTypes, totalTypes);
                     continue;
+                }
 
                 var typeId = type.m_ScriptTypeIndex >= 0
                     ? -1 - type.m_ScriptTypeIndex
@@ -331,6 +380,7 @@ public sealed class AssetStudioMobileLoader : IDisposable
                             MetaFlag = node.m_MetaFlag
                         };
                     }));
+                reportProgress(++processedTypes, totalTypes);
             }
         }
 
@@ -345,6 +395,37 @@ public sealed class AssetStudioMobileLoader : IDisposable
         }
 
         return rows;
+    }
+
+    private static void ReportBrowseProgress(
+        Action<int, string> reportProgress,
+        int start,
+        int end,
+        int completed,
+        int total,
+        string phase)
+    {
+        if (total <= 0)
+        {
+            reportProgress(end, $"{phase} · nothing to process");
+            return;
+        }
+
+        var interval = Math.Max(1, total / 40);
+        if (completed != total && completed % interval != 0)
+            return;
+
+        var percent = start + (int)((long)(end - start) * completed / total);
+        reportProgress(percent, $"{phase} · {completed:N0}/{total:N0}");
+    }
+
+    private sealed class InlineProgress<T> : IProgress<T>
+    {
+        private readonly Action<T> _report;
+
+        public InlineProgress(Action<T> report) => _report = report;
+
+        public void Report(T value) => _report(value);
     }
 
     private static string ReadAssetName(AssetStudio.Object asset, int index)

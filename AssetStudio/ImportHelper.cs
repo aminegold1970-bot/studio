@@ -1,8 +1,10 @@
 ﻿using Org.Brotli.Dec;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Threading;
 
 namespace AssetStudio
 {
@@ -10,25 +12,49 @@ namespace AssetStudio
     {
         public static void MergeSplitAssets(string path, bool allDirectories = false)
         {
-            var splitFiles = Directory.GetFiles(path, "*.split0", allDirectories ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly);
+            MergeSplitAssets(path, allDirectories, CancellationToken.None);
+        }
+
+        public static void MergeSplitAssets(string path, bool allDirectories, CancellationToken cancellationToken)
+        {
+            var splitFiles = Directory.EnumerateFiles(
+                path, "*.split0", allDirectories ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly);
             foreach (var splitFile in splitFiles)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var destFile = Path.GetFileNameWithoutExtension(splitFile);
                 var destPath = Path.GetDirectoryName(splitFile);
                 var destFull = Path.Combine(destPath, destFile);
                 if (!File.Exists(destFull))
                 {
-                    var splitParts = Directory.GetFiles(destPath, destFile + ".split*");
-                    using (var destStream = File.Create(destFull))
+                    var splitParts = new List<string>();
+                    foreach (var splitPart in Directory.EnumerateFiles(destPath, destFile + ".split*"))
                     {
-                        for (int i = 0; i < splitParts.Length; i++)
+                        cancellationToken.ThrowIfCancellationRequested();
+                        splitParts.Add(splitPart);
+                    }
+                    var temporaryPath = $"{destFull}.{Guid.NewGuid():N}.loading.tmp";
+                    try
+                    {
+                        using (var destStream = File.Create(temporaryPath))
                         {
-                            var splitPart = destFull + ".split" + i;
-                            using (var sourceStream = File.OpenRead(splitPart))
+                            for (int i = 0; i < splitParts.Count; i++)
                             {
-                                sourceStream.CopyTo(destStream);
+                                cancellationToken.ThrowIfCancellationRequested();
+                                var splitPart = destFull + ".split" + i;
+                                using (var sourceStream = File.OpenRead(splitPart))
+                                {
+                                    CopyTo(sourceStream, destStream, cancellationToken);
+                                }
                             }
                         }
+                        cancellationToken.ThrowIfCancellationRequested();
+                        File.Move(temporaryPath, destFull);
+                    }
+                    finally
+                    {
+                        if (File.Exists(temporaryPath))
+                            File.Delete(temporaryPath);
                     }
                 }
             }
@@ -36,29 +62,55 @@ namespace AssetStudio
 
         public static string[] ProcessingSplitFiles(List<string> selectFile)
         {
-            var splitFiles = selectFile.Where(x => x.Contains(".split"))
-                .Select(x => Path.Combine(Path.GetDirectoryName(x), Path.GetFileNameWithoutExtension(x)))
-                .Distinct()
-                .ToList();
-            selectFile.RemoveAll(x => x.Contains(".split"));
+            return ProcessingSplitFiles(selectFile, CancellationToken.None);
+        }
+
+        public static string[] ProcessingSplitFiles(List<string> selectFile, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var splitFiles = new List<string>();
+            var remainingFiles = new List<string>();
+            var seenSplitFiles = new HashSet<string>();
+            foreach (var file in selectFile)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!file.Contains(".split"))
+                {
+                    remainingFiles.Add(file);
+                    continue;
+                }
+
+                var basePath = Path.Combine(Path.GetDirectoryName(file), Path.GetFileNameWithoutExtension(file));
+                if (seenSplitFiles.Add(basePath))
+                    splitFiles.Add(basePath);
+            }
+
             foreach (var file in splitFiles)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (File.Exists(file))
                 {
-                    selectFile.Add(file);
+                    remainingFiles.Add(file);
                 }
             }
-            return selectFile.Distinct().ToArray();
+            selectFile.Clear();
+            selectFile.AddRange(remainingFiles);
+            return remainingFiles.Distinct().ToArray();
         }
 
         public static FileReader DecompressGZip(FileReader reader)
+        {
+            return DecompressGZip(reader, CancellationToken.None);
+        }
+
+        public static FileReader DecompressGZip(FileReader reader, CancellationToken cancellationToken)
         {
             using (reader)
             {
                 var stream = new MemoryStream();
                 using (var gs = new GZipStream(reader.BaseStream, CompressionMode.Decompress))
                 {
-                    gs.CopyTo(stream);
+                    CopyTo(gs, stream, cancellationToken);
                 }
                 stream.Position = 0;
                 return new FileReader(reader.FullPath, stream);
@@ -67,15 +119,31 @@ namespace AssetStudio
 
         public static FileReader DecompressBrotli(FileReader reader)
         {
+            return DecompressBrotli(reader, CancellationToken.None);
+        }
+
+        public static FileReader DecompressBrotli(FileReader reader, CancellationToken cancellationToken)
+        {
             using (reader)
             {
                 var stream = new MemoryStream();
                 using (var brotliStream = new BrotliInputStream(reader.BaseStream))
                 {
-                    brotliStream.CopyTo(stream);
+                    CopyTo(brotliStream, stream, cancellationToken);
                 }
                 stream.Position = 0;
                 return new FileReader(reader.FullPath, stream);
+            }
+        }
+
+        internal static void CopyTo(Stream source, Stream destination, CancellationToken cancellationToken)
+        {
+            var buffer = new byte[81920];
+            int bytesRead;
+            while ((bytesRead = source.Read(buffer, 0, buffer.Length)) != 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                destination.Write(buffer, 0, bytesRead);
             }
         }
     }

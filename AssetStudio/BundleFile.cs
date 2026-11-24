@@ -2,6 +2,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Threading;
 
 namespace AssetStudio
 {
@@ -67,42 +68,64 @@ namespace AssetStudio
         public StreamFile[] fileList;
 
         public BundleFile(FileReader reader)
+            : this(reader, CancellationToken.None)
         {
+        }
+
+        public BundleFile(FileReader reader, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
             m_Header = new Header();
-            m_Header.signature = reader.ReadStringToNull();
-            m_Header.version = reader.ReadUInt32();
-            m_Header.unityVersion = reader.ReadStringToNull();
-            m_Header.unityRevision = reader.ReadStringToNull();
-            switch (m_Header.signature)
+            try
             {
-                case "UnityArchive":
-                    break; //TODO
-                case "UnityWeb":
-                case "UnityRaw":
-                    if (m_Header.version == 6)
-                    {
-                        goto case "UnityFS";
-                    }
-                    ReadHeaderAndBlocksInfo(reader);
-                    using (var blocksStream = CreateBlocksStream(reader.FullPath))
-                    {
-                        ReadBlocksAndDirectory(reader, blocksStream);
-                        ReadFiles(blocksStream, reader.FullPath);
-                    }
-                    break;
-                case "UnityFS":
-                    ReadHeader(reader);
-                    ReadBlocksInfoAndDirectory(reader);
-                    using (var blocksStream = CreateBlocksStream(reader.FullPath))
-                    {
-                        ReadBlocks(reader, blocksStream);
-                        ReadFiles(blocksStream, reader.FullPath);
-                    }
-                    break;
+                m_Header.signature = reader.ReadStringToNull();
+                m_Header.version = reader.ReadUInt32();
+                m_Header.unityVersion = reader.ReadStringToNull();
+                m_Header.unityRevision = reader.ReadStringToNull();
+                switch (m_Header.signature)
+                {
+                    case "UnityArchive":
+                        break; //TODO
+                    case "UnityWeb":
+                    case "UnityRaw":
+                        if (m_Header.version == 6)
+                        {
+                            goto case "UnityFS";
+                        }
+                        ReadHeaderAndBlocksInfo(reader, cancellationToken);
+                        using (var blocksStream = CreateBlocksStream(reader.FullPath))
+                        {
+                            ReadBlocksAndDirectory(reader, blocksStream, cancellationToken);
+                            ReadFiles(blocksStream, reader.FullPath, cancellationToken);
+                        }
+                        break;
+                    case "UnityFS":
+                        ReadHeader(reader);
+                        ReadBlocksInfoAndDirectory(reader, cancellationToken);
+                        using (var blocksStream = CreateBlocksStream(reader.FullPath))
+                        {
+                            ReadBlocks(reader, blocksStream, cancellationToken);
+                            ReadFiles(blocksStream, reader.FullPath, cancellationToken);
+                        }
+                        break;
+                }
+            }
+            catch
+            {
+                DisposeFileStreams();
+                throw;
             }
         }
 
-        private void ReadHeaderAndBlocksInfo(EndianBinaryReader reader)
+        private void DisposeFileStreams()
+        {
+            if (fileList == null)
+                return;
+            foreach (var file in fileList)
+                file?.stream?.Dispose();
+        }
+
+        private void ReadHeaderAndBlocksInfo(EndianBinaryReader reader, CancellationToken cancellationToken)
         {
             if (m_Header.version >= 4)
             {
@@ -116,6 +139,7 @@ namespace AssetStudio
             m_BlocksInfo = new StorageBlock[1];
             for (int i = 0; i < levelCount; i++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var storageBlock = new StorageBlock()
                 {
                     compressedSize = reader.ReadUInt32(),
@@ -154,11 +178,15 @@ namespace AssetStudio
             return blocksStream;
         }
 
-        private void ReadBlocksAndDirectory(EndianBinaryReader reader, Stream blocksStream)
+        private void ReadBlocksAndDirectory(
+            EndianBinaryReader reader,
+            Stream blocksStream,
+            CancellationToken cancellationToken)
         {
             var isCompressed = m_Header.signature == "UnityWeb";
             foreach (var blockInfo in m_BlocksInfo)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var uncompressedBytes = reader.ReadBytes((int)blockInfo.compressedSize);
                 if (isCompressed)
                 {
@@ -170,6 +198,7 @@ namespace AssetStudio
                         }
                     }
                 }
+                cancellationToken.ThrowIfCancellationRequested();
                 blocksStream.Write(uncompressedBytes, 0, uncompressedBytes.Length);
             }
             blocksStream.Position = 0;
@@ -178,6 +207,7 @@ namespace AssetStudio
             m_DirectoryInfo = new Node[nodesCount];
             for (int i = 0; i < nodesCount; i++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 m_DirectoryInfo[i] = new Node
                 {
                     path = blocksReader.ReadStringToNull(),
@@ -189,9 +219,15 @@ namespace AssetStudio
 
         public void ReadFiles(Stream blocksStream, string path)
         {
+            ReadFiles(blocksStream, path, CancellationToken.None);
+        }
+
+        public void ReadFiles(Stream blocksStream, string path, CancellationToken cancellationToken)
+        {
             fileList = new StreamFile[m_DirectoryInfo.Length];
             for (int i = 0; i < m_DirectoryInfo.Length; i++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var node = m_DirectoryInfo[i];
                 var file = new StreamFile();
                 fileList[i] = file;
@@ -210,7 +246,7 @@ namespace AssetStudio
                     file.stream = new MemoryStream((int)node.size);
                 }
                 blocksStream.Position = node.offset;
-                blocksStream.CopyTo(file.stream, node.size);
+                blocksStream.CopyTo(file.stream, node.size, cancellationToken);
                 file.stream.Position = 0;
             }
         }
@@ -227,8 +263,9 @@ namespace AssetStudio
             }
         }
 
-        private void ReadBlocksInfoAndDirectory(EndianBinaryReader reader)
+        private void ReadBlocksInfoAndDirectory(EndianBinaryReader reader, CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             byte[] blocksInfoBytes;
             if (m_Header.version >= 7)
             {
@@ -280,6 +317,7 @@ namespace AssetStudio
                 default:
                     throw new IOException($"Unsupported compression type {compressionType}");
             }
+            cancellationToken.ThrowIfCancellationRequested();
             using (var blocksInfoReader = new EndianBinaryReader(blocksInfoUncompresseddStream))
             {
                 var uncompressedDataHash = blocksInfoReader.ReadBytes(16);
@@ -287,6 +325,7 @@ namespace AssetStudio
                 m_BlocksInfo = new StorageBlock[blocksInfoCount];
                 for (int i = 0; i < blocksInfoCount; i++)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     m_BlocksInfo[i] = new StorageBlock
                     {
                         uncompressedSize = blocksInfoReader.ReadUInt32(),
@@ -299,6 +338,7 @@ namespace AssetStudio
                 m_DirectoryInfo = new Node[nodesCount];
                 for (int i = 0; i < nodesCount; i++)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     m_DirectoryInfo[i] = new Node
                     {
                         offset = blocksInfoReader.ReadInt64(),
@@ -314,16 +354,20 @@ namespace AssetStudio
             }
         }
 
-        private void ReadBlocks(EndianBinaryReader reader, Stream blocksStream)
+        private void ReadBlocks(
+            EndianBinaryReader reader,
+            Stream blocksStream,
+            CancellationToken cancellationToken)
         {
             foreach (var blockInfo in m_BlocksInfo)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var compressionType = (CompressionType)(blockInfo.flags & StorageBlockFlags.CompressionTypeMask);
                 switch (compressionType)
                 {
                     case CompressionType.None:
                         {
-                            reader.BaseStream.CopyTo(blocksStream, blockInfo.compressedSize);
+                            reader.BaseStream.CopyTo(blocksStream, blockInfo.compressedSize, cancellationToken);
                             break;
                         }
                     case CompressionType.Lzma:
@@ -352,6 +396,7 @@ namespace AssetStudio
                     default:
                         throw new IOException($"Unsupported compression type {compressionType}");
                 }
+                cancellationToken.ThrowIfCancellationRequested();
             }
             blocksStream.Position = 0;
         }

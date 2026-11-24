@@ -142,7 +142,7 @@
                     <Button x:Name="DumpTab" Grid.Column="1" Text="Dump" Clicked="OnDumpTabClicked" Style="{StaticResource TabButton}"/>
                 </Grid>
                 <Grid x:Name="EmptyPreviewSurface" Grid.Row="1" BackgroundColor="#A7A5A6" IsVisible="True">
-                    <Label Text="Select an asset&#10;to preview" TextColor="#666466" FontSize="26"
+                    <Label x:Name="PreviewEmptyLabel" Text="Select an asset&#10;to preview" TextColor="#666466" FontSize="26"
                            FontAttributes="Bold" HorizontalTextAlignment="Center"
                            VerticalTextAlignment="Center" HorizontalOptions="Center" VerticalOptions="Center"/>
                 </Grid>

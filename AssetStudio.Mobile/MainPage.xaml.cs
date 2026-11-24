@@ -28,6 +28,7 @@ public partial class MainPage : ContentPage
     public event Action<double>? AudioSeekRequested;
     public event Action<double>? AudioVolumeChanged;
     private CancellationTokenSource? _loadCancellation;
+    private bool _assetLoadActive;
     private bool _audioLoopEnabled;
     private bool _updatingAudioPosition;
     private readonly ObservableCollection<AssetRow> _allAssets = new();
@@ -83,6 +84,10 @@ public partial class MainPage : ContentPage
     public MainPage()
     {
         InitializeComponent();
+        _showAllAssets = Preferences.Get("AssetStudio.DisplayAllAssets", false);
+        _previewEnabled = Preferences.Get("AssetStudio.EnablePreview", true);
+        _displayAssetInformation = Preferences.Get("AssetStudio.DisplayAssetInformation", true);
+        PreviewDetails.IsVisible = _displayAssetInformation;
         if (Enum.TryParse(
             Preferences.Get("AssetStudio.TextureExportFormat", nameof(MobileImageFormat.Png)),
             ignoreCase: true,
@@ -421,6 +426,13 @@ public partial class MainPage : ContentPage
 
     private async Task LoadPersistentFilesAsync(IReadOnlyList<FileResult> selected, string sourceLabel)
     {
+        if (_assetLoadActive || _loadCancellation != null)
+        {
+            StatusLabel.Text = "Wait for the current operation to finish before loading assets.";
+            return;
+        }
+
+        _assetLoadActive = true;
         _lastLoadedFiles = selected.ToList();
         _lastLoadedFolderPath = null;
         _lastLoadSourceLabel = sourceLabel;
@@ -428,7 +440,11 @@ public partial class MainPage : ContentPage
         using var cancellation = new CancellationTokenSource();
         _loadCancellation = cancellation;
         SetBusy(true, $"Loading {selected.Count} saved file(s)…");
-        var progress = new Progress<AssetLoadProgress>(update => SetLoadingProgress(Math.Clamp(update.Percent, 0, 100), update.Message));
+        var progress = new Progress<AssetLoadProgress>(update =>
+        {
+            if (ReferenceEquals(_loadCancellation, cancellation))
+                SetLoadingProgress(Math.Clamp(update.Percent, 0, 100), update.Message);
+        });
         try
         {
             await _assetLoader.LoadFilesAsync(selected, progress, cancellation.Token);
@@ -443,11 +459,23 @@ public partial class MainPage : ContentPage
             SetBusy(false, $"Load failed: {ex.Message}");
             await DisplayAlert("Asset loading failed", ex.Message, "OK");
         }
-        finally { _loadCancellation = null; }
+        finally
+        {
+            if (ReferenceEquals(_loadCancellation, cancellation))
+                _loadCancellation = null;
+            _assetLoadActive = false;
+        }
     }
 
     private async Task LoadPersistentFolderAsync(string folderPath, string sourceLabel)
     {
+        if (_assetLoadActive || _loadCancellation != null)
+        {
+            StatusLabel.Text = "Wait for the current operation to finish before loading assets.";
+            return;
+        }
+
+        _assetLoadActive = true;
         _lastLoadedFolderPath = folderPath;
         _lastLoadedFiles = Array.Empty<FileResult>();
         _lastLoadSourceLabel = sourceLabel;
@@ -457,7 +485,10 @@ public partial class MainPage : ContentPage
         _loadCancellation = cancellation;
         SetBusy(true, $"Loading folder {Path.GetFileName(Path.TrimEndingDirectorySeparator(folderPath))}…");
         var progress = new Progress<AssetLoadProgress>(update =>
-            SetLoadingProgress(Math.Clamp(update.Percent, 0, 100), update.Message));
+        {
+            if (ReferenceEquals(_loadCancellation, cancellation))
+                SetLoadingProgress(Math.Clamp(update.Percent, 0, 100), update.Message);
+        });
         try
         {
             await _assetLoader.LoadFolderAsync(folderPath, progress, cancellation.Token);
@@ -474,7 +505,9 @@ public partial class MainPage : ContentPage
         }
         finally
         {
-            _loadCancellation = null;
+            if (ReferenceEquals(_loadCancellation, cancellation))
+                _loadCancellation = null;
+            _assetLoadActive = false;
         }
     }
 
@@ -1084,12 +1117,38 @@ public partial class MainPage : ContentPage
 
     private async Task PickAssetFolderAsync()
     {
+        if (_loadCancellation != null)
+        {
+            StatusLabel.Text = "Wait for the current operation to finish before selecting a folder.";
+            return;
+        }
+
+        using var cancellation = new CancellationTokenSource();
+        _loadCancellation = cancellation;
+        SetBusy(true, "Choose a Unity asset folder…");
+        var progress = new Progress<AssetLoadProgress>(update =>
+        {
+            if (ReferenceEquals(_loadCancellation, cancellation))
+                SetLoadingProgress(Math.Clamp(update.Percent, 0, 100), update.Message);
+        });
         try
         {
-            var folderPath = await MobileFolderPicker.PickAsync(_documentLibrary);
-            if (string.IsNullOrWhiteSpace(folderPath)) return; // Keep the current workspace on cancel.
+            var folderPath = await MobileFolderPicker.PickAsync(
+                _documentLibrary, progress, cancellation.Token);
+            cancellation.Token.ThrowIfCancellationRequested();
+            if (ReferenceEquals(_loadCancellation, cancellation))
+                _loadCancellation = null;
+            if (string.IsNullOrWhiteSpace(folderPath))
+            {
+                SetBusy(false, "No folder selected.");
+                return;
+            }
 
             await LoadPersistentFolderAsync(folderPath, "Loaded folder");
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            SetBusy(false, "Folder selection or import cancelled.");
         }
         catch (Exception exception)
         {
@@ -1098,17 +1157,31 @@ public partial class MainPage : ContentPage
             if (_showErrorMessages)
                 await DisplayAlert("Folder selection failed", exception.Message, "OK");
         }
+        finally
+        {
+            if (ReferenceEquals(_loadCancellation, cancellation))
+                _loadCancellation = null;
+        }
     }
 
     private async Task PickAssetFilesAsync(bool allowMultiple = false)
     {
         if (_isPickingAssetFiles)
             return;
+        if (_loadCancellation != null)
+        {
+            StatusLabel.Text = "Wait for the current operation to finish before selecting files.";
+            return;
+        }
 
         _isPickingAssetFiles = true;
+        CancellationTokenSource? pickerCancellation = null;
         try
         {
 #if IOS
+            var pickerCts = new CancellationTokenSource();
+            pickerCancellation = pickerCts;
+            _loadCancellation = pickerCts;
             await WaitForActionSheetDismissalAsync();
 #endif
             SetBusy(true, allowMultiple ? "Choose Unity files…" : "Choose a Unity file…");
@@ -1116,7 +1189,16 @@ public partial class MainPage : ContentPage
 #if IOS
             // Use Apple's document picker directly. This avoids the MAUI FilePicker
             // callback getting stuck on iOS after a document is tapped.
-            selected = await AssetStudioNativeFilePicker.PickAsync(allowMultiple);
+            var pickerProgress = new Progress<AssetLoadProgress>(update =>
+            {
+                if (ReferenceEquals(_loadCancellation, pickerCancellation))
+                    SetLoadingProgress(Math.Clamp(update.Percent, 0, 100), update.Message);
+            });
+            selected = await AssetStudioNativeFilePicker.PickAsync(
+                allowMultiple, pickerProgress, pickerCts.Token);
+            pickerCts.Token.ThrowIfCancellationRequested();
+            if (ReferenceEquals(_loadCancellation, pickerCancellation))
+                _loadCancellation = null;
 #else
             if (allowMultiple)
             {
@@ -1154,6 +1236,11 @@ public partial class MainPage : ContentPage
         }
         finally
         {
+#if IOS
+            if (ReferenceEquals(_loadCancellation, pickerCancellation))
+                _loadCancellation = null;
+            pickerCancellation?.Dispose();
+#endif
             _isPickingAssetFiles = false;
         }
     }
@@ -1260,14 +1347,19 @@ public partial class MainPage : ContentPage
     public void SetLoadingProgress(int percent, string message)
     {
         var safePercent = Math.Clamp(percent, 0, 100);
-        MainThread.BeginInvokeOnMainThread(() =>
+        void UpdateProgress()
         {
             LoadProgressBar.IsVisible = safePercent < 100;
             LoadProgressBar.Progress = safePercent / 100d;
             BusyIndicator.IsVisible = false;
             BusyIndicator.IsRunning = false;
             StatusLabel.Text = message;
-        });
+        }
+
+        if (MainThread.IsMainThread)
+            UpdateProgress();
+        else
+            MainThread.BeginInvokeOnMainThread(UpdateProgress);
     }
 
     public void SetLoadingFinished(string message)
@@ -1279,6 +1371,10 @@ public partial class MainPage : ContentPage
     {
         BusyIndicator.IsVisible = false;
         BusyIndicator.IsRunning = false;
+        MenuScroll.IsEnabled = !busy;
+        MenuOverflowButton.IsEnabled = !busy;
+        WorkspaceViewTabs.IsEnabled = !busy;
+        WorkspaceGrid.IsEnabled = !busy;
         LoadProgressBar.IsVisible = busy;
         if (!busy) LoadProgressBar.Progress = 0;
         CancelLoadButton.IsVisible = busy && _loadCancellation != null;
@@ -1297,8 +1393,14 @@ public partial class MainPage : ContentPage
     private async void OnOptionsMenuClicked(object sender, EventArgs e)
     {
         _menuAnchor = sender as Button;
-        var choice = await Choose(
-            "Options",
+        var checkedOptions = new List<string>();
+        if (_showAllAssets)
+            checkedOptions.Add("Display all assets");
+        if (_previewEnabled)
+            checkedOptions.Add("Enable preview");
+        if (_displayAssetInformation)
+            checkedOptions.Add("Display asset information");
+        var choice = await Choose("Options", checkedOptions,
             "Display all assets",
             "Enable preview",
             "Display asset information",
@@ -1311,16 +1413,29 @@ public partial class MainPage : ContentPage
         {
             case "Display all assets":
                 _showAllAssets = !_showAllAssets;
+                Preferences.Set("AssetStudio.DisplayAllAssets", _showAllAssets);
                 ApplyAssetFilter();
                 StatusLabel.Text = $"Display all assets: {(_showAllAssets ? "On" : "Off")}";
                 break;
             case "Enable preview":
                 _previewEnabled = !_previewEnabled;
+                Preferences.Set("AssetStudio.EnablePreview", _previewEnabled);
+                if (!_previewEnabled)
+                {
+                    StopPreviewAudio();
+                    _videoPlayer?.Stop();
+                    ResetPreviewSurface();
+                }
+                else if (_selectedAsset != null)
+                {
+                    await PresentAssetPreviewAsync(_selectedAsset);
+                }
                 RefreshPreviewSurfaceVisibility();
                 StatusLabel.Text = $"Preview: {(_previewEnabled ? "Enabled" : "Disabled")}";
                 break;
             case "Display asset information":
                 _displayAssetInformation = !_displayAssetInformation;
+                Preferences.Set("AssetStudio.DisplayAssetInformation", _displayAssetInformation);
                 PreviewDetails.IsVisible = _displayAssetInformation;
                 MetadataFrame.IsVisible = _displayAssetInformation && _metadataRows.Count > 0;
                 StatusLabel.Text = $"Asset information: {(_displayAssetInformation ? "Shown" : "Hidden")}";
@@ -2014,7 +2129,11 @@ public partial class MainPage : ContentPage
     private async void OnDebugMenuClicked(object sender, EventArgs e)
     {
         _menuAnchor = sender as Button;
-        var choice = await Choose("Debug", "Show error message", "Export class structures");
+        var choice = await Choose(
+            "Debug",
+            _showErrorMessages ? new[] { "Show error message" } : Array.Empty<string>(),
+            "Show error message",
+            "Export class structures");
         if (choice == "Show error message")
         {
             _showErrorMessages = !_showErrorMessages;
@@ -2054,7 +2173,13 @@ public partial class MainPage : ContentPage
         }
     }
 
-    private Task<string?> Choose(string title, params string[] options)
+    private Task<string?> Choose(string title, params string[] options) =>
+        Choose(title, Array.Empty<string>(), options);
+
+    private Task<string?> Choose(
+        string title,
+        IReadOnlyCollection<string> checkedOptions,
+        params string[] options)
     {
         if (options.Length == 0)
             return Task.FromResult<string?>(null);
@@ -2078,7 +2203,9 @@ public partial class MainPage : ContentPage
             };
             content.Add(new Label
             {
-                Text = option,
+                Text = checkedOptions.Contains(option, StringComparer.Ordinal)
+                    ? $"✓ {option}"
+                    : option,
                 TextColor = Color.FromArgb("#202020"),
                 FontSize = 12,
                 FontAutoScalingEnabled = false,
@@ -2441,7 +2568,7 @@ public partial class MainPage : ContentPage
 
         var actions = new List<string>
         {
-            "Copy name", "Copy container", "Copy type", "Copy PathID"
+            "Copy name", "Copy container", "Copy type", "Copy PathID", "Copy size"
         };
         if (targets.Count == 1)
         {
@@ -2460,6 +2587,7 @@ public partial class MainPage : ContentPage
             "Copy container" => row.Container,
             "Copy type" => row.Type,
             "Copy PathID" => row.PathId,
+            "Copy size" => row.DisplaySize,
             _ => null
         };
 
@@ -2557,6 +2685,9 @@ public partial class MainPage : ContentPage
 
     private async Task PresentAssetPreviewAsync(AssetRow row)
     {
+        if (!_previewEnabled)
+            return;
+
         try
         {
             switch (row.SourceAsset)
@@ -2567,7 +2698,7 @@ public partial class MainPage : ContentPage
                 case AssetStudio.Texture2D texture:
                     PreviewDetails.Text = "Decoding texture…";
                     var imagePath = await Task.Run(() => MobileAssetExporter.Export(texture));
-                    if (_selectedAsset?.Id != row.Id) return;
+                    if (!IsActivePreview(row)) return;
                     ShowTexturePreview(row.Name, ImageSource.FromFile(imagePath), texture.m_Width,
                         texture.m_Height, texture.m_TextureFormat.ToString(), imagePath: imagePath);
                     break;
@@ -2577,7 +2708,7 @@ public partial class MainPage : ContentPage
                     break;
                 case AssetStudio.MonoBehaviour behaviour:
                     var conversion = await Task.Run(() => _monoBehaviourAssemblyService.Convert(behaviour));
-                    if (_selectedAsset?.Id != row.Id) return;
+                    if (!IsActivePreview(row)) return;
                     if (conversion.Data != null)
                     {
                         var json = Newtonsoft.Json.JsonConvert.SerializeObject(
@@ -2615,14 +2746,14 @@ public partial class MainPage : ContentPage
                     break;
                 case AssetStudio.Shader shader:
                     var shaderSource = await Task.Run(() => AssetStudio.ShaderConverter.Convert(shader));
-                    if (_selectedAsset?.Id != row.Id) return;
+                    if (!IsActivePreview(row)) return;
                     ShowTextPreview(row.Name, "Shader source",
                         shaderSource.Replace("\n", "\r\n").Replace("\0", ""));
                     break;
                 case AssetStudio.Sprite sprite:
                     PreviewDetails.Text = "Cropped sprite preview with packed rotation, tight-mesh masking, and separate alpha texture applied when present.";
                     var spriteImage = await Task.Run(() => MobileAssetExporter.Export(sprite));
-                    if (_selectedAsset?.Id != row.Id) return;
+                    if (!IsActivePreview(row)) return;
                     ShowTexturePreview(row.Name, ImageSource.FromFile(spriteImage),
                         (int)sprite.m_Rect.width, (int)sprite.m_Rect.height,
                         "PNG sprite crop", PreviewDetails.Text, spriteImage);
@@ -2642,10 +2773,13 @@ public partial class MainPage : ContentPage
         }
         catch (Exception ex)
         {
-            if (_selectedAsset?.Id != row.Id) return;
+            if (!IsActivePreview(row)) return;
             ShowUnsupportedPreview(row.Name, row.Type, $"Preview failed: {ex.Message}");
         }
     }
+
+    private bool IsActivePreview(AssetRow row) =>
+        _previewEnabled && _selectedAsset?.Id == row.Id;
 
     private async void OnMeshPreviewClicked(object sender, EventArgs e)
     {
@@ -3233,8 +3367,13 @@ public partial class MainPage : ContentPage
     private void RefreshPreviewSurfaceVisibility()
     {
         PreviewScroll.IsVisible = _previewEnabled && !_showingDump && !_showingEmptyPreview;
-        DumpScroll.IsVisible = _previewEnabled && _showingDump && !_showingEmptyPreview;
-        EmptyPreviewSurface.IsVisible = _previewEnabled && _showingEmptyPreview;
+        DumpScroll.IsVisible = _showingDump && !_showingEmptyPreview;
+        EmptyPreviewSurface.IsVisible = _showingDump
+            ? false
+            : !_previewEnabled || _showingEmptyPreview;
+        PreviewEmptyLabel.Text = _previewEnabled
+            ? "Select an asset\nto preview"
+            : "Preview disabled\nEnable it in Options to view assets";
         PreviewTab.BackgroundColor = !_showingDump ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
         DumpTab.BackgroundColor = _showingDump ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
     }

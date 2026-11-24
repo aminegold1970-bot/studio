@@ -1,6 +1,7 @@
 ﻿using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using System.Threading;
 
 namespace AssetStudio
 {
@@ -16,13 +17,20 @@ namespace AssetStudio
         }
 
         public WebFile(EndianBinaryReader reader)
+            : this(reader, CancellationToken.None)
         {
+        }
+
+        public WebFile(EndianBinaryReader reader, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
             reader.Endian = EndianType.LittleEndian;
             var signature = reader.ReadStringToNull();
             var headLength = reader.ReadInt32();
             var dataList = new List<WebData>();
             while (reader.BaseStream.Position < headLength)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var data = new WebData();
                 data.dataOffset = reader.ReadInt32();
                 data.dataLength = reader.ReadInt32();
@@ -31,15 +39,27 @@ namespace AssetStudio
                 dataList.Add(data);
             }
             fileList = new StreamFile[dataList.Count];
-            for (int i = 0; i < dataList.Count; i++)
+            try
             {
-                var data = dataList[i];
-                var file = new StreamFile();
-                file.path = data.path;
-                file.fileName = Path.GetFileName(data.path);
-                reader.BaseStream.Position = data.dataOffset;
-                file.stream = new MemoryStream(reader.ReadBytes(data.dataLength));
-                fileList[i] = file;
+                for (int i = 0; i < dataList.Count; i++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var data = dataList[i];
+                    var file = new StreamFile();
+                    fileList[i] = file;
+                    file.path = data.path;
+                    file.fileName = Path.GetFileName(data.path);
+                    reader.BaseStream.Position = data.dataOffset;
+                    file.stream = new MemoryStream();
+                    reader.BaseStream.CopyTo(file.stream, data.dataLength, cancellationToken);
+                    file.stream.Position = 0;
+                }
+            }
+            catch
+            {
+                foreach (var file in fileList)
+                    file?.stream?.Dispose();
+                throw;
             }
         }
     }

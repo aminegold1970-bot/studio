@@ -2,14 +2,17 @@ namespace AssetStudioMobile;
 
 internal static class MobileFolderPicker
 {
-    public static Task<string?> PickAsync(AssetDocumentLibrary library)
+    public static Task<string?> PickAsync(
+        AssetDocumentLibrary library,
+        IProgress<MainPage.AssetLoadProgress>? progress = null,
+        CancellationToken cancellationToken = default)
     {
 #if IOS || MACCATALYST
-        return AssetStudioAppleFolderPicker.PickAsync(library);
+        return AssetStudioAppleFolderPicker.PickAsync(library, progress, cancellationToken);
 #elif ANDROID
         return AssetStudioAndroidFolderPicker.PickAsync(library);
 #elif WINDOWS
-        return PickWindowsFolderAsync(library);
+        return PickWindowsFolderAsync(library, progress, cancellationToken);
 #else
         throw new PlatformNotSupportedException("Folder selection is not supported on this platform.");
 #endif
@@ -20,9 +23,13 @@ internal static class MobileFolderPicker
     {
         private static PickerDelegate? _activeDelegate;
 
-        public static Task<string?> PickAsync(AssetDocumentLibrary library)
+        public static Task<string?> PickAsync(
+            AssetDocumentLibrary library,
+            IProgress<MainPage.AssetLoadProgress>? progress,
+            CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(library);
+            cancellationToken.ThrowIfCancellationRequested();
             var completion = new TaskCompletionSource<string?>(
                 TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -38,10 +45,17 @@ internal static class MobileFolderPicker
                         new[] { "public.folder" },
                         UIKit.UIDocumentPickerMode.Open);
                     picker.AllowsMultipleSelection = false;
-                    var pickerDelegate = new PickerDelegate(completion, library);
+                    var pickerDelegate = new PickerDelegate(completion, library, progress, cancellationToken);
                     _activeDelegate = pickerDelegate;
                     picker.Delegate = pickerDelegate;
                     presenter.PresentViewController(picker, true, null);
+                    var cancellationRegistration = cancellationToken.Register(() =>
+                        MainThread.BeginInvokeOnMainThread(() => pickerDelegate.Cancel(picker)));
+                    _ = completion.Task.ContinueWith(
+                        _ => cancellationRegistration.Dispose(),
+                        CancellationToken.None,
+                        TaskContinuationOptions.ExecuteSynchronously,
+                        TaskScheduler.Default);
                 }
                 catch (Exception exception)
                 {
@@ -74,14 +88,20 @@ internal static class MobileFolderPicker
         {
             private readonly TaskCompletionSource<string?> _completion;
             private readonly AssetDocumentLibrary _library;
+            private readonly IProgress<MainPage.AssetLoadProgress>? _progress;
+            private readonly CancellationToken _cancellationToken;
             private bool _finished;
 
             public PickerDelegate(
                 TaskCompletionSource<string?> completion,
-                AssetDocumentLibrary library)
+                AssetDocumentLibrary library,
+                IProgress<MainPage.AssetLoadProgress>? progress,
+                CancellationToken cancellationToken)
             {
                 _completion = completion;
                 _library = library;
+                _progress = progress;
+                _cancellationToken = cancellationToken;
             }
 
             public override async void DidPickDocument(
@@ -91,6 +111,7 @@ internal static class MobileFolderPicker
                 if (_finished)
                     return;
                 _finished = true;
+                var pickerDismissed = false;
                 try
                 {
                     var url = urls?.FirstOrDefault()
@@ -102,7 +123,11 @@ internal static class MobileFolderPicker
                         if (string.IsNullOrWhiteSpace(source) || !Directory.Exists(source))
                             throw new IOException($"iOS could not access the selected folder: {url.LastPathComponent}");
 
-                        _completion.TrySetResult(await _library.ImportFolderAsync(source));
+                        controller.DismissViewController(true, null);
+                        pickerDismissed = true;
+                        var importedFolder = await _library.ImportFolderAsync(
+                            source, _cancellationToken, _progress);
+                        _completion.TrySetResult(importedFolder);
                     }
                     finally
                     {
@@ -112,11 +137,18 @@ internal static class MobileFolderPicker
                 }
                 catch (Exception exception)
                 {
-                    _completion.TrySetException(exception);
+                    if (exception is OperationCanceledException && _cancellationToken.IsCancellationRequested)
+                        _completion.TrySetCanceled(_cancellationToken);
+                    else
+                        _completion.TrySetException(exception);
                 }
                 finally
                 {
-                    controller.DismissViewController(true, null);
+                    if (!pickerDismissed)
+                    {
+                        MainThread.BeginInvokeOnMainThread(() =>
+                            controller.DismissViewController(true, null));
+                    }
                     _activeDelegate = null;
                 }
             }
@@ -126,8 +158,20 @@ internal static class MobileFolderPicker
                 if (_finished)
                     return;
                 _finished = true;
-                controller.DismissViewController(true, null);
+                MainThread.BeginInvokeOnMainThread(() =>
+                    controller.DismissViewController(true, null));
                 _completion.TrySetResult(null);
+                _activeDelegate = null;
+            }
+
+            public void Cancel(UIKit.UIDocumentPickerViewController controller)
+            {
+                if (_finished)
+                    return;
+                _finished = true;
+                MainThread.BeginInvokeOnMainThread(() =>
+                    controller.DismissViewController(true, null));
+                _completion.TrySetCanceled(_cancellationToken);
                 _activeDelegate = null;
             }
         }
@@ -135,7 +179,10 @@ internal static class MobileFolderPicker
 #endif
 
 #if WINDOWS
-    private static async Task<string?> PickWindowsFolderAsync(AssetDocumentLibrary library)
+    private static async Task<string?> PickWindowsFolderAsync(
+        AssetDocumentLibrary library,
+        IProgress<MainPage.AssetLoadProgress>? progress,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(library);
         var mauiWindow = Application.Current?.Windows.FirstOrDefault()
@@ -149,7 +196,9 @@ internal static class MobileFolderPicker
             picker,
             WinRT.Interop.WindowNative.GetWindowHandle(nativeWindow));
         var folder = await picker.PickSingleFolderAsync();
-        return folder == null ? null : await library.ImportFolderAsync(folder.Path);
+        return folder == null
+            ? null
+            : await library.ImportFolderAsync(folder.Path, cancellationToken, progress);
     }
 #endif
 }

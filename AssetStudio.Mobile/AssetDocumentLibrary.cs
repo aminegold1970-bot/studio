@@ -30,21 +30,46 @@ public sealed class AssetDocumentLibrary
         return await CopyToLibraryAsync(input, Path.GetFileName(sourcePath), cancellationToken);
     }
 
-    public async Task<string> ImportFolderAsync(string sourcePath, CancellationToken cancellationToken = default)
+    public async Task<string> ImportFolderAsync(
+        string sourcePath,
+        CancellationToken cancellationToken = default,
+        IProgress<MainPage.AssetLoadProgress>? progress = null)
     {
         if (!Directory.Exists(sourcePath))
             throw new DirectoryNotFoundException($"Selected folder was not found: {sourcePath}");
 
         var sourceRoot = Path.GetFullPath(sourcePath);
-        var files = await Task.Run(
-            () => Directory.EnumerateFiles(sourceRoot, "*", new EnumerationOptions
+        var files = await Task.Run(() =>
+        {
+            var foundFiles = new List<string>();
+            foreach (var file in Directory.EnumerateFiles(sourceRoot, "*", new EnumerationOptions
             {
                 RecurseSubdirectories = true,
                 AttributesToSkip = FileAttributes.ReparsePoint
-            }).ToList(),
-            cancellationToken);
+            }))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                foundFiles.Add(file);
+                if (foundFiles.Count % 32 == 0)
+                    progress?.Report(new MainPage.AssetLoadProgress(
+                        1, $"Scanning selected folder · {foundFiles.Count:N0} files found"));
+            }
+            return foundFiles;
+        }, cancellationToken);
         if (files.Count == 0)
             throw new InvalidDataException("The selected folder does not contain any files.");
+        progress?.Report(new MainPage.AssetLoadProgress(2, $"Found {files.Count:N0} files; preparing import…"));
+
+        var totalBytes = await Task.Run(() =>
+        {
+            long total = 0;
+            foreach (var file in files)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                total = checked(total + new FileInfo(file).Length);
+            }
+            return total;
+        }, cancellationToken);
 
         var folderName = Path.GetFileName(Path.TrimEndingDirectorySeparator(sourceRoot));
         if (string.IsNullOrWhiteSpace(folderName))
@@ -55,6 +80,8 @@ public sealed class AssetDocumentLibrary
         Directory.CreateDirectory(staging);
         try
         {
+            long copiedBytes = 0;
+            var lastReportedPercent = 2;
             foreach (var sourceFile in files)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -72,11 +99,30 @@ public sealed class AssetDocumentLibrary
                     sourceFile, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true);
                 await using var output = new FileStream(
                     destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, useAsync: true);
-                await input.CopyToAsync(output, 81920, cancellationToken);
+                var buffer = new byte[81920];
+                int bytesRead;
+                while ((bytesRead = await input.ReadAsync(
+                           buffer.AsMemory(0, buffer.Length), cancellationToken)) > 0)
+                {
+                    await output.WriteAsync(buffer.AsMemory(0, bytesRead), cancellationToken);
+                    copiedBytes += bytesRead;
+                    var percent = totalBytes == 0
+                        ? 4
+                        : 2 + (int)Math.Min(2, (long)copiedBytes * 2 / totalBytes);
+                    if (percent > lastReportedPercent)
+                    {
+                        lastReportedPercent = percent;
+                        progress?.Report(new MainPage.AssetLoadProgress(
+                            percent, $"Copying selected folder · {copiedBytes:N0}/{totalBytes:N0} bytes"));
+                    }
+                }
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
+            progress?.Report(new MainPage.AssetLoadProgress(4, "Selected folder copied; preparing asset load…"));
             var importedFolder = Path.Combine(
                 ImportedFoldersPath, $"{DateTime.UtcNow:yyyyMMddHHmmss}_{Guid.NewGuid():N}_{folderName}");
+            cancellationToken.ThrowIfCancellationRequested();
             Directory.Move(staging, importedFolder);
             return importedFolder;
         }
