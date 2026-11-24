@@ -70,7 +70,7 @@
 		<PackageReference Include="Microsoft.Extensions.Logging.Debug" Version="10.0.0" />
 		<PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
 		<PackageReference Include="Mono.Cecil" Version="0.11.3" />
-		<PackageReference Include="SixLabors.ImageSharp" Version="4.1.4" />
+		<PackageReference Include="SixLabors.ImageSharp" Version="3.2.1" />
 		<PackageReference Include="Praeclarum.FbxSharp" Version="0.1.12" Condition="'$(TargetFramework)' == 'net10.0-ios'" />
 		<PackageReference Include="Kyaru.Texture2DDecoder.Android" Version="0.2.0" Condition="'$(TargetFramework)' == 'net10.0-android'" />
 		<PackageReference Include="Kyaru.Texture2DDecoder.iOS" Version="0.2.0" Condition="'$(TargetFramework)' == 'net10.0-ios'" />
