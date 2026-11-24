@@ -6,6 +6,7 @@ namespace AssetStudioMobile;
 public sealed class AssetStudioMobileLoader : IDisposable
 {
     private readonly AssetsManager _manager = new();
+    private readonly SemaphoreSlim _loadGate = new(1, 1);
     private bool _disposed;
 
     public string? SpecifyUnityVersion { get; set; }
@@ -28,7 +29,7 @@ public sealed class AssetStudioMobileLoader : IDisposable
 
         await LoadAsync(
             $"Preparing {paths.Length} file(s)…",
-            () => _manager.LoadFiles(paths),
+            cancellationToken => _manager.LoadFiles(cancellationToken, paths),
             progress,
             cancellationToken);
     }
@@ -45,14 +46,14 @@ public sealed class AssetStudioMobileLoader : IDisposable
         var fullPath = Path.GetFullPath(folderPath);
         await LoadAsync(
             $"Preparing folder {Path.GetFileName(Path.TrimEndingDirectorySeparator(fullPath))}…",
-            () => _manager.LoadFolder(fullPath),
+            cancellationToken => _manager.LoadFolder(fullPath, cancellationToken),
             progress,
             cancellationToken);
     }
 
     private async Task LoadAsync(
         string preparingMessage,
-        Action load,
+        Action<CancellationToken> load,
         IProgress<MainPage.AssetLoadProgress> progress,
         CancellationToken cancellationToken)
     {
@@ -60,36 +61,80 @@ public sealed class AssetStudioMobileLoader : IDisposable
         progress?.Report(new MainPage.AssetLoadProgress(5, preparingMessage));
 
         var host = MainPageHost ?? throw new InvalidOperationException("The mobile asset browser is not connected.");
-        var snapshot = await Task.Run(() =>
+        await _loadGate.WaitAsync(cancellationToken);
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            _manager.Clear();
-            _manager.SpecifyUnityVersion = SpecifyUnityVersion ?? string.Empty;
-            load();
-            cancellationToken.ThrowIfCancellationRequested();
+            var snapshot = await Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _manager.Clear();
+                _manager.SpecifyUnityVersion = SpecifyUnityVersion ?? string.Empty;
 
-            if (_manager.assetsFileList.Count == 0)
-                throw new InvalidDataException("No Unity asset files were found in the selected input.");
+                var previousProgress = AssetStudio.Progress.Default;
+                var parserPhase = -1;
+                AssetStudio.Progress.Default = new System.Progress<int>(value =>
+                {
+                    if (value == 0)
+                        parserPhase = Math.Min(parserPhase + 1, 2);
 
-            var result = BuildBrowseData(_manager);
+                    var boundedValue = Math.Clamp(value, 0, 100);
+                    var (start, end, label) = parserPhase switch
+                    {
+                        0 => (5, 28, "Importing files"),
+                        1 => (28, 76, "Reading asset objects"),
+                        _ => (76, 90, "Linking asset relationships")
+                    };
+                    var percent = start + (end - start) * boundedValue / 100;
+                    progress?.Report(new MainPage.AssetLoadProgress(
+                        percent, $"{label} · {boundedValue}%"));
+                });
+
+                try
+                {
+                    load(cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    if (_manager.assetsFileList.Count == 0)
+                        throw new InvalidDataException("No Unity asset files were found in the selected input.");
+
+                    progress?.Report(new MainPage.AssetLoadProgress(92, "Building asset browser…"));
+                    var result = BuildBrowseData(_manager, cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    progress?.Report(new MainPage.AssetLoadProgress(
+                        96, $"Loaded {result.Assets.Count:N0} assets and {result.Hierarchy.Count:N0} scene entries…"));
+                    return result;
+                }
+                catch (OperationCanceledException)
+                {
+                    _manager.Clear();
+                    throw;
+                }
+                finally
+                {
+                    AssetStudio.Progress.Default = previousProgress;
+                }
+            }, cancellationToken);
+
+            cancellationToken.ThrowIfCancellationRequested();
+            await MainThread.InvokeOnMainThreadAsync(() =>
+                host(snapshot.Assets, snapshot.Hierarchy, snapshot.Classes));
             progress?.Report(new MainPage.AssetLoadProgress(
-                95, $"Loaded {result.Assets.Count:N0} assets and {result.Hierarchy.Count:N0} scene entries…"));
-            return result;
-        }, cancellationToken);
-
-        cancellationToken.ThrowIfCancellationRequested();
-        await MainThread.InvokeOnMainThreadAsync(() =>
-            host(snapshot.Assets, snapshot.Hierarchy, snapshot.Classes));
-        progress?.Report(new MainPage.AssetLoadProgress(
-            100, $"Loaded {snapshot.Assets.Count:N0} assets, {snapshot.Hierarchy.Count:N0} scene entries, and {snapshot.Classes.Count:N0} classes"));
+                100, $"Loaded {snapshot.Assets.Count:N0} assets, {snapshot.Hierarchy.Count:N0} scene entries, and {snapshot.Classes.Count:N0} classes"));
+        }
+        finally
+        {
+            _loadGate.Release();
+        }
     }
 
     public Action<IEnumerable<MainPage.AssetRow>, IEnumerable<MainPage.HierarchyRow>,
         IEnumerable<MainPage.ClassRow>>? MainPageHost { get; set; }
 
-    private static BrowseSnapshot BuildBrowseData(AssetsManager manager)
+    private static BrowseSnapshot BuildBrowseData(
+        AssetsManager manager,
+        CancellationToken cancellationToken)
     {
-        var containerByObject = BuildContainerMap(manager);
+        var containerByObject = BuildContainerMap(manager, cancellationToken);
         var rowsByObject = new Dictionary<AssetStudio.Object, MainPage.AssetRow>();
         var assetRows = new List<MainPage.AssetRow>();
         var objectIndex = 0;
@@ -98,6 +143,7 @@ public sealed class AssetStudioMobileLoader : IDisposable
         {
             foreach (var asset in file.Objects)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 containerByObject.TryGetValue(asset, out var container);
                 var row = MainPage.CreateAssetRow(
                     asset,
@@ -115,18 +161,21 @@ public sealed class AssetStudioMobileLoader : IDisposable
             }
         }
 
-        var hierarchyRows = BuildHierarchy(manager, rowsByObject);
-        var classRows = BuildClassRows(manager);
+        var hierarchyRows = BuildHierarchy(manager, rowsByObject, cancellationToken);
+        var classRows = BuildClassRows(manager, cancellationToken);
         return new BrowseSnapshot(assetRows, hierarchyRows, classRows);
     }
 
-    private static Dictionary<AssetStudio.Object, string> BuildContainerMap(AssetsManager manager)
+    private static Dictionary<AssetStudio.Object, string> BuildContainerMap(
+        AssetsManager manager,
+        CancellationToken cancellationToken)
     {
         var containers = new Dictionary<AssetStudio.Object, string>();
         foreach (var file in manager.assetsFileList)
         {
             foreach (var asset in file.Objects)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (asset is AssetBundle bundle)
                 {
                     foreach (var entry in bundle.m_Container)
@@ -138,6 +187,7 @@ public sealed class AssetStudioMobileLoader : IDisposable
                             bundle.m_PreloadTable.Length);
                         for (var index = start; index < end; index++)
                         {
+                            cancellationToken.ThrowIfCancellationRequested();
                             if (bundle.m_PreloadTable[index].TryGet(out var contained))
                                 containers[contained] = entry.Key;
                         }
@@ -147,6 +197,7 @@ public sealed class AssetStudioMobileLoader : IDisposable
                 {
                     foreach (var entry in resourceManager.m_Container)
                     {
+                        cancellationToken.ThrowIfCancellationRequested();
                         if (entry.Value.TryGet(out var contained))
                             containers[contained] = entry.Key;
                     }
@@ -159,13 +210,22 @@ public sealed class AssetStudioMobileLoader : IDisposable
 
     private static List<MainPage.HierarchyRow> BuildHierarchy(
         AssetsManager manager,
-        IReadOnlyDictionary<AssetStudio.Object, MainPage.AssetRow> rowsByObject)
+        IReadOnlyDictionary<AssetStudio.Object, MainPage.AssetRow> rowsByObject,
+        CancellationToken cancellationToken)
     {
         var rows = new List<MainPage.HierarchyRow>();
         var fileIndex = 0;
         foreach (var file in manager.assetsFileList)
         {
-            var gameObjects = file.Objects.OfType<GameObject>().ToList();
+            cancellationToken.ThrowIfCancellationRequested();
+            var gameObjects = new List<GameObject>();
+            foreach (var asset in file.Objects)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (asset is GameObject gameObject)
+                    gameObjects.Add(gameObject);
+            }
+
             if (gameObjects.Count == 0)
             {
                 fileIndex++;
@@ -175,13 +235,17 @@ public sealed class AssetStudioMobileLoader : IDisposable
             // Stable IDs allow selection/search state to survive reloads of the same file set.
             // Include the file index because PathIDs are only unique within an assets file.
             var fileId = $"file:{fileIndex}:{file.fileName}";
-            var gameObjectIds = gameObjects.ToDictionary(
-                gameObject => gameObject,
-                gameObject => $"go:{fileIndex}:{gameObject.m_PathID}");
+            var gameObjectIds = new Dictionary<GameObject, string>();
+            foreach (var gameObject in gameObjects)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                gameObjectIds.Add(gameObject, $"go:{fileIndex}:{gameObject.m_PathID}");
+            }
             rows.Add(new MainPage.HierarchyRow { Id = fileId, DisplayName = file.fileName });
 
             foreach (var gameObject in gameObjects)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var parentId = fileId;
                 if (gameObject.m_Transform is { } transform
                     && transform.m_Father.TryGet(out var parentTransform)
@@ -206,6 +270,7 @@ public sealed class AssetStudioMobileLoader : IDisposable
 
                 foreach (var componentPointer in gameObject.m_Components)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     if (!componentPointer.TryGet(out var component))
                         continue;
                     if (rowsByObject.TryGetValue(component, out var componentRow))
@@ -227,11 +292,14 @@ public sealed class AssetStudioMobileLoader : IDisposable
         return rows;
     }
 
-    private static List<MainPage.ClassRow> BuildClassRows(AssetsManager manager)
+    private static List<MainPage.ClassRow> BuildClassRows(
+        AssetsManager manager,
+        CancellationToken cancellationToken)
     {
         var classesByVersion = new SortedDictionary<string, SortedDictionary<int, MainPage.ClassRow>>(StringComparer.Ordinal);
         foreach (var file in manager.assetsFileList)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!classesByVersion.TryGetValue(file.unityVersion, out var versionClasses))
             {
                 versionClasses = new SortedDictionary<int, MainPage.ClassRow>();
@@ -240,6 +308,7 @@ public sealed class AssetStudioMobileLoader : IDisposable
 
             foreach (var type in file.m_Types)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var nodes = type.m_Type?.m_Nodes;
                 if (nodes == null)
                     continue;
@@ -250,18 +319,32 @@ public sealed class AssetStudioMobileLoader : IDisposable
                 versionClasses[typeId] = MainPage.CreateClassRow(
                     typeId,
                     file.unityVersion,
-                    nodes.Select(node => new MainPage.TypeTreeNodeRow
+                    nodes.Select(node =>
                     {
-                        Level = node.m_Level,
-                        Type = node.m_Type,
-                        Name = node.m_Name,
-                        ByteSize = node.m_ByteSize,
-                        MetaFlag = node.m_MetaFlag
+                        cancellationToken.ThrowIfCancellationRequested();
+                        return new MainPage.TypeTreeNodeRow
+                        {
+                            Level = node.m_Level,
+                            Type = node.m_Type,
+                            Name = node.m_Name,
+                            ByteSize = node.m_ByteSize,
+                            MetaFlag = node.m_MetaFlag
+                        };
                     }));
             }
         }
 
-        return classesByVersion.Values.SelectMany(classes => classes.Values).ToList();
+        var rows = new List<MainPage.ClassRow>();
+        foreach (var versionClasses in classesByVersion.Values)
+        {
+            foreach (var classRow in versionClasses.Values)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                rows.Add(classRow);
+            }
+        }
+
+        return rows;
     }
 
     private static string ReadAssetName(AssetStudio.Object asset, int index)
@@ -309,7 +392,17 @@ public sealed class AssetStudioMobileLoader : IDisposable
     public void Dispose()
     {
         if (_disposed) return;
-        _manager.Clear();
-        _disposed = true;
+        if (!_loadGate.Wait(0))
+            throw new InvalidOperationException("Cannot dispose the asset loader while a load is in progress.");
+        try
+        {
+            _manager.Clear();
+        }
+        finally
+        {
+            _disposed = true;
+            _loadGate.Release();
+            _loadGate.Dispose();
+        }
     }
 }

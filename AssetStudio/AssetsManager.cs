@@ -4,6 +4,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using static AssetStudio.ImportHelper;
 
 namespace AssetStudio
@@ -23,43 +24,69 @@ namespace AssetStudio
 
         public void LoadFiles(params string[] files)
         {
+            LoadFiles(CancellationToken.None, files);
+        }
+
+        public void LoadFiles(CancellationToken cancellationToken, params string[] files)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
             var path = Path.GetDirectoryName(Path.GetFullPath(files[0]));
             MergeSplitAssets(path);
+            cancellationToken.ThrowIfCancellationRequested();
             var toReadFile = ProcessingSplitFiles(files.ToList());
-            Load(toReadFile);
+            Load(toReadFile, cancellationToken);
         }
 
         public void LoadFolder(string path)
         {
-            MergeSplitAssets(path, true);
-            var files = Directory.GetFiles(path, "*.*", SearchOption.AllDirectories).ToList();
-            var toReadFile = ProcessingSplitFiles(files);
-            Load(toReadFile);
+            LoadFolder(path, CancellationToken.None);
         }
 
-        private void Load(string[] files)
+        public void LoadFolder(string path, CancellationToken cancellationToken)
         {
-            foreach (var file in files)
+            cancellationToken.ThrowIfCancellationRequested();
+            MergeSplitAssets(path, true);
+            cancellationToken.ThrowIfCancellationRequested();
+            var files = Directory.GetFiles(path, "*.*", SearchOption.AllDirectories).ToList();
+            var toReadFile = ProcessingSplitFiles(files);
+            Load(toReadFile, cancellationToken);
+        }
+
+        private void Load(string[] files, CancellationToken cancellationToken)
+        {
+            try
             {
-                importFiles.Add(file);
-                importFilesHash.Add(Path.GetFileName(file));
-            }
+                foreach (var file in files)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    importFiles.Add(file);
+                    importFilesHash.Add(Path.GetFileName(file));
+                }
 
-            Progress.Reset();
-            //use a for loop because list size can change
-            for (var i = 0; i < importFiles.Count; i++)
+                Progress.Reset();
+                //use a for loop because list size can change
+                for (var i = 0; i < importFiles.Count; i++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    LoadFile(importFiles[i]);
+                    Progress.Report(i + 1, importFiles.Count);
+                }
+
+                importFiles.Clear();
+                importFilesHash.Clear();
+                noexistFiles.Clear();
+                assetsFileListHash.Clear();
+
+                ReadAssets(cancellationToken);
+                ProcessAssets(cancellationToken);
+            }
+            finally
             {
-                LoadFile(importFiles[i]);
-                Progress.Report(i + 1, importFiles.Count);
+                importFiles.Clear();
+                importFilesHash.Clear();
+                noexistFiles.Clear();
+                assetsFileListHash.Clear();
             }
-
-            importFiles.Clear();
-            importFilesHash.Clear();
-            noexistFiles.Clear();
-            assetsFileListHash.Clear();
-
-            ReadAssets();
-            ProcessAssets();
         }
 
         private void LoadFile(string fullName)
@@ -376,7 +403,7 @@ namespace AssetStudio
             assetsFileIndexCache.Clear();
         }
 
-        private void ReadAssets()
+        private void ReadAssets(CancellationToken cancellationToken)
         {
             Logger.Info("Read assets...");
 
@@ -387,6 +414,7 @@ namespace AssetStudio
             {
                 foreach (var objectInfo in assetsFile.m_Objects)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     var objectReader = new ObjectReader(assetsFile.reader, assetsFile, objectInfo);
                     try
                     {
@@ -500,18 +528,23 @@ namespace AssetStudio
             }
         }
 
-        private void ProcessAssets()
+        private void ProcessAssets(CancellationToken cancellationToken)
         {
             Logger.Info("Process Assets...");
 
+            var progressCount = assetsFileList.Sum(x => x.Objects.Count);
+            var processedCount = 0;
+            Progress.Reset();
             foreach (var assetsFile in assetsFileList)
             {
                 foreach (var obj in assetsFile.Objects)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     if (obj is GameObject m_GameObject)
                     {
                         foreach (var pptr in m_GameObject.m_Components)
                         {
+                            cancellationToken.ThrowIfCancellationRequested();
                             if (pptr.TryGet(out var m_Component))
                             {
                                 switch (m_Component)
@@ -542,6 +575,7 @@ namespace AssetStudio
                     {
                         foreach (var m_PackedSprite in m_SpriteAtlas.m_PackedSprites)
                         {
+                            cancellationToken.ThrowIfCancellationRequested();
                             if (m_PackedSprite.TryGet(out var m_Sprite))
                             {
                                 if (m_Sprite.m_SpriteAtlas.IsNull)
@@ -557,6 +591,8 @@ namespace AssetStudio
                                     }
                                 }
                             }
+
+                            Progress.Report(++processedCount, progressCount);
                         }
                     }
                 }

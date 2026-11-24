@@ -1689,7 +1689,7 @@ public partial class MainPage : ContentPage
             var title = sceneObjects.Count == 1
                 ? sceneObjects[0].m_Name
                 : $"{sceneObjects.Count} scene objects";
-            var drawable = await Task.Run(() => new MeshWireframeDrawable(geometries));
+            var drawable = await Task.Run(() => new MeshPreviewDrawable(geometries));
             await Navigation.PushModalAsync(CreateModalNavigationPage(new MeshPreviewPage(title, drawable)));
             StatusLabel.Text = $"Previewing {geometries.Count} scene mesh(es)";
         }
@@ -2654,7 +2654,7 @@ public partial class MainPage : ContentPage
 
         try
         {
-            var drawable = await Task.Run(() => new MeshWireframeDrawable(mesh));
+            var drawable = await Task.Run(() => new MeshPreviewDrawable(mesh));
             await Navigation.PushModalAsync(CreateModalNavigationPage(new MeshPreviewPage(mesh.m_Name, drawable)));
         }
         catch (Exception ex)
@@ -2679,7 +2679,7 @@ public partial class MainPage : ContentPage
                 return;
             }
 
-            var drawable = await Task.Run(() => new MeshWireframeDrawable(geometries));
+            var drawable = await Task.Run(() => new MeshPreviewDrawable(geometries));
             await Navigation.PushModalAsync(CreateModalNavigationPage(
                 new MeshPreviewPage(node.DisplayName, drawable)));
         }

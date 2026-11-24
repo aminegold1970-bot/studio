@@ -13,4 +13,4 @@ The Android build was attempted, but the installed .NET SDK lacks the required `
 
 ## Remaining desktop feature differences
 - The port is not full Windows GUI feature parity. Audio decoding/transcoding beyond native player codecs, editable model rigs and animation export, and some platform-specific conversions remain limited as described in `README.md`.
-- The original synchronous parser can only be cancelled before and after `AssetsManager.LoadFiles` or `LoadFolder`; cancellation inside the parser remains upstream work.
+- Loading now reports file import, object decoding, and relationship-linking progress through the existing MAUI progress bar. Cancellation is passed into the parser and checked between files, Unity objects, and browser-row construction; an individual file or object deserialization is not interruptible.
