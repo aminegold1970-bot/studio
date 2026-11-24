@@ -1,4 +1,5 @@
 ﻿using System;
+using System.IO;
 using System.Runtime.InteropServices;
 using AssetStudio.PInvoke;
 
@@ -214,50 +215,59 @@ namespace Texture2DDecoder
 
         public static byte[] UnpackCrunch(byte[] data)
         {
-            void* pBuffer;
-            uint bufferSize;
+            return UnpackCrunch(data, data == null ? 0 : data.Length, false);
+        }
 
-            fixed (byte* pData = data)
-            {
-                UnpackCrunch(pData, (uint)data.Length, out pBuffer, out bufferSize);
-            }
-
-            if (pBuffer == null)
-            {
-                return null;
-            }
-
-            var result = new byte[bufferSize];
-
-            Marshal.Copy(new IntPtr(pBuffer), result, 0, (int)bufferSize);
-
-            DisposeBuffer(ref pBuffer);
-
-            return result;
+        public static byte[] UnpackCrunch(byte[] data, int dataSize)
+        {
+            return UnpackCrunch(data, dataSize, false);
         }
 
         public static byte[] UnpackUnityCrunch(byte[] data)
         {
-            void* pBuffer;
-            uint bufferSize;
+            return UnpackCrunch(data, data == null ? 0 : data.Length, true);
+        }
 
+        public static byte[] UnpackUnityCrunch(byte[] data, int dataSize)
+        {
+            return UnpackCrunch(data, dataSize, true);
+        }
+
+        private static byte[] UnpackCrunch(byte[] data, int dataSize, bool isUnityCrunch)
+        {
+            if (data == null)
+                throw new ArgumentNullException(nameof(data));
+            if (dataSize < 0 || dataSize > data.Length)
+                throw new ArgumentOutOfRangeException(nameof(dataSize));
+
+            void* pBuffer = null;
+            uint bufferSize = 0;
             fixed (byte* pData = data)
             {
-                UnpackUnityCrunch(pData, (uint)data.Length, out pBuffer, out bufferSize);
+                if (isUnityCrunch)
+                    UnpackUnityCrunch(pData, (uint)dataSize, out pBuffer, out bufferSize);
+                else
+                    UnpackCrunch(pData, (uint)dataSize, out pBuffer, out bufferSize);
             }
 
             if (pBuffer == null)
-            {
                 return null;
+
+            try
+            {
+                if (bufferSize == 0)
+                    return null;
+                if (bufferSize > int.MaxValue)
+                    throw new InvalidDataException("The unpacked Crunch texture exceeds the supported size.");
+
+                var result = new byte[(int)bufferSize];
+                Marshal.Copy(new IntPtr(pBuffer), result, 0, (int)bufferSize);
+                return result;
             }
-
-            var result = new byte[bufferSize];
-
-            Marshal.Copy(new IntPtr(pBuffer), result, 0, (int)bufferSize);
-
-            DisposeBuffer(ref pBuffer);
-
-            return result;
+            finally
+            {
+                DisposeBuffer(ref pBuffer);
+            }
         }
 
     }

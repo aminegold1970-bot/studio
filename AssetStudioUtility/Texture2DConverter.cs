@@ -1,4 +1,5 @@
 ﻿using System;
+using System.IO;
 using System.Runtime.CompilerServices;
 using Texture2DDecoder;
 
@@ -37,7 +38,13 @@ namespace AssetStudio
             if (bytes.Length < outPutSize)
                 throw new ArgumentException("The output buffer is too small for this texture.", nameof(bytes));
 
-            var buff = BigArrayPool<byte>.Shared.Rent(reader.Size);
+            var inputSize = reader.Size;
+            var minimumInputSize = GetMinimumInputSize();
+            if (inputSize < minimumInputSize)
+                throw new InvalidDataException(
+                    $"Texture format {m_TextureFormat} requires at least {minimumInputSize} image bytes, but only {inputSize} are available.");
+
+            var buff = BigArrayPool<byte>.Shared.Rent(inputSize);
             try
             {
                 reader.GetData(buff);
@@ -179,6 +186,73 @@ namespace AssetStudio
             {
                 BigArrayPool<byte>.Shared.Return(buff);
             }
+        }
+
+        private long GetMinimumInputSize()
+        {
+            var width = (long)m_Width;
+            var height = (long)m_Height;
+            var pixels = checked(width * height);
+            return m_TextureFormat switch
+            {
+                TextureFormat.Alpha8 or TextureFormat.R8 => pixels,
+                TextureFormat.ARGB4444 or TextureFormat.RGBA4444 or TextureFormat.RGB565
+                    or TextureFormat.R16 or TextureFormat.RHalf or TextureFormat.RG16
+                    => checked(pixels * 2),
+                TextureFormat.RGB24 or TextureFormat.BGR24 => checked(pixels * 3),
+                TextureFormat.RGBA32 or TextureFormat.ARGB32 or TextureFormat.BGRA32
+                    or TextureFormat.RGHalf or TextureFormat.RFloat or TextureFormat.RG32
+                    or TextureFormat.RGB9e5Float => checked(pixels * 4),
+                TextureFormat.RGBAHalf or TextureFormat.RGFloat or TextureFormat.RGBA64
+                    => checked(pixels * 8),
+                TextureFormat.ARGBFloat or TextureFormat.RGBAFloat => checked(pixels * 16),
+                TextureFormat.RGBFloat => checked(pixels * 12),
+                TextureFormat.RGB48 => checked(pixels * 6),
+                TextureFormat.YUY2 => checked(((width + 1) / 2) * height * 4),
+                TextureFormat.DXT1 or TextureFormat.BC4 or TextureFormat.ETC_RGB4
+                    or TextureFormat.ETC_RGB4_3DS or TextureFormat.ETC2_RGB
+                    or TextureFormat.ETC2_RGBA1 or TextureFormat.EAC_R
+                    or TextureFormat.EAC_R_SIGNED or TextureFormat.ATC_RGB4
+                    => GetBlockCompressedSize(width, height, 4, 4, 8),
+                TextureFormat.DXT3 or TextureFormat.DXT5 or TextureFormat.BC5
+                    or TextureFormat.BC6H or TextureFormat.BC7 or TextureFormat.ATC_RGBA8
+                    or TextureFormat.EAC_RG or TextureFormat.EAC_RG_SIGNED
+                    or TextureFormat.ETC2_RGBA8 or TextureFormat.ETC_RGBA8_3DS
+                    => GetBlockCompressedSize(width, height, 4, 4, 16),
+                TextureFormat.PVRTC_RGB2 or TextureFormat.PVRTC_RGBA2
+                    => GetPvrtcDataSize(width, height, 2),
+                TextureFormat.PVRTC_RGB4 or TextureFormat.PVRTC_RGBA4
+                    => GetPvrtcDataSize(width, height, 4),
+                TextureFormat.DXT1Crunched or TextureFormat.DXT5Crunched
+                    or TextureFormat.ETC_RGB4Crunched or TextureFormat.ETC2_RGBA8Crunched
+                    => 1,
+                TextureFormat.ASTC_RGB_4x4 or TextureFormat.ASTC_RGBA_4x4 or TextureFormat.ASTC_HDR_4x4
+                    => GetBlockCompressedSize(width, height, 4, 4, 16),
+                TextureFormat.ASTC_RGB_5x5 or TextureFormat.ASTC_RGBA_5x5 or TextureFormat.ASTC_HDR_5x5
+                    => GetBlockCompressedSize(width, height, 5, 5, 16),
+                TextureFormat.ASTC_RGB_6x6 or TextureFormat.ASTC_RGBA_6x6 or TextureFormat.ASTC_HDR_6x6
+                    => GetBlockCompressedSize(width, height, 6, 6, 16),
+                TextureFormat.ASTC_RGB_8x8 or TextureFormat.ASTC_RGBA_8x8 or TextureFormat.ASTC_HDR_8x8
+                    => GetBlockCompressedSize(width, height, 8, 8, 16),
+                TextureFormat.ASTC_RGB_10x10 or TextureFormat.ASTC_RGBA_10x10 or TextureFormat.ASTC_HDR_10x10
+                    => GetBlockCompressedSize(width, height, 10, 10, 16),
+                TextureFormat.ASTC_RGB_12x12 or TextureFormat.ASTC_RGBA_12x12 or TextureFormat.ASTC_HDR_12x12
+                    => GetBlockCompressedSize(width, height, 12, 12, 16),
+                _ => 0
+            };
+        }
+
+        private static long GetBlockCompressedSize(long width, long height, int blockWidth, int blockHeight, int bytesPerBlock) =>
+            checked(((width + blockWidth - 1) / blockWidth)
+                * ((height + blockHeight - 1) / blockHeight)
+                * bytesPerBlock);
+
+        private static long GetPvrtcDataSize(long width, long height, int bitsPerPixel)
+        {
+            var blockWidth = bitsPerPixel == 2 ? 8 : 4;
+            var blocksWide = Math.Max(2L, (width + blockWidth - 1) / blockWidth);
+            var blocksHigh = Math.Max(2L, (height + 3) / 4);
+            return checked(blocksWide * blocksHigh * 8);
         }
 
         private void SwapBytesForXbox(byte[] image_data)
@@ -515,7 +589,9 @@ namespace AssetStudio
 
         private bool DecodeDXT1Crunched(byte[] image_data, byte[] buff)
         {
-            if (UnpackCrunch(image_data, out var result))
+            if (UnpackCrunch(image_data, out var result)
+                && result != null
+                && result.LongLength >= GetBlockCompressedSize(m_Width, m_Height, 4, 4, 8))
             {
                 if (DecodeDXT1(result, buff))
                 {
@@ -527,7 +603,9 @@ namespace AssetStudio
 
         private bool DecodeDXT5Crunched(byte[] image_data, byte[] buff)
         {
-            if (UnpackCrunch(image_data, out var result))
+            if (UnpackCrunch(image_data, out var result)
+                && result != null
+                && result.LongLength >= GetBlockCompressedSize(m_Width, m_Height, 4, 4, 16))
             {
                 if (DecodeDXT5(result, buff))
                 {
@@ -625,7 +703,9 @@ namespace AssetStudio
 
         private bool DecodeETC1Crunched(byte[] image_data, byte[] buff)
         {
-            if (UnpackCrunch(image_data, out var result))
+            if (UnpackCrunch(image_data, out var result)
+                && result != null
+                && result.LongLength >= GetBlockCompressedSize(m_Width, m_Height, 4, 4, 8))
             {
                 if (DecodeETC1(result, buff))
                 {
@@ -637,7 +717,9 @@ namespace AssetStudio
 
         private bool DecodeETC2A8Crunched(byte[] image_data, byte[] buff)
         {
-            if (UnpackCrunch(image_data, out var result))
+            if (UnpackCrunch(image_data, out var result)
+                && result != null
+                && result.LongLength >= GetBlockCompressedSize(m_Width, m_Height, 4, 4, 16))
             {
                 if (DecodeETC2A8(result, buff))
                 {
@@ -692,21 +774,13 @@ namespace AssetStudio
 
         private bool UnpackCrunch(byte[] image_data, out byte[] result)
         {
-            if (version[0] > 2017 || (version[0] == 2017 && version[1] >= 3) //2017.3 and up
-                || m_TextureFormat == TextureFormat.ETC_RGB4Crunched
-                || m_TextureFormat == TextureFormat.ETC2_RGBA8Crunched)
-            {
-                result = TextureDecoder.UnpackUnityCrunch(image_data);
-            }
-            else
-            {
-                result = TextureDecoder.UnpackCrunch(image_data);
-            }
-            if (result != null)
-            {
-                return true;
-            }
-            return false;
+            var isUnityCrunch = m_TextureFormat is TextureFormat.ETC_RGB4Crunched or TextureFormat.ETC2_RGBA8Crunched
+                || version != null && version.Length >= 2
+                    && (version[0] > 2017 || version[0] == 2017 && version[1] >= 3);
+            result = isUnityCrunch
+                ? TextureDecoder.UnpackUnityCrunch(image_data, reader.Size)
+                : TextureDecoder.UnpackCrunch(image_data, reader.Size);
+            return result != null;
         }
     }
 }
