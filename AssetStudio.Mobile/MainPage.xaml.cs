@@ -71,9 +71,12 @@ public partial class MainPage : ContentPage
     private readonly MobileMonoBehaviourAssemblyService _monoBehaviourAssemblyService = new();
     private bool? _compactWorkspace;
     private bool _showingPreviewPane;
-    private const double WorkspaceDividerWidth = 10;
-    private double _workspaceBrowserRatio = 0.38;
-    private double _workspaceDragStartRatio = 0.38;
+    private const double WorkspaceDividerWidth = 28;
+    private double _workspaceBrowserRatio = 1.0;
+    private double _workspaceExpandedBrowserRatio = 0.38;
+    private double _workspaceDragStartRatio = 1.0;
+    private TaskCompletionSource<string?>? _menuChoiceCompletion;
+    private Button? _menuAnchor;
 
     public MainPage()
     {
@@ -212,6 +215,8 @@ public partial class MainPage : ContentPage
                 return;
             var ratio = _workspaceDragStartRatio + e.TotalX / availableWidth;
             _workspaceBrowserRatio = Math.Clamp(ratio, 0.25, 1.0);
+            if (_workspaceBrowserRatio < 0.99)
+                _workspaceExpandedBrowserRatio = _workspaceBrowserRatio;
             ApplyWorkspacePaneRatio();
             return;
         }
@@ -230,6 +235,25 @@ public partial class MainPage : ContentPage
             new(new GridLength(WorkspaceDividerWidth, GridUnitType.Absolute)),
             new(new GridLength(1 - _workspaceBrowserRatio, GridUnitType.Star))
         };
+        WorkspacePaneToggleButton.Text = _workspaceBrowserRatio >= 0.99 ? ">" : "<";
+    }
+
+    private void OnWorkspaceDividerToggleClicked(object? sender, EventArgs e)
+    {
+        if (_workspaceBrowserRatio >= 0.99)
+        {
+            _workspaceBrowserRatio = Math.Clamp(_workspaceExpandedBrowserRatio, 0.25, 0.75);
+        }
+        else
+        {
+            _workspaceExpandedBrowserRatio = _workspaceBrowserRatio;
+            _workspaceBrowserRatio = 1.0;
+        }
+
+        ApplyWorkspacePaneRatio();
+        StatusLabel.Text = _workspaceBrowserRatio >= 0.99
+            ? "Preview pane hidden · 0%"
+            : $"Preview pane · {(1 - _workspaceBrowserRatio):P0}";
     }
 
     protected override void OnHandlerChanged()
@@ -741,6 +765,7 @@ public partial class MainPage : ContentPage
 
     private async void OnFileMenuClicked(object sender, EventArgs e)
     {
+        _menuAnchor = sender as Button;
         var choice = await Choose("File", "Load file", "Load multiple files", "Load folder", "Asset Library", "Extract file", "Extract folder");
         if (choice == null) return;
 
@@ -1143,6 +1168,7 @@ public partial class MainPage : ContentPage
 
     private async void OnOptionsMenuClicked(object sender, EventArgs e)
     {
+        _menuAnchor = sender as Button;
         var choice = await Choose(
             "Options",
             "Display all assets",
@@ -1294,6 +1320,7 @@ public partial class MainPage : ContentPage
 
     private async void OnModelMenuClicked(object sender, EventArgs e)
     {
+        _menuAnchor = sender as Button;
         var modelOptions = new List<string>
         {
             "Export all meshes (split OBJ)",
@@ -1454,6 +1481,7 @@ public partial class MainPage : ContentPage
 
     private async void OnExportMenuClicked(object sender, EventArgs e)
     {
+        _menuAnchor = sender as Button;
         var choice = await Choose("Export", "All assets", "Selected assets", "Filtered assets",
             "Animator + selected AnimationClips (raw)", "Raw", "Dump", "Asset list to XML");
         if (choice == null) return;
@@ -1677,6 +1705,7 @@ public partial class MainPage : ContentPage
 
     private async void OnDebugMenuClicked(object sender, EventArgs e)
     {
+        _menuAnchor = sender as Button;
         var choice = await Choose("Debug", "Show error message", "Export class structures");
         if (choice == "Show error message")
         {
@@ -1717,10 +1746,64 @@ public partial class MainPage : ContentPage
         }
     }
 
-    private async Task<string?> Choose(string title, params string[] options)
+    private Task<string?> Choose(string title, params string[] options)
     {
-        var choice = await DisplayActionSheet(title, "Cancel", null, options);
-        return string.IsNullOrWhiteSpace(choice) || choice == "Cancel" ? null : choice;
+        if (options.Length == 0)
+            return null;
+
+        _menuChoiceCompletion?.TrySetResult(null);
+        var completion = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _menuChoiceCompletion = completion;
+        MenuPopupTitle.Text = title;
+        MenuOptionsHost.Children.Clear();
+        foreach (var option in options)
+        {
+            var item = new Border
+            {
+                Style = (Style)Resources["PopupMenuItem"],
+                Content = new Label
+                {
+                    Text = option,
+                    TextColor = Color.FromArgb("#202020"),
+                    FontSize = 14,
+                    VerticalTextAlignment = TextAlignment.Center,
+                    HorizontalTextAlignment = TextAlignment.Start
+                }
+            };
+            var tap = new TapGestureRecognizer();
+            tap.Tapped += (_, _) => FinishMenuChoice(option);
+            item.GestureRecognizers.Add(tap);
+            MenuOptionsHost.Children.Add(item);
+        }
+
+        PositionMenuPopup(options.Length);
+        MenuOverlay.IsVisible = true;
+        return completion.Task;
+    }
+
+    private void PositionMenuPopup(int itemCount)
+    {
+        var popupWidth = Math.Min(360, Math.Max(220, Width - 16));
+        var maxLeft = Math.Max(4, Width - popupWidth - 4);
+        var left = _menuAnchor == null
+            ? 4
+            : _menuAnchor.X - MenuScroll.ScrollX;
+        MenuPopupFrame.WidthRequest = popupWidth;
+        MenuPopupFrame.Margin = new Thickness(Math.Clamp(left, 4, maxLeft), MenuScroll.Height, 4, 0);
+        MenuOptionsScroll.HeightRequest = Math.Min(
+            itemCount * 42,
+            Math.Max(84, Height - MenuScroll.Height - 64));
+    }
+
+    private void OnMenuOverlayBackgroundTapped(object? sender, TappedEventArgs e) =>
+        FinishMenuChoice(null);
+
+    private void FinishMenuChoice(string? choice)
+    {
+        var completion = _menuChoiceCompletion;
+        _menuChoiceCompletion = null;
+        MenuOverlay.IsVisible = false;
+        completion?.TrySetResult(choice);
     }
 
     private void ReportUnwired(string action) =>
@@ -1733,8 +1816,8 @@ public partial class MainPage : ContentPage
 
     private async Task ShowMenu(string title, params string[] options)
     {
-        var choice = await DisplayActionSheet(title, "Cancel", null, options);
-        if (string.IsNullOrWhiteSpace(choice) || choice == "Cancel") return;
+        var choice = await Choose(title, options);
+        if (choice == null) return;
 
         // Explicitly report that this is a UI shell until the corresponding
         // original mobile service is wired into the host project.
@@ -1951,8 +2034,9 @@ public partial class MainPage : ContentPage
         }
         actions.Add("Export selected assets");
 
-        var action = await DisplayActionSheet(row.Name, "Cancel", null, actions.ToArray());
-        if (string.IsNullOrWhiteSpace(action) || action == "Cancel") return;
+        _menuAnchor = null;
+        var action = await Choose(row.Name, actions.ToArray());
+        if (action == null) return;
 
         string? copyValue = action switch
         {

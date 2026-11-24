@@ -20,7 +20,7 @@
                     Clicked="OnWorkspaceTabClicked" Style="{StaticResource TabButton}"/>
         </Grid>
 
-        <Grid x:Name="WorkspaceGrid" Grid.Row="2" ColumnDefinitions="38*,10,62*" RowDefinitions="*" ColumnSpacing="0" BackgroundColor="#B7B7B7" SizeChanged="OnWorkspaceSizeChanged">
+        <Grid x:Name="WorkspaceGrid" Grid.Row="2" ColumnDefinitions="*,28,0*" RowDefinitions="*" ColumnSpacing="0" BackgroundColor="#B7B7B7" SizeChanged="OnWorkspaceSizeChanged">
             <Grid x:Name="BrowserPane" Grid.Row="0" Grid.Column="0" RowDefinitions="Auto,Auto,*" RowSpacing="0" BackgroundColor="#FFFFFF">                        <Grid x:Name="BrowserTabsGrid" Grid.Row="0" ColumnDefinitions="Auto,Auto,Auto,*" Padding="2,0" ColumnSpacing="1" BackgroundColor="#F0F0F0">
             <Button x:Name="HierarchyTab" Grid.Column="0" Text="Scene Hierarchy" CommandParameter="Scene Hierarchy" Clicked="OnBrowserTabClicked" Style="{StaticResource TabButton}"/>
             <Button x:Name="AssetListTab" Grid.Column="1" Text="Asset List" CommandParameter="Asset List" Clicked="OnBrowserTabClicked" Style="{StaticResource TabButton}"/>
@@ -108,10 +108,13 @@
                     </CollectionView.ItemTemplate>
                 </CollectionView>
             </Grid>
-            </Grid><Grid x:Name="WorkspaceDivider" Grid.Row="0" Grid.Column="1" WidthRequest="10" BackgroundColor="Transparent"
+            </Grid><Grid x:Name="WorkspaceDivider" Grid.Row="0" Grid.Column="1" WidthRequest="28" BackgroundColor="#F0F0F0"
                          AutomationProperties.Name="Resize asset and preview panes"
-                         SemanticProperties.Hint="Drag horizontally to resize the asset list and preview panes">
-                <BoxView WidthRequest="1" BackgroundColor="#888888" HorizontalOptions="Center"/>
+                         SemanticProperties.Hint="Drag to resize panes. Tap to show or hide the preview pane.">
+                <Button x:Name="WorkspacePaneToggleButton" Text="&gt;" Clicked="OnWorkspaceDividerToggleClicked"
+                        Padding="0" WidthRequest="28" HeightRequest="44" MinimumWidthRequest="28"
+                        MinimumHeightRequest="44" FontSize="14" TextColor="#444444"
+                        BackgroundColor="Transparent" BorderWidth="0"/>
             </Grid><Grid x:Name="PreviewPane" Grid.Row="0" Grid.Column="2" RowDefinitions="*" RowSpacing="0" BackgroundColor="#A7A5A6"><Grid RowDefinitions="Auto,*" BackgroundColor="#F0F0F0" Grid.Row="0">
                 <Grid ColumnDefinitions="Auto,Auto,*" Padding="2,1" ColumnSpacing="1" BackgroundColor="#F0F0F0">
                     <Button x:Name="PreviewTab" Text="Preview" Clicked="OnPreviewTabClicked" Style="{StaticResource TabButton}"/>
@@ -200,6 +203,25 @@
             <Button x:Name="CancelLoadButton" Grid.Column="1" Text="Cancel load" IsVisible="False" Clicked="OnCancelLoadClicked" Padding="8,3" HeightRequest="26" MinimumHeightRequest="0" MinimumWidthRequest="0" FontSize="10" BackgroundColor="#7B3438" TextColor="White"/>
             <ActivityIndicator x:Name="BusyIndicator" Grid.Column="2" IsRunning="False" IsVisible="False" HeightRequest="20"/>
         </Grid>
+        <Grid x:Name="MenuOverlay" Grid.RowSpan="4" IsVisible="False" ZIndex="200">
+            <BoxView BackgroundColor="#01000000">
+                <BoxView.GestureRecognizers>
+                    <TapGestureRecognizer Tapped="OnMenuOverlayBackgroundTapped"/>
+                </BoxView.GestureRecognizers>
+            </BoxView>
+            <Border x:Name="MenuPopupFrame" HorizontalOptions="Start" VerticalOptions="Start"
+                    Margin="4,44,4,0" WidthRequest="320" BackgroundColor="#FFFFFF"
+                    Stroke="#888888" StrokeThickness="1" Padding="0" ZIndex="201">
+                <Grid RowDefinitions="Auto,1,*">
+                    <Label x:Name="MenuPopupTitle" TextColor="#202020" FontSize="13"
+                           FontAttributes="Bold" Padding="12,9" BackgroundColor="#F0F0F0"/>
+                    <BoxView Grid.Row="1" HeightRequest="1" BackgroundColor="#B7B7B7"/>
+                    <ScrollView x:Name="MenuOptionsScroll" Grid.Row="2" VerticalOptions="Start">
+                        <VerticalStackLayout x:Name="MenuOptionsHost" Spacing="0"/>
+                    </ScrollView>
+                </Grid>
+            </Border>
+        </Grid>
         <Grid x:Name="DropTargetOverlay" Grid.RowSpan="4" IsVisible="False" InputTransparent="True"
               BackgroundColor="#662878C8" ZIndex="100">
             <Border Stroke="#2878C8" StrokeThickness="3" BackgroundColor="#F5FFFFFF"
@@ -221,6 +243,14 @@
                 <Setter Property="BackgroundColor" Value="#F0F0F0"/><Setter Property="BorderColor" Value="Transparent"/>
                 <Setter Property="BorderWidth" Value="0"/><Setter Property="HeightRequest" Value="44"/>
                 <Setter Property="MinimumHeightRequest" Value="44"/><Setter Property="MinimumWidthRequest" Value="0"/>
+            </Style>
+            <Style x:Key="PopupMenuItem" TargetType="Border">
+                <Setter Property="Padding" Value="12,0"/>
+                <Setter Property="BackgroundColor" Value="#FFFFFF"/>
+                <Setter Property="Stroke" Value="Transparent"/>
+                <Setter Property="StrokeThickness" Value="0"/>
+                <Setter Property="HeightRequest" Value="42"/>
+                <Setter Property="MinimumHeightRequest" Value="42"/><Setter Property="MinimumWidthRequest" Value="0"/>
             </Style>
             <Style x:Key="HeaderButton" TargetType="Button">
                 <Setter Property="Padding" Value="2,1"/><Setter Property="CornerRadius" Value="0"/>
