@@ -4,6 +4,11 @@ using System.Globalization;
 using System.Text;
 using AssetStudio;
 using Newtonsoft.Json;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Formats.Bmp;
+using SixLabors.ImageSharp.Formats.Tga;
+using SixLabors.ImageSharp.PixelFormats;
+using ImageSharpImage = SixLabors.ImageSharp.Image;
 using System.Xml.Linq;
 using NumericsMatrix4x4 = System.Numerics.Matrix4x4;
 using NumericsQuaternion = System.Numerics.Quaternion;
@@ -27,10 +32,16 @@ internal static class MobileAssetExporter
         MobileExportKind kind,
         string? container = null,
         CancellationToken cancellationToken = default,
-        MobileMonoBehaviourAssemblyService? monoBehaviourAssemblyService = null)
+        MobileMonoBehaviourAssemblyService? monoBehaviourAssemblyService = null,
+        MobileImageFormat imageFormat = MobileImageFormat.Png,
+        bool convertTextures = true,
+        bool convertAudio = true,
+        bool restoreTextAssetExtension = true)
     {
         ArgumentNullException.ThrowIfNull(asset);
-        var payload = CreateExportPayload(asset, kind, container, cancellationToken, monoBehaviourAssemblyService);
+        var payload = CreateExportPayload(
+            asset, kind, container, cancellationToken, monoBehaviourAssemblyService, imageFormat,
+            convertTextures, convertAudio, restoreTextAssetExtension);
         return new MobileSingleExportResult(
             WriteAssetFile(asset, payload.Data, payload.Extension, cancellationToken),
             payload.UsedRawFallback,
@@ -53,21 +64,36 @@ internal static class MobileAssetExporter
         MobileExportKind kind,
         IProgress<MainPage.AssetLoadProgress>? progress = null,
         CancellationToken cancellationToken = default,
-        MobileMonoBehaviourAssemblyService? monoBehaviourAssemblyService = null) =>
+        MobileMonoBehaviourAssemblyService? monoBehaviourAssemblyService = null,
+        MobileImageFormat imageFormat = MobileImageFormat.Png,
+        bool convertTextures = true,
+        MobileArchiveGrouping archiveGrouping = MobileArchiveGrouping.None,
+        bool convertAudio = true,
+        bool restoreTextAssetExtension = true) =>
         ExportArchive(
             assets?.Select(asset => new MobileExportItem(asset, null))
                 ?? throw new ArgumentNullException(nameof(assets)),
             kind,
             progress,
             cancellationToken,
-            monoBehaviourAssemblyService);
+            monoBehaviourAssemblyService,
+            imageFormat,
+            convertTextures,
+            archiveGrouping,
+            convertAudio,
+            restoreTextAssetExtension);
 
     public static MobileArchiveExportResult ExportArchive(
         IEnumerable<MobileExportItem> assets,
         MobileExportKind kind,
         IProgress<MainPage.AssetLoadProgress>? progress = null,
         CancellationToken cancellationToken = default,
-        MobileMonoBehaviourAssemblyService? monoBehaviourAssemblyService = null)
+        MobileMonoBehaviourAssemblyService? monoBehaviourAssemblyService = null,
+        MobileImageFormat imageFormat = MobileImageFormat.Png,
+        bool convertTextures = true,
+        MobileArchiveGrouping archiveGrouping = MobileArchiveGrouping.None,
+        bool convertAudio = true,
+        bool restoreTextAssetExtension = true)
     {
         ArgumentNullException.ThrowIfNull(assets);
         var sourceItems = assets.ToList();
@@ -92,10 +118,12 @@ internal static class MobileAssetExporter
                     var asset = item.Asset
                         ?? throw new InvalidDataException($"Asset {index + 1} has no parsed object.");
                     var payload = CreateExportPayload(
-                        asset, kind, item.Container, cancellationToken, monoBehaviourAssemblyService);
+                        asset, kind, item.Container, cancellationToken,
+                        monoBehaviourAssemblyService, imageFormat,
+                        convertTextures, convertAudio, restoreTextAssetExtension);
                     var entryName = GetUniqueArchiveEntryName(
                         entryNames,
-                        GetArchiveAssetName(asset, payload.Extension),
+                        GetArchiveAssetName(item, payload.Extension, archiveGrouping),
                         payload.Extension);
                     var entry = archive.CreateEntry(entryName, CompressionLevel.Fastest);
                     using (var output = entry.Open())
@@ -1136,8 +1164,53 @@ internal static class MobileAssetExporter
         return SanitizeFileName(name);
     }
 
-    private static string GetArchiveAssetName(AssetStudio.Object asset, string extension) =>
-        GetAssetFileName(asset, extension);
+    private static string GetArchiveAssetName(
+        MobileExportItem item,
+        string extension,
+        MobileArchiveGrouping archiveGrouping)
+    {
+        var fileName = GetAssetFileName(item.Asset, extension);
+        var groupPath = archiveGrouping switch
+        {
+            MobileArchiveGrouping.TypeName => SanitizeGroupPath(item.Asset.type.ToString()),
+            MobileArchiveGrouping.ContainerPath => GetContainerGroupPath(item.Container),
+            MobileArchiveGrouping.SourceFileName => GetSourceFileGroupPath(item.SourceFile),
+            MobileArchiveGrouping.None => string.Empty,
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(archiveGrouping), archiveGrouping, "Unsupported archive grouping option.")
+        };
+        return string.IsNullOrEmpty(groupPath) ? fileName : $"{groupPath}/{fileName}";
+    }
+
+    private static string GetContainerGroupPath(string? container)
+    {
+        if (string.IsNullOrWhiteSpace(container))
+            return "Unassigned";
+
+        var normalized = container.Replace('\\', '/').Trim('/');
+        var segments = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length > 0)
+            segments = segments[..^1];
+        return SanitizeGroupPath(string.Join('/', segments));
+    }
+
+    private static string GetSourceFileGroupPath(string? sourceFile)
+    {
+        var sourceName = string.IsNullOrWhiteSpace(sourceFile)
+            ? string.Empty
+            : Path.GetFileNameWithoutExtension(sourceFile);
+        return SanitizeGroupPath(sourceName);
+    }
+
+    private static string SanitizeGroupPath(string groupPath)
+    {
+        var segments = groupPath.Replace('\\', '/')
+            .Split('/', StringSplitOptions.RemoveEmptyEntries)
+            .Where(segment => segment is not ("." or ".."))
+            .Select(SanitizeFileName)
+            .ToArray();
+        return segments.Length == 0 ? "Unassigned" : string.Join('/', segments);
+    }
 
     private static string GetUniqueArchiveEntryName(
         HashSet<string> entryNames,
@@ -1165,7 +1238,11 @@ internal static class MobileAssetExporter
         MobileExportKind kind,
         string? container,
         CancellationToken cancellationToken,
-        MobileMonoBehaviourAssemblyService? monoBehaviourAssemblyService)
+        MobileMonoBehaviourAssemblyService? monoBehaviourAssemblyService,
+        MobileImageFormat imageFormat,
+        bool convertTextures,
+        bool convertAudio,
+        bool restoreTextAssetExtension)
     {
         cancellationToken.ThrowIfCancellationRequested();
         try
@@ -1174,7 +1251,9 @@ internal static class MobileAssetExporter
             {
                 MobileExportKind.Raw => (asset.GetRawData(), ".dat"),
                 MobileExportKind.Dump => GetDumpData(asset, monoBehaviourAssemblyService),
-                _ => ExportConverted(asset, container, cancellationToken, monoBehaviourAssemblyService)
+                _ => ExportConverted(
+                    asset, container, cancellationToken, monoBehaviourAssemblyService, imageFormat,
+                    convertTextures, convertAudio, restoreTextAssetExtension)
             };
             cancellationToken.ThrowIfCancellationRequested();
             return new ExportPayload(data, extension, false, null);
@@ -1219,26 +1298,43 @@ internal static class MobileAssetExporter
         AssetStudio.Object asset,
         string? container = null,
         CancellationToken cancellationToken = default,
-        MobileMonoBehaviourAssemblyService? monoBehaviourAssemblyService = null) =>
+        MobileMonoBehaviourAssemblyService? monoBehaviourAssemblyService = null,
+        MobileImageFormat imageFormat = MobileImageFormat.Png,
+        bool convertTextures = true,
+        bool convertAudio = true,
+        bool restoreTextAssetExtension = true) =>
         asset switch
         {
-            Texture2D texture => ExportTexture(texture, cancellationToken),
-            TextAsset text => ExportTextAsset(text, container),
-            AudioClip audio => ExportAudio(audio, cancellationToken),
+            Texture2D texture => convertTextures
+                ? ExportTexture(texture, cancellationToken, imageFormat)
+                : ExportRawTexture(texture),
+            TextAsset text => ExportTextAsset(text, container, restoreTextAssetExtension),
+            AudioClip audio => ExportAudio(audio, cancellationToken, convertAudio),
             VideoClip video => ExportVideo(video, cancellationToken),
             MonoBehaviour behaviour => ExportMonoBehaviour(
                 behaviour, cancellationToken, monoBehaviourAssemblyService),
             Mesh mesh => (Encoding.UTF8.GetBytes(ExportObj(mesh, cancellationToken)), ".obj"),
             AssetStudio.Font font => ExportFont(font),
             MovieTexture movie => ExportMovieTexture(movie),
-            Sprite sprite => ExportSprite(sprite, cancellationToken),
+            Sprite sprite => ExportSprite(sprite, cancellationToken, imageFormat),
             Shader shader => (Encoding.UTF8.GetBytes(shader.Convert()), ".shader"),
             _ => throw new NotSupportedException($"No converted exporter is available for {asset.type}.")
         };
 
-    private static (byte[] Data, string Extension) ExportTextAsset(TextAsset text, string? container)
+    private static (byte[] Data, string Extension) ExportRawTexture(Texture2D texture)
     {
-        var extension = Path.GetExtension(container ?? string.Empty);
+        var data = texture.image_data?.GetData();
+        if (data is not { Length: > 0 })
+            throw new InvalidDataException("This texture contains no stored image data.");
+        return (data, ".tex");
+    }
+
+    private static (byte[] Data, string Extension) ExportTextAsset(
+        TextAsset text,
+        string? container,
+        bool restoreExtensionName)
+    {
+        var extension = restoreExtensionName ? Path.GetExtension(container ?? string.Empty) : string.Empty;
         if (extension.Length <= 1 || extension.Length > 16
             || extension.Skip(1).Any(character => !char.IsAsciiLetterOrDigit(character)))
         {
@@ -1325,10 +1421,13 @@ internal static class MobileAssetExporter
 
     private static (byte[] Data, string Extension) ExportTexture(
         Texture2D texture,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        MobileImageFormat imageFormat = MobileImageFormat.Png)
     {
         var bgra = DecodeTexture(texture, cancellationToken);
-        return (EncodePng(texture.m_Width, texture.m_Height, bgra, cancellationToken), ".png");
+        return (
+            EncodeImage(texture.m_Width, texture.m_Height, bgra, imageFormat, cancellationToken),
+            GetImageExtension(imageFormat));
     }
 
     private static byte[] DecodeTexture(Texture2D texture, CancellationToken cancellationToken)
@@ -1393,7 +1492,8 @@ internal static class MobileAssetExporter
 
     private static (byte[] Data, string Extension) ExportSprite(
         Sprite sprite,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        MobileImageFormat imageFormat = MobileImageFormat.Png)
     {
         cancellationToken.ThrowIfCancellationRequested();
         Texture2D texture;
@@ -1492,7 +1592,9 @@ internal static class MobileAssetExporter
                 output, outputWidth, outputHeight, cancellationToken);
         }
 
-        return (EncodePng(outputWidth, outputHeight, output, cancellationToken), ".png");
+        return (
+            EncodeImage(outputWidth, outputHeight, output, imageFormat, cancellationToken),
+            GetImageExtension(imageFormat));
     }
 
     private static void ApplySpriteMeshMask(
@@ -1680,6 +1782,75 @@ internal static class MobileAssetExporter
     private static double Edge((double X, double Y) a, (double X, double Y) b, double x, double y) =>
         (x - a.X) * (b.Y - a.Y) - (y - a.Y) * (b.X - a.X);
 
+    private static byte[] EncodeImage(
+        int width,
+        int height,
+        byte[] bgra,
+        MobileImageFormat imageFormat,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (imageFormat == MobileImageFormat.Png)
+            return EncodePng(width, height, bgra, cancellationToken);
+        if (imageFormat is not (MobileImageFormat.Jpeg or MobileImageFormat.Bmp or MobileImageFormat.Tga))
+            throw new ArgumentOutOfRangeException(nameof(imageFormat), imageFormat, "Unsupported image export format.");
+        if (width <= 0 || height <= 0 || bgra.Length != checked(width * height * 4))
+            throw new InvalidDataException("Decoded image dimensions do not match its pixel data.");
+
+        var pixels = new Rgba32[checked(width * height)];
+        for (var y = 0; y < height; y++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var sourceRow = (height - y - 1) * width * 4;
+            var targetRow = y * width;
+            for (var x = 0; x < width; x++)
+            {
+                var source = sourceRow + x * 4;
+                pixels[targetRow + x] = new Rgba32(
+                    bgra[source + 2],
+                    bgra[source + 1],
+                    bgra[source],
+                    bgra[source + 3]);
+            }
+        }
+
+        using var image = ImageSharpImage.LoadPixelData<Rgba32>(pixels, width, height);
+        using var output = new MemoryStream();
+        switch (imageFormat)
+        {
+            case MobileImageFormat.Jpeg:
+                image.SaveAsJpeg(output);
+                break;
+            case MobileImageFormat.Bmp:
+                image.Save(output, new BmpEncoder
+                {
+                    BitsPerPixel = BmpBitsPerPixel.Bit32,
+                    SupportTransparency = true
+                });
+                break;
+            case MobileImageFormat.Tga:
+                image.Save(output, new TgaEncoder
+                {
+                    BitsPerPixel = TgaBitsPerPixel.Bit32,
+                    Compression = TgaCompression.None
+                });
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(imageFormat), imageFormat, "Unsupported image export format.");
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+        return output.ToArray();
+    }
+
+    private static string GetImageExtension(MobileImageFormat imageFormat) => imageFormat switch
+    {
+        MobileImageFormat.Jpeg => ".jpeg",
+        MobileImageFormat.Png => ".png",
+        MobileImageFormat.Bmp => ".bmp",
+        MobileImageFormat.Tga => ".tga",
+        _ => throw new ArgumentOutOfRangeException(nameof(imageFormat), imageFormat, "Unsupported image export format.")
+    };
+
     private static byte[] EncodePng(
         int width,
         int height,
@@ -1757,7 +1928,8 @@ internal static class MobileAssetExporter
 
     private static (byte[] Data, string Extension) ExportAudio(
         AudioClip audio,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool convertAudio)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var data = audio.m_AudioData.GetData();
@@ -1767,7 +1939,8 @@ internal static class MobileAssetExporter
             throw new InvalidDataException("This audio clip contains no embedded audio data.");
         }
 
-        if (audio.version is { Length: > 0 }
+        if (convertAudio
+            && audio.version is { Length: > 0 }
             && audio.version[0] >= 5
             && audio.m_CompressionFormat == AudioCompressionFormat.PCM)
         {
@@ -2091,7 +2264,26 @@ internal enum MobileExportKind
     Dump
 }
 
-internal sealed record MobileExportItem(AssetStudio.Object Asset, string? Container);
+internal enum MobileImageFormat
+{
+    Jpeg,
+    Png,
+    Bmp,
+    Tga
+}
+
+internal enum MobileArchiveGrouping
+{
+    TypeName,
+    ContainerPath,
+    SourceFileName,
+    None
+}
+
+internal sealed record MobileExportItem(
+    AssetStudio.Object Asset,
+    string? Container,
+    string? SourceFile = null);
 
 internal sealed record MobileSingleExportResult(string FilePath, bool UsedRawFallback, string? Warning);
 

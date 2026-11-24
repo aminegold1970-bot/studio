@@ -1,6 +1,8 @@
 using AssetStudio;
 using Microsoft.Maui.Graphics;
 using MauiColor = Microsoft.Maui.Graphics.Color;
+using NumericsMatrix4x4 = System.Numerics.Matrix4x4;
+using NumericsVector3 = System.Numerics.Vector3;
 
 namespace AssetStudioMobile;
 
@@ -10,9 +12,14 @@ internal sealed class MeshPreviewPage : ContentPage
     private readonly GraphicsView _graphicsView;
 
     public MeshPreviewPage(Mesh mesh)
+        : this(mesh?.m_Name ?? "Mesh Preview", new MeshWireframeDrawable(mesh))
     {
-        Title = mesh.m_Name;
-        _drawable = new MeshWireframeDrawable(mesh);
+    }
+
+    internal MeshPreviewPage(string title, MeshWireframeDrawable drawable)
+    {
+        Title = string.IsNullOrWhiteSpace(title) ? "Mesh Preview" : title;
+        _drawable = drawable;
         _graphicsView = new GraphicsView
         {
             Drawable = _drawable,
@@ -65,8 +72,7 @@ internal sealed class MeshPreviewPage : ContentPage
 internal sealed class MeshWireframeDrawable : IDrawable
 {
     private const int MaxTriangles = 50_000;
-    private readonly float[] _vertices;
-    private readonly int _vertexStride;
+    private readonly NumericsVector3[] _vertices;
     private readonly (int A, int B, int C)[] _triangles;
     private float _yaw = -0.55f;
     private float _pitch = 0.35f;
@@ -76,49 +82,106 @@ internal sealed class MeshWireframeDrawable : IDrawable
     private float _startZoom;
 
     public MeshWireframeDrawable(Mesh mesh)
+        : this(new[]
+        {
+            new MobileAssetExporter.SceneMeshGeometry(
+                mesh,
+                NumericsMatrix4x4.Identity,
+                string.IsNullOrWhiteSpace(mesh?.m_Name) ? "Mesh" : mesh.m_Name,
+                Array.Empty<Material?>(),
+                null,
+                null,
+                null,
+                null)
+        }, false)
     {
-        if (mesh.m_VertexCount <= 0 || mesh.m_Vertices is null
-            || mesh.m_Vertices.Length < checked(mesh.m_VertexCount * 3))
-        {
-            throw new NotSupportedException("This mesh does not contain decoded vertex positions.");
-        }
+    }
 
-        _vertices = mesh.m_Vertices;
-        _vertexStride = _vertices.Length / mesh.m_VertexCount;
-        if (_vertexStride is not (3 or 4))
-        {
-            throw new NotSupportedException("This mesh uses an unsupported vertex layout.");
-        }
+    public MeshWireframeDrawable(IReadOnlyList<MobileAssetExporter.SceneMeshGeometry> sceneMeshes)
+        : this(sceneMeshes, true)
+    {
+    }
 
+    private MeshWireframeDrawable(
+        IReadOnlyList<MobileAssetExporter.SceneMeshGeometry> sceneMeshes,
+        bool applySceneTransforms)
+    {
+        ArgumentNullException.ThrowIfNull(sceneMeshes);
+        var vertices = new List<NumericsVector3>();
         var triangles = new List<(int A, int B, int C)>();
-        var firstIndex = 0;
-        foreach (var submesh in mesh.m_SubMeshes)
+        foreach (var geometry in sceneMeshes)
         {
-            var indexCount = checked((int)submesh.indexCount);
-            for (var index = firstIndex; index + 2 < firstIndex + indexCount; index += 3)
+            var mesh = geometry.Mesh;
+            if (mesh.m_VertexCount <= 0 || mesh.m_Vertices is null
+                || mesh.m_Vertices.Length < checked(mesh.m_VertexCount * 3))
             {
-                var a = checked((int)mesh.m_Indices[index] - (int)submesh.firstVertex);
-                var b = checked((int)mesh.m_Indices[index + 1] - (int)submesh.firstVertex);
-                var c = checked((int)mesh.m_Indices[index + 2] - (int)submesh.firstVertex);
-                if ((uint)a >= (uint)mesh.m_VertexCount
-                    || (uint)b >= (uint)mesh.m_VertexCount
-                    || (uint)c >= (uint)mesh.m_VertexCount)
-                {
-                    throw new InvalidDataException("The mesh contains an out-of-range triangle index.");
-                }
-                triangles.Add((a, b, c));
-                if (triangles.Count > MaxTriangles)
-                {
-                    throw new NotSupportedException($"Preview is limited to {MaxTriangles:N0} triangles on mobile.");
-                }
+                throw new NotSupportedException($"Mesh '{mesh.m_Name}' does not contain decoded vertex positions.");
             }
-            firstIndex = checked(firstIndex + indexCount);
+
+            var positions = mesh.m_Vertices;
+            var vertexStride = positions.Length / mesh.m_VertexCount;
+            if (vertexStride is not (3 or 4))
+                throw new NotSupportedException($"Mesh '{mesh.m_Name}' uses an unsupported vertex layout.");
+            if (geometry.BlendShapePositionDeltas is { } blendShapeDeltas
+                && blendShapeDeltas.Length < mesh.m_VertexCount)
+            {
+                throw new InvalidDataException($"Mesh '{mesh.m_Name}' has incomplete blend-shape position data.");
+            }
+
+            var meshVertexOffset = vertices.Count;
+            for (var vertexIndex = 0; vertexIndex < mesh.m_VertexCount; vertexIndex++)
+            {
+                var sourceOffset = vertexIndex * vertexStride;
+                var position = new NumericsVector3(
+                    positions[sourceOffset],
+                    positions[sourceOffset + 1],
+                    positions[sourceOffset + 2]);
+                if (applySceneTransforms)
+                {
+                    position.X = -position.X;
+                    if (geometry.BlendShapePositionDeltas is { } deltas)
+                        position += deltas[vertexIndex];
+                    position = MobileAssetExporter.TransformVertexPosition(
+                        mesh, vertexIndex, position, geometry.WorldTransform, geometry.SkinTransforms);
+                }
+
+                if (!float.IsFinite(position.X) || !float.IsFinite(position.Y) || !float.IsFinite(position.Z))
+                    throw new InvalidDataException($"Mesh '{mesh.m_Name}' contains a non-finite preview vertex.");
+                vertices.Add(position);
+            }
+
+            var firstIndex = 0;
+            foreach (var submesh in mesh.m_SubMeshes)
+            {
+                if (submesh.indexCount > int.MaxValue)
+                    throw new InvalidDataException($"Mesh '{mesh.m_Name}' has an oversized triangle index range.");
+                var indexCount = (int)submesh.indexCount;
+                if (firstIndex > mesh.m_Indices.Count || indexCount > mesh.m_Indices.Count - firstIndex)
+                    throw new InvalidDataException($"Mesh '{mesh.m_Name}' has an invalid triangle index range.");
+                var endIndex = checked(firstIndex + indexCount);
+                for (var index = firstIndex; index + 2 < endIndex; index += 3)
+                {
+                    var baseVertex = checked((int)submesh.firstVertex);
+                    var a = checked((int)mesh.m_Indices[index] - baseVertex);
+                    var b = checked((int)mesh.m_Indices[index + 1] - baseVertex);
+                    var c = checked((int)mesh.m_Indices[index + 2] - baseVertex);
+                    if ((uint)a >= (uint)mesh.m_VertexCount
+                        || (uint)b >= (uint)mesh.m_VertexCount
+                        || (uint)c >= (uint)mesh.m_VertexCount)
+                    {
+                        throw new InvalidDataException($"Mesh '{mesh.m_Name}' contains an out-of-range triangle index.");
+                    }
+                    triangles.Add((meshVertexOffset + a, meshVertexOffset + b, meshVertexOffset + c));
+                    if (triangles.Count > MaxTriangles)
+                        throw new NotSupportedException($"Preview is limited to {MaxTriangles:N0} triangles.");
+                }
+                firstIndex = endIndex;
+            }
         }
 
         if (triangles.Count == 0)
-        {
-            throw new NotSupportedException("This mesh has no triangle faces to preview.");
-        }
+            throw new NotSupportedException("The selected objects contain no triangle faces to preview.");
+        _vertices = vertices.ToArray();
         _triangles = triangles.ToArray();
     }
 
@@ -164,16 +227,16 @@ internal sealed class MeshWireframeDrawable : IDrawable
         }
 
         var scale = MathF.Min(dirtyRect.Width, dirtyRect.Height) * 0.8f * _zoom / extent;
-        var projected = new PointF[_vertexStride == 0 ? 0 : _vertices.Length / _vertexStride];
+        var projected = new PointF[_vertices.Length];
         var cosYaw = MathF.Cos(_yaw);
         var sinYaw = MathF.Sin(_yaw);
         var cosPitch = MathF.Cos(_pitch);
         var sinPitch = MathF.Sin(_pitch);
         for (var i = 0; i < projected.Length; i++)
         {
-            var x = _vertices[i * _vertexStride] - centerX;
-            var y = _vertices[i * _vertexStride + 1] - centerY;
-            var z = _vertices[i * _vertexStride + 2] - centerZ;
+            var x = _vertices[i].X - centerX;
+            var y = _vertices[i].Y - centerY;
+            var z = _vertices[i].Z - centerZ;
             var rotatedX = x * cosYaw - z * sinYaw;
             var rotatedZ = x * sinYaw + z * cosYaw;
             var rotatedY = y * cosPitch - rotatedZ * sinPitch;
@@ -200,17 +263,14 @@ internal sealed class MeshWireframeDrawable : IDrawable
         var maxY = float.NegativeInfinity;
         var minZ = float.PositiveInfinity;
         var maxZ = float.NegativeInfinity;
-        for (var i = 0; i < _vertices.Length / _vertexStride; i++)
+        foreach (var vertex in _vertices)
         {
-            var x = _vertices[i * _vertexStride];
-            var y = _vertices[i * _vertexStride + 1];
-            var z = _vertices[i * _vertexStride + 2];
-            minX = MathF.Min(minX, x);
-            maxX = MathF.Max(maxX, x);
-            minY = MathF.Min(minY, y);
-            maxY = MathF.Max(maxY, y);
-            minZ = MathF.Min(minZ, z);
-            maxZ = MathF.Max(maxZ, z);
+            minX = MathF.Min(minX, vertex.X);
+            maxX = MathF.Max(maxX, vertex.X);
+            minY = MathF.Min(minY, vertex.Y);
+            maxY = MathF.Max(maxY, vertex.Y);
+            minZ = MathF.Min(minZ, vertex.Z);
+            maxZ = MathF.Max(maxZ, vertex.Z);
         }
         return (minX, maxX, minY, maxY, minZ, maxZ);
     }

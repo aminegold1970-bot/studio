@@ -1,4 +1,5 @@
 using Microsoft.Maui.ApplicationModel.DataTransfer;
+using Microsoft.Maui.Storage;
 using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
@@ -48,13 +49,18 @@ public partial class MainPage : ContentPage
     private readonly List<HierarchyRow> _hierarchySearchResults = new();
     private int _nextHierarchySearchResult;
     private AssetRow? _selectedAsset;
-#if IOS || MACCATALYST || ANDROID
+#if IOS || MACCATALYST || ANDROID || WINDOWS
     private AssetStudio.AudioClip? _selectedAudioClip;
 #endif
     private bool _isPickingAssetFiles;
     private readonly List<AssetRow> _selectedAssets = new();
     private bool _showingDump;
     private bool _showingEmptyPreview = true;
+    private MobileImageFormat _textureExportFormat = MobileImageFormat.Png;
+    private bool _convertTextures = true;
+    private bool _convertAudio = true;
+    private bool _restoreTextAssetExtension = true;
+    private MobileArchiveGrouping _archiveGrouping = MobileArchiveGrouping.None;
     private string? _previewImagePath;
     private int _previewImageWidth;
     private int _previewImageHeight;
@@ -76,6 +82,24 @@ public partial class MainPage : ContentPage
     public MainPage()
     {
         InitializeComponent();
+        if (Enum.TryParse(
+            Preferences.Get("AssetStudio.TextureExportFormat", nameof(MobileImageFormat.Png)),
+            ignoreCase: true,
+            out MobileImageFormat savedImageFormat))
+        {
+            _textureExportFormat = savedImageFormat;
+        }
+        _convertTextures = Preferences.Get("AssetStudio.ConvertTextures", true);
+        _convertAudio = Preferences.Get("AssetStudio.ConvertAudio", true);
+        _restoreTextAssetExtension = Preferences.Get("AssetStudio.RestoreTextAssetExtension", true);
+        if (Enum.TryParse(
+            Preferences.Get("AssetStudio.ArchiveGrouping", nameof(MobileArchiveGrouping.None)),
+            ignoreCase: true,
+            out MobileArchiveGrouping savedArchiveGrouping)
+            && Enum.IsDefined(typeof(MobileArchiveGrouping), savedArchiveGrouping))
+        {
+            _archiveGrouping = savedArchiveGrouping;
+        }
         _assetLoader.MainPageHost = (assets, hierarchy, classes) =>
         {
             SetAssets(assets);
@@ -1334,17 +1358,98 @@ public partial class MainPage : ContentPage
 
     private async Task ChooseDefaultExportKindAsync()
     {
-        var choice = await Choose("Default export format", "Converted", "Raw", "Dump");
+        var choice = await Choose("Export options",
+            "Default: Converted", "Default: Raw", "Default: Dump",
+            $"Texture image: {_textureExportFormat}",
+            $"Texture2D data: {(_convertTextures ? "Converted" : "Original .tex")}",
+            $"ZIP grouping: {GetArchiveGroupingLabel(_archiveGrouping)}",
+            $"Audio export: {(_convertAudio ? "PCM to WAV" : "Original data")}",
+            $"TextAsset extension: {(_restoreTextAssetExtension ? "Restore source" : ".txt")}");
         if (choice == null)
             return;
 
+        if (choice.StartsWith("Texture image:", StringComparison.Ordinal))
+        {
+            var imageFormat = await Choose("Texture export format", "JPEG", "PNG", "BMP", "TGA");
+            if (imageFormat == null)
+                return;
+            _textureExportFormat = imageFormat switch
+            {
+                "JPEG" => MobileImageFormat.Jpeg,
+                "BMP" => MobileImageFormat.Bmp,
+                "TGA" => MobileImageFormat.Tga,
+                _ => MobileImageFormat.Png
+            };
+            Preferences.Set("AssetStudio.TextureExportFormat", _textureExportFormat.ToString());
+            StatusLabel.Text = $"Texture export format: {_textureExportFormat}";
+            return;
+        }
+
+        if (choice.StartsWith("Texture2D data:", StringComparison.Ordinal))
+        {
+            var textureMode = await Choose("Texture2D export data", "Decoded image", "Original .tex data");
+            if (textureMode == null)
+                return;
+            _convertTextures = textureMode == "Decoded image";
+            Preferences.Set("AssetStudio.ConvertTextures", _convertTextures);
+            StatusLabel.Text = $"Texture2D export data: {(_convertTextures ? "decoded image" : "original .tex data")}";
+            return;
+        }
+
+        if (choice.StartsWith("ZIP grouping:", StringComparison.Ordinal))
+        {
+            var groupingChoice = await Choose(
+                "ZIP asset grouping",
+                "By type name", "By container path", "By source file name", "Do not group");
+            if (groupingChoice == null)
+                return;
+            _archiveGrouping = groupingChoice switch
+            {
+                "By type name" => MobileArchiveGrouping.TypeName,
+                "By container path" => MobileArchiveGrouping.ContainerPath,
+                "By source file name" => MobileArchiveGrouping.SourceFileName,
+                _ => MobileArchiveGrouping.None
+            };
+            Preferences.Set("AssetStudio.ArchiveGrouping", _archiveGrouping.ToString());
+            StatusLabel.Text = $"ZIP grouping: {GetArchiveGroupingLabel(_archiveGrouping)}";
+            return;
+        }
+
+        if (choice.StartsWith("Audio export:", StringComparison.Ordinal))
+        {
+            var audioMode = await Choose(
+                "Audio export",
+                "Convert supported PCM to WAV",
+                "Preserve original audio data");
+            if (audioMode == null)
+                return;
+            _convertAudio = audioMode == "Convert supported PCM to WAV";
+            Preferences.Set("AssetStudio.ConvertAudio", _convertAudio);
+            StatusLabel.Text = $"Audio export: {(_convertAudio ? "supported PCM to WAV" : "original embedded data")}";
+            return;
+        }
+
+        if (choice.StartsWith("TextAsset extension:", StringComparison.Ordinal))
+        {
+            var extensionMode = await Choose(
+                "TextAsset export extension",
+                "Restore container extension",
+                "Use .txt");
+            if (extensionMode == null)
+                return;
+            _restoreTextAssetExtension = extensionMode == "Restore container extension";
+            Preferences.Set("AssetStudio.RestoreTextAssetExtension", _restoreTextAssetExtension);
+            StatusLabel.Text = $"TextAsset extension: {(_restoreTextAssetExtension ? "restored from container" : ".txt")}";
+            return;
+        }
+
         _defaultExportKind = choice switch
         {
-            "Raw" => "Raw",
-            "Dump" => "Dump",
+            "Default: Raw" => "Raw",
+            "Default: Dump" => "Dump",
             _ => "Convert"
         };
-        StatusLabel.Text = $"Default export format: {choice}";
+        StatusLabel.Text = $"Default export format: {_defaultExportKind}";
     }
 
     private async void OnModelMenuClicked(object sender, EventArgs e)
@@ -1352,6 +1457,7 @@ public partial class MainPage : ContentPage
         _menuAnchor = sender as Button;
         var modelOptions = new List<string>
         {
+            "Preview checked scene objects",
             "Export all meshes (split OBJ)",
             "Export all meshes (merged OBJ)",
             "Export checked scene objects (split OBJ)",
@@ -1364,6 +1470,11 @@ public partial class MainPage : ContentPage
         var choice = await Choose("Model", modelOptions.ToArray());
         if (choice == null)
             return;
+        if (choice == "Preview checked scene objects")
+        {
+            await PreviewCheckedSceneObjectsAsync();
+            return;
+        }
 
         var exportAll = choice.StartsWith("Export all", StringComparison.Ordinal);
         var merge = choice.Contains("merged", StringComparison.Ordinal);
@@ -1473,16 +1584,82 @@ public partial class MainPage : ContentPage
         }
     }
 
+    private async Task PreviewCheckedSceneObjectsAsync()
+    {
+        var sceneObjects = GetCheckedSceneObjects().ToList();
+        if (sceneObjects.Count == 0)
+        {
+            StatusLabel.Text = "Check scene objects or select a GameObject before opening the scene preview.";
+            return;
+        }
+
+        try
+        {
+            StatusLabel.Text = $"Preparing a preview of {sceneObjects.Count} scene object(s)…";
+            var geometries = await Task.Run(() =>
+                MobileAssetExporter.GetSceneMeshGeometries(sceneObjects, CancellationToken.None));
+            if (geometries.Count == 0)
+            {
+                StatusLabel.Text = "The selected scene objects contain no exportable meshes.";
+                return;
+            }
+
+            var title = sceneObjects.Count == 1
+                ? sceneObjects[0].m_Name
+                : $"{sceneObjects.Count} scene objects";
+            var drawable = await Task.Run(() => new MeshWireframeDrawable(geometries));
+            await Navigation.PushModalAsync(CreateModalNavigationPage(new MeshPreviewPage(title, drawable)));
+            StatusLabel.Text = $"Previewing {geometries.Count} scene mesh(es)";
+        }
+        catch (Exception exception)
+        {
+            StatusLabel.Text = $"Scene preview failed: {exception.Message}";
+            if (_showErrorMessages)
+                await DisplayAlert("Scene preview failed", exception.Message, "OK");
+        }
+    }
+
     private IEnumerable<AssetStudio.GameObject> GetCheckedSceneObjects()
     {
-        var checkedObjects = _hierarchyById.Values
-            .Where(node => node.IsChecked)
+        var checkedNodes = _hierarchyById.Values.Where(node => node.IsChecked).ToList();
+        var checkedNodeSet = checkedNodes.ToHashSet();
+        var checkedObjects = checkedNodes
+            .Where(node =>
+            {
+                var visitedAncestors = new HashSet<HierarchyRow>();
+                for (var parent = node.Parent; parent != null && visitedAncestors.Add(parent); parent = parent.Parent)
+                {
+                    if (checkedNodeSet.Contains(parent))
+                        return false;
+                }
+                return true;
+            })
             .Select(node => node.SourceAsset)
             .OfType<AssetStudio.GameObject>()
             .Distinct()
             .ToList();
         if (checkedObjects.Count > 0)
             return checkedObjects;
+
+        if (HierarchyCollection.SelectedItem is HierarchyRow selectedNode)
+        {
+            var selectedObjects = new List<AssetStudio.GameObject>();
+            var pendingNodes = new Stack<HierarchyRow>();
+            var visitedNodes = new HashSet<HierarchyRow>();
+            pendingNodes.Push(selectedNode);
+            while (pendingNodes.Count > 0)
+            {
+                var node = pendingNodes.Pop();
+                if (!visitedNodes.Add(node))
+                    continue;
+                if (node.SourceAsset is AssetStudio.GameObject gameObject)
+                    selectedObjects.Add(gameObject);
+                for (var index = node.Children.Count - 1; index >= 0; index--)
+                    pendingNodes.Push(node.Children[index]);
+            }
+            if (selectedObjects.Count > 0)
+                return selectedObjects.Distinct().ToList();
+        }
 
         return _selectedAssets
             .Select(row => row.SourceAsset)
@@ -1587,6 +1764,14 @@ public partial class MainPage : ContentPage
         }
     }
 
+    private static string GetArchiveGroupingLabel(MobileArchiveGrouping grouping) => grouping switch
+    {
+        MobileArchiveGrouping.TypeName => "type name",
+        MobileArchiveGrouping.ContainerPath => "container path",
+        MobileArchiveGrouping.SourceFileName => "source file name",
+        _ => "do not group"
+    };
+
     private async Task RunAssetExportAsync(
         string exportKind,
         string scope,
@@ -1619,7 +1804,7 @@ public partial class MainPage : ContentPage
                     string.IsNullOrWhiteSpace(update.Message) ? $"Exporting {targets.Count} assets…" : update.Message));
             var exportItems = targets.Select(row =>
                 row.SourceAsset is AssetStudio.Object sourceAsset
-                    ? new MobileExportItem(sourceAsset, row.Container)
+                    ? new MobileExportItem(sourceAsset, row.Container, row.SourceFile)
                     : throw new InvalidOperationException(
                         "One or more selected rows are not backed by parsed Unity assets."))
                 .ToArray();
@@ -1640,7 +1825,11 @@ public partial class MainPage : ContentPage
                         kind,
                         item.Container,
                         cancellation.Token,
-                        _monoBehaviourAssemblyService),
+                        _monoBehaviourAssemblyService,
+                        _textureExportFormat,
+                        _convertTextures,
+                        _convertAudio,
+                        _restoreTextAssetExtension),
                     cancellation.Token);
                 outputPath = result.FilePath;
                 rawFallbackCount = result.UsedRawFallback ? 1 : 0;
@@ -1650,7 +1839,9 @@ public partial class MainPage : ContentPage
             {
                 var result = await Task.Run(
                     () => MobileAssetExporter.ExportArchive(
-                        exportItems, kind, progress, cancellation.Token, _monoBehaviourAssemblyService),
+                        exportItems, kind, progress, cancellation.Token,
+                        _monoBehaviourAssemblyService, _textureExportFormat, _convertTextures, _archiveGrouping,
+                        _convertAudio, _restoreTextAssetExtension),
                     cancellation.Token);
                 outputPath = result.ArchivePath;
                 rawFallbackCount = result.RawFallbackCount;
@@ -2209,7 +2400,7 @@ public partial class MainPage : ContentPage
 
     private void OnAssetSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-#if IOS || MACCATALYST || ANDROID
+#if IOS || MACCATALYST || ANDROID || WINDOWS
         StopPreviewAudio();
 #endif
         _selectedAssets.Clear();
@@ -2285,7 +2476,7 @@ public partial class MainPage : ContentPage
                     }
                     break;
                 case AssetStudio.AudioClip audio:
-#if IOS || MACCATALYST || ANDROID
+#if IOS || MACCATALYST || ANDROID || WINDOWS
                     _selectedAudioClip = audio;
 #endif
                     ShowAudioPreview(row.Name, audio.m_CompressionFormat.ToString(),
@@ -2343,7 +2534,8 @@ public partial class MainPage : ContentPage
 
         try
         {
-            await Navigation.PushModalAsync(CreateModalNavigationPage(new MeshPreviewPage(mesh)));
+            var drawable = await Task.Run(() => new MeshWireframeDrawable(mesh));
+            await Navigation.PushModalAsync(CreateModalNavigationPage(new MeshPreviewPage(mesh.m_Name, drawable)));
         }
         catch (Exception ex)
         {
@@ -2637,6 +2829,125 @@ public partial class MainPage : ContentPage
         _audioPlayer = null;
         _selectedAudioClip = null;
     }
+#elif WINDOWS
+    private Windows.Media.Playback.MediaPlayer? _audioPlayer;
+
+    private async void OnAudioPlaybackRequested(object? sender, EventArgs e)
+    {
+        var clip = _selectedAudioClip;
+        if (clip == null)
+            return;
+
+        try
+        {
+            if (_audioPlayer == null)
+            {
+                var path = await Task.Run(() => MobileAssetExporter.Export(clip));
+                if (!ReferenceEquals(_selectedAudioClip, clip))
+                    return;
+
+                var file = await Windows.Storage.StorageFile.GetFileFromPathAsync(path);
+                if (!ReferenceEquals(_selectedAudioClip, clip))
+                    return;
+
+                var player = new Windows.Media.Playback.MediaPlayer
+                {
+                    Source = Windows.Media.Core.MediaSource.CreateFromStorageFile(file),
+                    IsLoopingEnabled = _audioLoopEnabled,
+                    Volume = AudioVolumeSlider.Value
+                };
+                player.MediaFailed += (_, args) =>
+                {
+                    var message = args.ErrorMessage;
+                    MainThread.BeginInvokeOnMainThread(() =>
+                    {
+                        if (ReferenceEquals(_audioPlayer, player))
+                            StatusLabel.Text = $"Audio playback failed: {message}";
+                    });
+                };
+                _audioPlayer = player;
+            }
+
+            var activePlayer = _audioPlayer
+                ?? throw new InvalidOperationException("Windows audio playback was not initialized.");
+            activePlayer.Play();
+            Dispatcher.StartTimer(TimeSpan.FromMilliseconds(250), () =>
+            {
+                if (!ReferenceEquals(_audioPlayer, activePlayer))
+                    return false;
+                var session = activePlayer.PlaybackSession;
+                var isPlaying = session.PlaybackState == Windows.Media.Playback.MediaPlaybackState.Playing;
+                UpdateAudioPlaybackState(
+                    isPlaying ? "Playing" : "Stopped",
+                    session.Position.TotalSeconds,
+                    session.NaturalDuration.TotalSeconds,
+                    clip.m_Frequency);
+                return isPlaying;
+            });
+            var playback = activePlayer.PlaybackSession;
+            UpdateAudioPlaybackState(
+                "Playing", playback.Position.TotalSeconds,
+                playback.NaturalDuration.TotalSeconds, clip.m_Frequency);
+        }
+        catch (Exception exception)
+        {
+            if (!ReferenceEquals(_selectedAudioClip, clip))
+                return;
+            StatusLabel.Text = $"Audio playback failed: {exception.Message}";
+            await DisplayAlert("Audio playback failed", exception.Message, "OK");
+        }
+    }
+
+    private void OnAudioPauseRequested(object? sender, EventArgs e)
+    {
+        _audioPlayer?.Pause();
+        if (_audioPlayer != null && _selectedAudioClip != null)
+        {
+            var session = _audioPlayer.PlaybackSession;
+            UpdateAudioPlaybackState(
+                "Paused", session.Position.TotalSeconds,
+                session.NaturalDuration.TotalSeconds, _selectedAudioClip.m_Frequency);
+        }
+    }
+
+    private void OnAudioStopRequested(object? sender, EventArgs e)
+    {
+        if (_audioPlayer == null)
+            return;
+
+        var session = _audioPlayer.PlaybackSession;
+        var duration = session.NaturalDuration.TotalSeconds;
+        _audioPlayer.Pause();
+        if (session.CanSeek)
+            session.Position = TimeSpan.Zero;
+        if (_selectedAudioClip != null)
+            UpdateAudioPlaybackState("Stopped", 0, duration, _selectedAudioClip.m_Frequency);
+    }
+
+    private void OnAudioLoopChanged(bool enabled)
+    {
+        if (_audioPlayer != null)
+            _audioPlayer.IsLoopingEnabled = enabled;
+    }
+
+    private void OnAudioSeekRequested(double seconds)
+    {
+        if (_audioPlayer?.PlaybackSession is { CanSeek: true } session)
+            session.Position = TimeSpan.FromSeconds(Math.Clamp(seconds, 0, session.NaturalDuration.TotalSeconds));
+    }
+
+    private void OnAudioVolumeChanged(double volume)
+    {
+        if (_audioPlayer != null)
+            _audioPlayer.Volume = Math.Clamp(volume, 0, 1);
+    }
+
+    private void StopPreviewAudio()
+    {
+        _audioPlayer?.Dispose();
+        _audioPlayer = null;
+        _selectedAudioClip = null;
+    }
 #else
     private async void OnAudioPlaybackRequested(object? sender, EventArgs e) =>
         await DisplayAlert("Audio playback unavailable",
@@ -2656,13 +2967,12 @@ public partial class MainPage : ContentPage
             BarTextColor = Color.FromArgb("#202020")
         };
 
-    // Returns the current multi-selection in the same order reported by CollectionView.
     // Returns the current multi-selection in CollectionView order.
     public IReadOnlyList<AssetRow> GetSelectedAssets() => _selectedAssets.ToList();
 
     private void ClearSelectedAsset()
     {
-#if IOS || MACCATALYST || ANDROID
+#if IOS || MACCATALYST || ANDROID || WINDOWS
         StopPreviewAudio();
 #endif
         _selectedAsset = null;
