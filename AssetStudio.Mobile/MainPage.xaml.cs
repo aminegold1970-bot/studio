@@ -1547,6 +1547,9 @@ public partial class MainPage : ContentPage
         var merge = choice.Contains("merged", StringComparison.Ordinal);
         var exportFbx = choice.Contains("(static FBX)", StringComparison.Ordinal);
         var sceneObjects = exportAll ? null : GetCheckedSceneObjects().ToList();
+        var materialContexts = exportAll
+            ? _allAssets.Select(row => row.SourceAsset).OfType<AssetStudio.GameObject>().Distinct().ToList()
+            : sceneObjects!;
         var meshes = exportAll
             ? _allAssets.Select(row => row.SourceAsset).OfType<AssetStudio.Mesh>().Distinct().ToList()
             : sceneObjects!
@@ -1567,16 +1570,17 @@ public partial class MainPage : ContentPage
         try
         {
             SetBusy(true, $"Preparing {meshes.Count} mesh(es)…");
-            var progress = new Progress<AssetLoadProgress>(update =>
-                SetLoadingProgress(Math.Clamp(update.Percent, 0, 100),
-                    string.IsNullOrWhiteSpace(update.Message) ? $"Exporting {meshes.Count} mesh(es)…" : update.Message));
             string outputPath;
-            var rawFallbackCount = 0;
             if (exportFbx)
             {
                 outputPath = await Task.Run(
                     () => sceneObjects == null
-                        ? MobileFbxExporter.ExportMeshes(meshes, cancellation.Token)
+                        ? MobileFbxExporter.ExportSceneMeshes(
+                            MobileAssetExporter.GetMeshAssetGeometries(
+                                meshes,
+                                materialContexts,
+                                cancellation.Token),
+                            cancellation.Token)
                         : MobileFbxExporter.ExportSceneMeshes(
                             MobileAssetExporter.GetSceneMeshGeometries(sceneObjects, cancellation.Token),
                             cancellation.Token),
@@ -1590,23 +1594,19 @@ public partial class MainPage : ContentPage
                         : MobileAssetExporter.ExportSceneObjectsArchive(sceneObjects, cancellation.Token),
                     cancellation.Token);
             }
-            else if (merge)
-            {
-                outputPath = await Task.Run(
-                    () => MobileAssetExporter.ExportMergedMeshes(meshes, cancellation.Token),
-                    cancellation.Token);
-            }
             else
             {
-                var result = await Task.Run(() =>
-                    MobileAssetExporter.ExportArchive(
-                        meshes,
-                        MobileExportKind.Converted,
-                        progress,
-                        cancellation.Token),
+                outputPath = await Task.Run(
+                    () => merge
+                        ? MobileAssetExporter.ExportMergedMeshAssetsArchive(
+                            meshes,
+                            materialContexts,
+                            cancellation.Token)
+                        : MobileAssetExporter.ExportMeshAssetsArchive(
+                            meshes,
+                            materialContexts,
+                            cancellation.Token),
                     cancellation.Token);
-                outputPath = result.ArchivePath;
-                rawFallbackCount = result.RawFallbackCount;
             }
             cancellation.Token.ThrowIfCancellationRequested();
             var shareTitle = exportFbx
@@ -1618,7 +1618,7 @@ public partial class MainPage : ContentPage
             if (exportFbx)
             {
                 StatusLabel.Text = sceneObjects == null
-                    ? $"Exported {meshes.Count} mesh(es) as static FBX; transforms, materials, rigs and animations are not included"
+                    ? $"Exported {meshes.Count} mesh(es) as static FBX with available material colors/PBR values; scene transforms, textures, rigs and animations are not included"
                     : $"Exported {meshes.Count} mesh(es) as static FBX with scene transforms, material colors/PBR values and baked skin/blend-shape pose; textures, rigs and animation are not included";
             }
             else if (sceneObjects != null)
@@ -1628,9 +1628,8 @@ public partial class MainPage : ContentPage
             }
             else
             {
-                StatusLabel.Text = rawFallbackCount == 0
-                    ? $"Exported {meshes.Count} mesh(es) as OBJ; materials and animations are not included"
-                    : $"Exported {meshes.Count} mesh(es); {rawFallbackCount} used raw fallback (see ZIP report)";
+                StatusLabel.Text =
+                    $"Exported {meshes.Count} mesh(es) as OBJ with available material colors and texture maps; scene transforms and animation are not included";
             }
         }
         catch (OperationCanceledException)

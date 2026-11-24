@@ -184,6 +184,30 @@ internal static class MobileAssetExporter
         return WriteMergedObj(objectFiles, "MergedMeshes", cancellationToken);
     }
 
+    public static string ExportMeshAssetsArchive(
+        IEnumerable<Mesh> sourceMeshes,
+        IEnumerable<GameObject> materialContexts,
+        CancellationToken cancellationToken = default)
+    {
+        var geometries = GetMeshAssetGeometries(sourceMeshes, materialContexts, cancellationToken);
+        if (geometries.Count == 0)
+            throw new InvalidOperationException("No meshes were selected for model export.");
+
+        return WriteSceneObjArchive(geometries, mergeObjects: false, cancellationToken);
+    }
+
+    public static string ExportMergedMeshAssetsArchive(
+        IEnumerable<Mesh> sourceMeshes,
+        IEnumerable<GameObject> materialContexts,
+        CancellationToken cancellationToken = default)
+    {
+        var geometries = GetMeshAssetGeometries(sourceMeshes, materialContexts, cancellationToken);
+        if (geometries.Count == 0)
+            throw new InvalidOperationException("No meshes were selected for model export.");
+
+        return WriteSceneObjArchive(geometries, mergeObjects: true, cancellationToken);
+    }
+
     public static string ExportMergedSceneObjects(
         IEnumerable<GameObject> gameObjects,
         CancellationToken cancellationToken = default)
@@ -669,6 +693,76 @@ internal static class MobileAssetExporter
         }
 
         return geometries;
+    }
+
+    internal static List<SceneMeshGeometry> GetMeshAssetGeometries(
+        IEnumerable<Mesh> sourceMeshes,
+        IEnumerable<GameObject> materialContexts,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(sourceMeshes);
+        ArgumentNullException.ThrowIfNull(materialContexts);
+        var meshes = sourceMeshes.Distinct().ToList();
+        if (meshes.Count == 0)
+            return new List<SceneMeshGeometry>();
+
+        var selectedMeshes = meshes.ToHashSet();
+        var materialBindings = new Dictionary<Mesh, Material?[]>();
+        foreach (var gameObject in materialContexts.Distinct())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            foreach (var pointer in gameObject.m_Components)
+            {
+                if (!pointer.TryGet(out var component))
+                    continue;
+
+                Mesh? mesh;
+                Renderer? renderer;
+                switch (component)
+                {
+                    case MeshFilter meshFilter when meshFilter.m_Mesh.TryGet(out var value):
+                        mesh = value;
+                        renderer = gameObject.m_MeshRenderer;
+                        break;
+                    case SkinnedMeshRenderer skinnedRenderer
+                        when skinnedRenderer.m_Mesh.TryGet(out var value):
+                        mesh = value;
+                        renderer = skinnedRenderer;
+                        break;
+                    default:
+                        continue;
+                }
+
+                if (mesh == null || !selectedMeshes.Contains(mesh) || materialBindings.ContainsKey(mesh))
+                    continue;
+                var materials = renderer?.m_Materials?
+                    .Select(materialPointer =>
+                        materialPointer.TryGet(out var material) ? material : null)
+                    .ToArray() ?? Array.Empty<Material?>();
+                if (materials.Any(material => material != null))
+                    materialBindings.Add(mesh, materials);
+            }
+        }
+
+        var result = new List<SceneMeshGeometry>(meshes.Count);
+        for (var index = 0; index < meshes.Count; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var mesh = meshes[index];
+            result.Add(new SceneMeshGeometry(
+                mesh,
+                NumericsMatrix4x4.Identity,
+                string.IsNullOrWhiteSpace(mesh.m_Name) ? $"mesh_{index + 1}" : mesh.m_Name,
+                materialBindings.TryGetValue(mesh, out var materials)
+                    ? materials
+                    : Array.Empty<Material?>(),
+                null,
+                null,
+                null,
+                null));
+        }
+
+        return result;
     }
 
     private static NumericsMatrix4x4 GetWorldTransform(
