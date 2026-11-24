@@ -72,9 +72,9 @@ public partial class MainPage : ContentPage
     private bool? _compactWorkspace;
     private bool _showingPreviewPane;
     private const double WorkspaceDividerWidth = 28;
-    private double _workspaceBrowserRatio = 1.0;
-    private double _workspaceExpandedBrowserRatio = 0.38;
-    private double _workspaceDragStartRatio = 1.0;
+    private double _workspaceBrowserRatio = 0.62;
+    private double _workspaceExpandedBrowserRatio = 0.62;
+    private double _workspaceDragStartRatio = 0.62;
     private TaskCompletionSource<string?>? _menuChoiceCompletion;
     private Button? _menuAnchor;
 
@@ -132,6 +132,8 @@ public partial class MainPage : ContentPage
             return;
 
         _compactWorkspace = compact;
+        if (compact)
+            _showingPreviewPane = false;
         WorkspaceGrid.ColumnDefinitions = compact
             ? new ColumnDefinitionCollection { new(GridLength.Star) }
             : new ColumnDefinitionCollection
@@ -147,8 +149,12 @@ public partial class MainPage : ContentPage
         WorkspaceDivider.HeightRequest = -1;
         WorkspaceDivider.IsVisible = !compact;
         WorkspaceViewTabs.IsVisible = compact;
+        BrowserTabsGrid.IsVisible = !compact;
+        PreviewTabsGrid.IsVisible = !compact;
         BrowserPane.IsVisible = !compact || !_showingPreviewPane;
         PreviewPane.IsVisible = !compact || _showingPreviewPane;
+        if (!compact)
+            ApplyWorkspacePaneRatio();
         RefreshWorkspaceTabs();
 
         HierarchyTab.Text = "Scene Hierarchy";
@@ -188,7 +194,21 @@ public partial class MainPage : ContentPage
         if (sender is not Button button)
             return;
 
-        _showingPreviewPane = button.CommandParameter as string == "Preview";
+        var target = button.CommandParameter as string ?? "Asset List";
+        if (target is "Preview" or "Dump")
+        {
+            _showingPreviewPane = true;
+            if (target == "Dump")
+                OnDumpTabClicked(this, e);
+            else
+                OnPreviewTabClicked(this, e);
+        }
+        else
+        {
+            _showingPreviewPane = false;
+            _browserTab = target;
+            RefreshBrowserTab();
+        }
         BrowserPane.IsVisible = !_showingPreviewPane;
         PreviewPane.IsVisible = _showingPreviewPane;
         RefreshWorkspaceTabs();
@@ -196,8 +216,14 @@ public partial class MainPage : ContentPage
 
     private void RefreshWorkspaceTabs()
     {
-        AssetsWorkspaceTab.BackgroundColor = _showingPreviewPane ? Color.FromArgb("#E2E2E2") : Color.FromArgb("#FFFFFF");
-        PreviewWorkspaceTab.BackgroundColor = _showingPreviewPane ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
+        var selectedTab = _showingPreviewPane
+            ? (_showingDump ? "Dump" : "Preview")
+            : _browserTab;
+        SceneWorkspaceTab.BackgroundColor = selectedTab == "Scene Hierarchy" ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
+        AssetsWorkspaceTab.BackgroundColor = selectedTab == "Asset List" ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
+        ClassesWorkspaceTab.BackgroundColor = selectedTab == "Asset Classes" ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
+        PreviewWorkspaceTab.BackgroundColor = selectedTab == "Preview" ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
+        DumpWorkspaceTab.BackgroundColor = selectedTab == "Dump" ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
     }
 
     private void OnWorkspaceDividerPanUpdated(object? sender, PanUpdatedEventArgs e)
@@ -1758,17 +1784,38 @@ public partial class MainPage : ContentPage
         MenuOptionsHost.Children.Clear();
         foreach (var option in options)
         {
+            var hasSubmenu = title == "Export" && option is ("Raw" or "Dump" or "Asset list to XML");
+            var content = new Grid
+            {
+                ColumnDefinitions =
+                {
+                    new ColumnDefinition(GridLength.Star),
+                    new ColumnDefinition(GridLength.Auto)
+                }
+            };
+            content.Add(new Label
+            {
+                Text = option,
+                TextColor = Color.FromArgb("#202020"),
+                FontSize = 14,
+                VerticalTextAlignment = TextAlignment.Center,
+                HorizontalTextAlignment = TextAlignment.Start
+            });
+            if (hasSubmenu)
+            {
+                content.Add(new Label
+                {
+                    Text = "▸",
+                    TextColor = Color.FromArgb("#555555"),
+                    FontSize = 16,
+                    VerticalTextAlignment = TextAlignment.Center,
+                    HorizontalTextAlignment = TextAlignment.End
+                }, 1);
+            }
             var item = new Border
             {
                 Style = (Style)Resources["PopupMenuItem"],
-                Content = new Label
-                {
-                    Text = option,
-                    TextColor = Color.FromArgb("#202020"),
-                    FontSize = 14,
-                    VerticalTextAlignment = TextAlignment.Center,
-                    HorizontalTextAlignment = TextAlignment.Start
-                }
+                Content = content
             };
             var tap = new TapGestureRecognizer();
             tap.Tapped += (_, _) => FinishMenuChoice(option);
@@ -1779,6 +1826,31 @@ public partial class MainPage : ContentPage
         PositionMenuPopup(options.Length);
         MenuOverlay.IsVisible = true;
         return completion.Task;
+    }
+
+    private void OnMenuScrollSizeChanged(object? sender, EventArgs e) =>
+        UpdateMenuOverflowButton();
+
+    private void OnMenuScrollScrolled(object? sender, ScrolledEventArgs e) =>
+        UpdateMenuOverflowButton();
+
+    private void UpdateMenuOverflowButton()
+    {
+        var maxScroll = Math.Max(0, MenuScroll.ContentSize.Width - MenuScroll.Width);
+        MenuOverflowButton.IsVisible = maxScroll > 1;
+        MenuOverflowButton.Text = MenuScroll.ScrollX >= maxScroll - 1 ? "◂" : "▸";
+    }
+
+    private async void OnMenuOverflowClicked(object? sender, EventArgs e)
+    {
+        var maxScroll = Math.Max(0, MenuScroll.ContentSize.Width - MenuScroll.Width);
+        if (maxScroll <= 1)
+            return;
+
+        var target = MenuScroll.ScrollX >= maxScroll - 1
+            ? 0
+            : Math.Min(maxScroll, MenuScroll.ScrollX + Math.Max(80, MenuScroll.Width * 0.7));
+        await MenuScroll.ScrollToAsync(target, 0, true);
     }
 
     private void PositionMenuPopup(int itemCount)
