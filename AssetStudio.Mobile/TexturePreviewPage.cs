@@ -19,8 +19,6 @@ internal sealed class TexturePreviewPage : ContentPage
     {
         Title = string.IsNullOrWhiteSpace(title) ? "Texture Preview" : title;
         BackgroundColor = Color.FromArgb("#202020");
-        NavigationPage.SetBarBackgroundColor(this, Color.FromArgb("#303030"));
-        NavigationPage.SetBarTextColor(this, Colors.White);
 
         _image = new Image
         {
@@ -96,7 +94,8 @@ internal sealed class TexturePreviewPage : ContentPage
 
         var dimensions = width > 0 && height > 0 ? $"{width:N0} × {height:N0}" : "Unknown dimensions";
         var formatText = string.IsNullOrWhiteSpace(format) ? "Unknown format" : format;
-        return $"{dimensions}  ·  {formatText}{size}{Environment.NewLine}Pinch or use +/− to zoom · Drag to move · Reset to fit";
+        return $"{dimensions}  ·  {formatText}{size}
+Pinch or use +/− to zoom · Drag to move · Reset to fit";
     }
 
     private void OnPinchUpdated(object? sender, PinchGestureUpdatedEventArgs e)
