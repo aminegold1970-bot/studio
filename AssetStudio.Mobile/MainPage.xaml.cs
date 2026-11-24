@@ -51,6 +51,8 @@ public partial class MainPage : ContentPage
     private readonly ObservableCollection<ClassRow> _classes = new();
     private readonly ObservableCollection<MetadataRow> _metadataRows = new();
     private readonly ObservableCollection<ClassRow> _visibleClasses = new();
+    private string _classSortKey = "name";
+    private bool _classSortDescending;
     private string _browserTab = "Asset List";
     private bool _showAllAssets;
     private int _sortColumn = -1;
@@ -72,9 +74,11 @@ public partial class MainPage : ContentPage
     private bool? _compactWorkspace;
     private bool _showingPreviewPane;
     private const double WorkspaceDividerWidth = 28;
-    private double _workspaceBrowserRatio = 1.0;
+    private double _workspaceBrowserRatio = 0.62;
+    // In narrow/portrait layouts, the preview starts collapsed to 0% but the divider remains draggable.
+    private double _compactBrowserRatio = 1.0;
     private double _workspaceExpandedBrowserRatio = 0.62;
-    private double _workspaceDragStartRatio = 1.0;
+    private double _workspaceDragStartRatio = 0.62;
     private TaskCompletionSource<string?>? _menuChoiceCompletion;
     private Button? _menuAnchor;
 
@@ -132,10 +136,13 @@ public partial class MainPage : ContentPage
             return;
 
         _compactWorkspace = compact;
-        if (compact)
-            _showingPreviewPane = false;
         WorkspaceGrid.ColumnDefinitions = compact
-            ? new ColumnDefinitionCollection { new(GridLength.Star) }
+            ? new ColumnDefinitionCollection
+            {
+                new(new GridLength(_compactBrowserRatio, GridUnitType.Star)),
+                new(new GridLength(WorkspaceDividerWidth, GridUnitType.Absolute)),
+                new(new GridLength(1 - _compactBrowserRatio, GridUnitType.Star))
+            }
             : new ColumnDefinitionCollection
             {
                 new(new GridLength(_workspaceBrowserRatio, GridUnitType.Star)),
@@ -143,17 +150,19 @@ public partial class MainPage : ContentPage
                 new(new GridLength(1 - _workspaceBrowserRatio, GridUnitType.Star))
             };
         Grid.SetColumn(BrowserPane, 0);
-        Grid.SetColumn(WorkspaceDivider, compact ? 0 : 1);
-        Grid.SetColumn(PreviewPane, compact ? 0 : 2);
+        Grid.SetColumn(WorkspaceDivider, 1);
+        Grid.SetColumn(PreviewPane, 2);
         WorkspaceDivider.WidthRequest = WorkspaceDividerWidth;
         WorkspaceDivider.HeightRequest = -1;
-        WorkspaceDivider.IsVisible = !compact;
-        WorkspaceViewTabs.IsVisible = compact;
-        BrowserTabsGrid.IsVisible = !compact;
-        PreviewTabsGrid.IsVisible = !compact;
-        BrowserPane.IsVisible = !compact || !_showingPreviewPane;
-        PreviewPane.IsVisible = !compact || _showingPreviewPane;
-        if (!compact)
+        WorkspaceDivider.IsVisible = true;
+        WorkspaceViewTabs.IsVisible = false;
+        BrowserTabsGrid.IsVisible = true;
+        PreviewTabsGrid.IsVisible = true;
+        BrowserPane.IsVisible = true;
+        PreviewPane.IsVisible = true;
+        if (compact)
+            ApplyCompactWorkspacePaneRatio();
+        else
             ApplyWorkspacePaneRatio();
         RefreshWorkspaceTabs();
 
@@ -185,6 +194,7 @@ public partial class MainPage : ContentPage
         }
 
         AssetColumnHeaders.IsVisible = !compact && _browserTab == "Asset List";
+        ClassColumnHeaders.IsVisible = _browserTab == "Asset Classes";
         foreach (var asset in _allAssets)
             asset.IsCompactLayout = compact;
     }
@@ -230,7 +240,7 @@ public partial class MainPage : ContentPage
     {
         if (e.StatusType == GestureStatus.Started)
         {
-            _workspaceDragStartRatio = _workspaceBrowserRatio;
+            _workspaceDragStartRatio = _compactWorkspace == true ? _compactBrowserRatio : _workspaceBrowserRatio;
             return;
         }
 
@@ -240,10 +250,17 @@ public partial class MainPage : ContentPage
             if (availableWidth <= 0)
                 return;
             var ratio = _workspaceDragStartRatio + e.TotalX / availableWidth;
-            _workspaceBrowserRatio = Math.Clamp(ratio, 0.10, 1.0);
-            if (_workspaceBrowserRatio < 0.99)
+            if (_compactWorkspace == true)
+            {
+                _compactBrowserRatio = Math.Clamp(ratio, 0.25, 1.0);
+                ApplyCompactWorkspacePaneRatio();
+            }
+            else
+            {
+                _workspaceBrowserRatio = Math.Clamp(ratio, 0.25, 0.85);
                 _workspaceExpandedBrowserRatio = _workspaceBrowserRatio;
-            ApplyWorkspacePaneRatio();
+                ApplyWorkspacePaneRatio();
+            }
             return;
         }
 
@@ -264,22 +281,36 @@ public partial class MainPage : ContentPage
         WorkspacePaneToggleButton.Text = _workspaceBrowserRatio >= 0.99 ? ">" : "<";
     }
 
+
+    private void ApplyCompactWorkspacePaneRatio()
+    {
+        WorkspaceGrid.ColumnDefinitions = new ColumnDefinitionCollection
+        {
+            new(new GridLength(_compactBrowserRatio, GridUnitType.Star)),
+            new(new GridLength(WorkspaceDividerWidth, GridUnitType.Absolute)),
+            new(new GridLength(1 - _compactBrowserRatio, GridUnitType.Star))
+        };
+        WorkspacePaneToggleButton.Text = _compactBrowserRatio >= 0.99 ? ">" : "<";
+    }
+
     private void OnWorkspaceDividerToggleClicked(object? sender, EventArgs e)
     {
-        if (_workspaceBrowserRatio >= 0.99)
+        if (_compactWorkspace == true)
         {
-            _workspaceBrowserRatio = Math.Clamp(_workspaceExpandedBrowserRatio, 0.25, 0.75);
+            _compactBrowserRatio = _compactBrowserRatio >= 0.99 ? 0.65 : 1.0;
+            ApplyCompactWorkspacePaneRatio();
+            StatusLabel.Text = _compactBrowserRatio >= 0.99 ? "Preview pane hidden · 0%" : $"Preview pane · {(1 - _compactBrowserRatio):P0}";
+            return;
         }
+        if (_workspaceBrowserRatio >= 0.99)
+            _workspaceBrowserRatio = Math.Clamp(_workspaceExpandedBrowserRatio, 0.25, 0.75);
         else
         {
             _workspaceExpandedBrowserRatio = _workspaceBrowserRatio;
             _workspaceBrowserRatio = 1.0;
         }
-
         ApplyWorkspacePaneRatio();
-        StatusLabel.Text = _workspaceBrowserRatio >= 0.99
-            ? "Preview pane hidden · 0%"
-            : $"Preview pane · {(1 - _workspaceBrowserRatio):P0}";
+        StatusLabel.Text = _workspaceBrowserRatio >= 0.99 ? "Preview pane hidden · 0%" : $"Preview pane · {(1 - _workspaceBrowserRatio):P0}";
     }
 
     protected override void OnHandlerChanged()
@@ -360,8 +391,6 @@ public partial class MainPage : ContentPage
 
     private void OnDropTargetChanged(bool isTargeted) =>
         MainThread.BeginInvokeOnMainThread(() => DropTargetOverlay.IsVisible = isTargeted);
-
-    private async void OnLibraryClicked(object sender, EventArgs e) => await OpenLibraryAsync();
 
     private async Task OpenLibraryAsync()
     {
@@ -536,12 +565,16 @@ public partial class MainPage : ContentPage
         StatusLabel.Text = $"Collapsed scene hierarchy · {_hierarchyRoots.Count} root objects";
     }
 
-    private static void SetHierarchyExpansionRecursive(IEnumerable<HierarchyRow> nodes, bool expanded)
+    private static void SetHierarchyExpansionRecursive(IEnumerable<HierarchyRow> nodes, bool expanded) =>
+        SetHierarchyExpansionRecursive(nodes, expanded, new HashSet<HierarchyRow>());
+
+    private static void SetHierarchyExpansionRecursive(IEnumerable<HierarchyRow> nodes, bool expanded, HashSet<HierarchyRow> visited)
     {
         foreach (var node in nodes)
         {
+            if (!visited.Add(node)) continue;
             node.IsExpanded = expanded && node.HasChildren;
-            SetHierarchyExpansionRecursive(node.Children, expanded);
+            SetHierarchyExpansionRecursive(node.Children, expanded, visited);
         }
     }
 
@@ -1044,18 +1077,9 @@ public partial class MainPage : ContentPage
                 return;
             }
 
-            var persisted = new List<FileResult>();
-            foreach (var file in selected)
-            {
-                SetBusy(true, $"Copying {file.FileName} to Library…");
-                var imported = await _documentLibrary.ImportAsync(file);
-                if (string.IsNullOrWhiteSpace(imported.FullPath) || !File.Exists(imported.FullPath))
-                    throw new IOException($"The selected file '{file.FileName}' was not saved to the AssetStudio library.");
-                persisted.Add(imported);
-            }
-
-            SetBusy(false, $"{persisted.Count} file(s) copied to Library.");
-            await LoadPersistentFilesAsync(persisted, "Imported files");
+            // Use the selected document paths directly; do not copy them into an app library.
+            // The host loader must consume the picker-provided FileResult paths while access is valid.
+            await LoadPersistentFilesAsync(selected, "Loaded files");
         }
         catch (OperationCanceledException)
         {
@@ -1177,11 +1201,11 @@ public partial class MainPage : ContentPage
         var safePercent = Math.Clamp(percent, 0, 100);
         MainThread.BeginInvokeOnMainThread(() =>
         {
-            BusyIndicator.IsVisible = safePercent < 100;
-            BusyIndicator.IsRunning = safePercent < 100;
+            LoadProgressBar.IsVisible = safePercent < 100;
+            LoadProgressBar.Progress = safePercent / 100d;
+            BusyIndicator.IsVisible = false;
+            BusyIndicator.IsRunning = false;
             StatusLabel.Text = message;
-            LoadingProgressBar.Progress = safePercent / 100.0;
-            LoadingProgressBar.IsVisible = safePercent < 100;
         });
     }
 
@@ -1192,13 +1216,13 @@ public partial class MainPage : ContentPage
 
     private void SetBusy(bool busy, string message)
     {
-        BusyIndicator.IsVisible = busy;
-        BusyIndicator.IsRunning = busy;
+        BusyIndicator.IsVisible = false;
+        BusyIndicator.IsRunning = false;
+        LoadProgressBar.IsVisible = busy;
+        if (!busy) LoadProgressBar.Progress = 0;
         CancelLoadButton.IsVisible = busy && _loadCancellation != null;
         CancelLoadButton.IsEnabled = true;
         StatusLabel.Text = message;
-        LoadingProgressBar.Progress = 0;
-        LoadingProgressBar.IsVisible = busy;
     }
 
     private void OnCancelLoadClicked(object sender, EventArgs e)
@@ -1741,6 +1765,7 @@ public partial class MainPage : ContentPage
         var dialog = new AssetTypeFilterPage(types, currentTypes, selected =>
         {
             _selectedTypes = selected.Count == types.Length ? null : selected;
+            ClearAssetListSelectionForFilterChange();
             ApplyAssetFilter();
         });
         await Navigation.PushModalAsync(CreateModalNavigationPage(dialog));
@@ -1957,6 +1982,7 @@ public partial class MainPage : ContentPage
         HierarchySearchNextButton.IsVisible = _browserTab == "Scene Hierarchy" && _hierarchySearchResults.Count > 0;
         HierarchyActions.IsVisible = _browserTab == "Scene Hierarchy" && _hierarchy.Count > 0;
         AssetColumnHeaders.IsVisible = _compactWorkspace != true && _browserTab == "Asset List";
+        ClassColumnHeaders.IsVisible = _browserTab == "Asset Classes";
         StatusLabel.Text = _browserTab switch
         {
             "Asset List" => $"{_visibleAssets.Count} / {_allAssets.Count} assets",
@@ -1965,19 +1991,34 @@ public partial class MainPage : ContentPage
         };
     }
 
-    private void OnAssetSearchTextChanged(object sender, TextChangedEventArgs e) => ApplyAssetFilter();
+    private void OnAssetSearchTextChanged(object sender, TextChangedEventArgs e)
+    {
+        ClearAssetListSelectionForFilterChange();
+        ApplyAssetFilter();
+    }
+
+    // The original desktop FilterAssetList clears the ListView selection before
+    // rebuilding the filtered list. Keep that interaction consistent on mobile.
+    private void ClearAssetListSelectionForFilterChange()
+    {
+        _selectedAssets.Clear();
+        AssetCollection?.SelectedItems.Clear();
+        if (_selectedAsset != null)
+            ClearSelectedAsset();
+    }
 
     private void ApplyAssetFilter()
     {
         var query = AssetSearch?.Text?.Trim() ?? "";
+        // Mirror the original WinForms FilterAssetList search scope: Name,
+        // Container and PathID. Type filtering is a separate filter-menu state;
+        // searching Size, Type or SourceFile here changes desktop semantics.
         IEnumerable<AssetRow> filtered = _allAssets.Where(asset =>
             (_showAllAssets || asset.IsExportable) &&
             (_selectedTypes == null || _selectedTypes.Contains(asset.Type)) &&
             (query.Length == 0 ||
              Contains(asset.Name, query) || Contains(asset.Container, query) ||
-             Contains(asset.Type, query) || Contains(asset.PathId, query) ||
-             Contains(asset.Size, query) || Contains(asset.DisplaySize, query) ||
-             Contains(asset.SourceFile, query)));
+             Contains(asset.PathId, query)));
         filtered = SortAssets(filtered);
         _visibleAssets.Clear();
         foreach (var asset in filtered) _visibleAssets.Add(asset);
@@ -2020,18 +2061,40 @@ public partial class MainPage : ContentPage
 
     private static long ParseSize(string? value)
     {
-        if (long.TryParse(value, out var bytes)) return bytes;
-        var digits = new string((value ?? "").TakeWhile(c => char.IsDigit(c) || c == '-').ToArray());
-        return long.TryParse(digits, out bytes) ? bytes : long.MinValue;
+        if (string.IsNullOrWhiteSpace(value)) return long.MinValue;
+        var text = value.Trim().Replace(',', '.');
+        if (long.TryParse(text, System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out var bytes)) return bytes;
+
+        // Support display sizes as well as raw byte counts (e.g. 1.25 MB).
+        var match = System.Text.RegularExpressions.Regex.Match(text,
+            @"^([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(B|KB|KIB|MB|MIB|GB|GIB|TB|TIB)?$",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (!match.Success || !double.TryParse(match.Groups[1].Value,
+                System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture,
+                out var number)) return long.MinValue;
+        var unit = match.Groups[2].Value.ToUpperInvariant();
+        var exponent = unit switch
+        {
+            "KB" or "KIB" => 1, "MB" or "MIB" => 2,
+            "GB" or "GIB" => 3, "TB" or "TIB" => 4, _ => 0
+        };
+        var scaled = number * Math.Pow(1024, exponent);
+        if (double.IsNaN(scaled) || double.IsInfinity(scaled) || scaled > long.MaxValue || scaled < long.MinValue)
+            return long.MinValue;
+        return (long)Math.Round(scaled, MidpointRounding.AwayFromZero);
     }
 
     private void SortBy(int column)
     {
+        // Preserve selection by asset identity across a re-sort rather than dropping it.
+        var selected = _selectedAssets.ToList();
         if (_sortColumn == column) _reverseSort = !_reverseSort;
         else { _sortColumn = column; _reverseSort = false; }
-        AssetCollection.SelectedItems.Clear();
-        ClearSelectedAsset();
         ApplyAssetFilter();
+        AssetCollection.SelectedItems.Clear();
+        foreach (var asset in selected.Where(_visibleAssets.Contains))
+            AssetCollection.SelectedItems.Add(asset);
         StatusLabel.Text = $"Sorted by {(new[] { "Name", "Container", "Type", "PathID", "Size" })[column]} · {(_reverseSort ? "descending" : "ascending")}";
     }
     private void OnSortName(object sender, EventArgs e) => SortBy(0);
@@ -2050,20 +2113,31 @@ public partial class MainPage : ContentPage
         if (query.Length == 0)
         {
             HierarchySearchNextButton.IsVisible = false;
+            HierarchySearchNextButton.Text = "Next";
             StatusLabel.Text = $"{_hierarchy.Count} visible / {_hierarchyById.Count} scene objects";
             return;
         }
-        foreach (var root in _hierarchyRoots) CollectHierarchyMatches(root, query);
+        // Search the full tree in stable depth-first order, independent of the
+        // current expansion state. A visited guard protects malformed graphs.
+        var visited = new HashSet<HierarchyRow>();
+        foreach (var root in _hierarchyRoots) CollectHierarchyMatches(root, query, visited);
         HierarchySearchNextButton.IsVisible = _hierarchySearchResults.Count > 0;
         StatusLabel.Text = _hierarchySearchResults.Count == 0
             ? "No matching scene objects"
             : $"{_hierarchySearchResults.Count} scene object matches · press Enter or Next";
+        HierarchySearchNextButton.Text = _hierarchySearchResults.Count > 0
+            ? $"Next ({_hierarchySearchResults.Count})"
+            : "Next";
     }
 
-    private void CollectHierarchyMatches(HierarchyRow node, string query)
+    private void CollectHierarchyMatches(HierarchyRow node, string query, HashSet<HierarchyRow> visited)
     {
-        if (Contains(node.DisplayName, query)) _hierarchySearchResults.Add(node);
-        foreach (var child in node.Children) CollectHierarchyMatches(child, query);
+        if (!visited.Add(node)) return;
+        // Match the visible object name and its stable source identifier. IDs are
+        // useful when names are duplicated or when the user copied a PathID.
+        if (Contains(node.DisplayName, query) || Contains(node.Id, query) || Contains(node.ParentId, query))
+            _hierarchySearchResults.Add(node);
+        foreach (var child in node.Children) CollectHierarchyMatches(child, query, visited);
     }
 
     private void OnHierarchySearchButtonPressed(object sender, EventArgs e) => SelectNextHierarchySearchResult();
@@ -2078,7 +2152,10 @@ public partial class MainPage : ContentPage
         }
         if (_nextHierarchySearchResult >= _hierarchySearchResults.Count) _nextHierarchySearchResult = 0;
         var match = _hierarchySearchResults[_nextHierarchySearchResult++];
-        for (var parent = match.Parent; parent != null; parent = parent.Parent) parent.IsExpanded = true;
+        // Expand the complete ancestor chain, guarding against unexpected cycles.
+        var ancestors = new HashSet<HierarchyRow>();
+        for (var parent = match.Parent; parent != null && ancestors.Add(parent); parent = parent.Parent)
+            parent.IsExpanded = true;
         RebuildVisibleHierarchy();
         HierarchyCollection.SelectedItem = match;
         HierarchyCollection.ScrollTo(match, ScrollToPosition.MakeVisible, animate: true);
@@ -2095,17 +2172,22 @@ public partial class MainPage : ContentPage
         StatusLabel.Text = $"{_hierarchyById.Values.Count(x => x.IsChecked)} scene objects checked";
     }
 
-    private static void SetHierarchyCheckedRecursive(HierarchyRow node, bool value)
+    private static void SetHierarchyCheckedRecursive(HierarchyRow node, bool value) =>
+        SetHierarchyCheckedRecursive(node, value, new HashSet<HierarchyRow>());
+
+    private static void SetHierarchyCheckedRecursive(HierarchyRow node, bool value, HashSet<HierarchyRow> visited)
     {
+        if (!visited.Add(node)) return;
         node.IsChecked = value;
-        foreach (var child in node.Children) SetHierarchyCheckedRecursive(child, value);
+        foreach (var child in node.Children) SetHierarchyCheckedRecursive(child, value, visited);
     }
 
     // Keep ancestor checkboxes synchronized with their descendants. A parent is
     // checked only when every direct child subtree is checked.
     private static void UpdateHierarchyAncestors(HierarchyRow? node)
     {
-        while (node != null)
+        var visited = new HashSet<HierarchyRow>();
+        while (node != null && visited.Add(node))
         {
             node.IsChecked = node.Children.Count > 0 && node.Children.All(child => child.IsChecked);
             node = node.Parent;
@@ -2647,14 +2729,41 @@ public partial class MainPage : ContentPage
             Contains(item.Name, query) || Contains(item.Id, query) ||
             Contains(item.Version, query) || Contains(item.Summary, query) ||
             Contains(item.StructureText, query));
+        filtered = _classSortKey switch
+        {
+            "id" => filtered.OrderBy(item => ParseClassId(item.Id)).ThenBy(item => item.Id, StringComparer.OrdinalIgnoreCase),
+            "version" => filtered.OrderBy(item => item.Version, StringComparer.OrdinalIgnoreCase).ThenBy(item => item.Name, StringComparer.OrdinalIgnoreCase),
+            _ => filtered.OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase).ThenBy(item => ParseClassId(item.Id))
+        };
+        if (_classSortDescending) filtered = filtered.Reverse();
+        var selectedClass = ClassesCollection?.SelectedItem as ClassRow;
         _visibleClasses.Clear();
         foreach (var item in filtered) _visibleClasses.Add(item);
+        if (selectedClass != null && _visibleClasses.Contains(selectedClass))
+            ClassesCollection.SelectedItem = selectedClass;
+        else if (ClassesCollection != null)
+            ClassesCollection.SelectedItem = null;
         ClassEmptyLabel.Text = _classes.Count == 0
             ? "No asset classes were loaded."
             : "No classes match the current search.";
         if (StatusLabel != null && _browserTab == "Asset Classes")
             StatusLabel.Text = $"{_visibleClasses.Count} / {_classes.Count} classes";
     }
+
+    private static long ParseClassId(string value) => long.TryParse(value, out var id) ? id : long.MaxValue;
+
+    private void ChangeClassSort(string key)
+    {
+        if (_classSortKey == key) _classSortDescending = !_classSortDescending;
+        else { _classSortKey = key; _classSortDescending = false; }
+        ApplyClassFilter();
+        if (_browserTab == "Asset Classes")
+            StatusLabel.Text = $"{_visibleClasses.Count} / {_classes.Count} classes · sorted by {_classSortKey}{(_classSortDescending ? " ↓" : " ↑")}";
+    }
+
+    private void OnClassSortNameClicked(object sender, EventArgs e) => ChangeClassSort("name");
+    private void OnClassSortIdClicked(object sender, EventArgs e) => ChangeClassSort("id");
+    private void OnClassSortVersionClicked(object sender, EventArgs e) => ChangeClassSort("version");
 
     private void OnClassSelectionChanged(object sender, SelectionChangedEventArgs e)
     {

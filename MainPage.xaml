@@ -3,11 +3,10 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              x:Class="AssetStudioMobile.MainPage"
              Title="AssetStudio" BackgroundColor="#17191D">
-    <Grid RowDefinitions="Auto,Auto,Auto,*,Auto" RowSpacing="0">
+    <Grid RowDefinitions="Auto,Auto,Auto,*,Auto,3" RowSpacing="0">
         <ScrollView Grid.Row="0" Orientation="Horizontal" BackgroundColor="#22252B">
             <HorizontalStackLayout Padding="5,4" Spacing="3">
                 <Button Text="File" Clicked="OnFileMenuClicked" Style="{StaticResource MenuButton}"/>
-                <Button Text="Library" Clicked="OnLibraryClicked" Style="{StaticResource MenuButton}"/>
                 <Button Text="Options" Clicked="OnOptionsMenuClicked" Style="{StaticResource MenuButton}"/>
                 <Button Text="Model" Clicked="OnModelMenuClicked" Style="{StaticResource MenuButton}"/>
                 <Button Text="Export" Clicked="OnExportMenuClicked" Style="{StaticResource MenuButton}"/>
@@ -48,7 +47,7 @@
             </Grid>
         </Grid>
 
-        <Grid Grid.Row="3" RowDefinitions="2*,Auto,3*" BackgroundColor="#17191D">
+        <Grid x:Name="WorkspaceSplitGrid" Grid.Row="3" RowDefinitions="*,8,0*" BackgroundColor="#17191D">
             <Grid Grid.Row="0">
                 <CollectionView x:Name="AssetCollection" SelectionMode="Multiple"
                                 SelectionChanged="OnAssetSelectionChanged" BackgroundColor="#17191D">
@@ -104,7 +103,11 @@
                     </CollectionView.ItemTemplate>
                 </CollectionView>
             </Grid>
-            <BoxView Grid.Row="1" HeightRequest="1" Color="#3B414B"/>
+            <BoxView x:Name="PreviewSplitHandle" Grid.Row="1" HeightRequest="8" Color="#3B414B" HorizontalOptions="Fill" VerticalOptions="Fill">
+                <BoxView.GestureRecognizers>
+                    <PanGestureRecognizer PanUpdated="OnPreviewSplitterPan" />
+                </BoxView.GestureRecognizers>
+            </BoxView>
             <Grid Grid.Row="2" RowDefinitions="Auto,*" BackgroundColor="#1D2025">
                 <Grid ColumnDefinitions="*,*" Padding="6" ColumnSpacing="5">
                     <Button x:Name="PreviewTab" Text="Preview" Clicked="OnPreviewTabClicked" Style="{StaticResource TabButton}"/>
@@ -190,6 +193,7 @@
                     Padding="8,3" HeightRequest="30" FontSize="11" BackgroundColor="#7B3438" TextColor="White"/>
             <ActivityIndicator x:Name="BusyIndicator" Grid.Column="2" IsRunning="False" IsVisible="False" HeightRequest="20"/>
         </Grid>
+        <ProgressBar x:Name="LoadingProgressBar" Grid.Row="5" Progress="0" IsVisible="False" HeightRequest="3" BackgroundColor="#30353E" ProgressColor="#2D8B42" VerticalOptions="End" />
     </Grid>
     <ContentPage.Resources>
         <ResourceDictionary>

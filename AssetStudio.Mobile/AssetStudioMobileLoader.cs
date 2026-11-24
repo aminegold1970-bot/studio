@@ -1,4 +1,4 @@
-using AssetStudio;
+﻿using AssetStudio;
 
 namespace AssetStudioMobile;
 
@@ -132,16 +132,22 @@ public sealed class AssetStudioMobileLoader : IDisposable
         IReadOnlyDictionary<AssetStudio.Object, MainPage.AssetRow> rowsByObject)
     {
         var rows = new List<MainPage.HierarchyRow>();
+        var fileIndex = 0;
         foreach (var file in manager.assetsFileList)
         {
             var gameObjects = file.Objects.OfType<GameObject>().ToList();
             if (gameObjects.Count == 0)
+            {
+                fileIndex++;
                 continue;
+            }
 
-            var fileId = Guid.NewGuid().ToString("N");
+            // Stable IDs allow selection/search state to survive reloads of the same file set.
+            // Include the file index because PathIDs are only unique within an assets file.
+            var fileId = $"file:{fileIndex}:{file.fileName}";
             var gameObjectIds = gameObjects.ToDictionary(
                 gameObject => gameObject,
-                _ => Guid.NewGuid().ToString("N"));
+                gameObject => $"go:{fileIndex}:{gameObject.m_PathID}");
             rows.Add(new MainPage.HierarchyRow { Id = fileId, DisplayName = file.fileName });
 
             foreach (var gameObject in gameObjects)
@@ -185,6 +191,7 @@ public sealed class AssetStudioMobileLoader : IDisposable
                         meshRow.HierarchyNodeId = gameObjectId;
                 }
             }
+            fileIndex++;
         }
 
         return rows;

@@ -3,6 +3,7 @@ using System.Collections.ObjectModel;
 using System.Linq;
 using System.IO;
 using System.Security.Cryptography;
+using System.Globalization;
 
 namespace AssetStudioMobile;
 
@@ -179,16 +180,21 @@ public partial class MainPage : ContentPage
             _hierarchyRoots.Clear();
             _hierarchyById.Clear();
 
+            // Build a parent-linked forest from the incoming flat sequence. Duplicate
+            // IDs are ignored after the first occurrence to keep references deterministic.
+            var unique = new List<HierarchyRow>();
             foreach (var node in incoming)
             {
                 node.Children.Clear();
                 node.Parent = null;
                 node.IsExpanded = false;
                 node.Depth = 0;
+                if (string.IsNullOrWhiteSpace(node.Id) || _hierarchyById.ContainsKey(node.Id)) continue;
                 _hierarchyById[node.Id] = node;
+                unique.Add(node);
             }
 
-            foreach (var node in incoming)
+            foreach (var node in unique)
             {
                 if (!string.IsNullOrEmpty(node.ParentId) &&
                     _hierarchyById.TryGetValue(node.ParentId, out var parent) &&
@@ -197,10 +203,20 @@ public partial class MainPage : ContentPage
                     node.Parent = parent;
                     parent.Children.Add(node);
                 }
-                else
-                {
-                    _hierarchyRoots.Add(node);
-                }
+                else _hierarchyRoots.Add(node);
+            }
+
+            // Broken/cyclic components have no root. Promote each still-unvisited
+            // component member so it remains reachable rather than disappearing.
+            var reachable = new HashSet<HierarchyRow>();
+            foreach (var root in _hierarchyRoots) MarkHierarchyReachable(root, reachable);
+            foreach (var node in unique)
+            {
+                if (reachable.Contains(node)) continue;
+                node.Parent?.Children.Remove(node);
+                node.Parent = null;
+                _hierarchyRoots.Add(node);
+                MarkHierarchyReachable(node, reachable);
             }
 
             foreach (var root in _hierarchyRoots) AddVisibleHierarchyNode(root, 0);
@@ -210,18 +226,54 @@ public partial class MainPage : ContentPage
         });
     }
 
+    private static void MarkHierarchyReachable(HierarchyRow root, HashSet<HierarchyRow> visited)
+    {
+        var stack = new Stack<HierarchyRow>();
+        stack.Push(root);
+        while (stack.Count > 0)
+        {
+            var current = stack.Pop();
+            if (!visited.Add(current)) continue;
+            foreach (var child in current.Children) stack.Push(child);
+        }
+    }
+
     private void AddVisibleHierarchyNode(HierarchyRow node, int depth)
     {
-        node.Depth = depth;
-        _hierarchy.Add(node);
-        if (node.IsExpanded)
-            foreach (var child in node.Children) AddVisibleHierarchyNode(child, depth + 1);
+        var visited = new HashSet<HierarchyRow>();
+        var stack = new Stack<(HierarchyRow Node, int Depth)>();
+        stack.Push((node, depth));
+        while (stack.Count > 0)
+        {
+            var (current, currentDepth) = stack.Pop();
+            if (!visited.Add(current)) continue;
+            current.Depth = currentDepth;
+            _hierarchy.Add(current);
+            if (!current.IsExpanded) continue;
+            for (int i = current.Children.Count - 1; i >= 0; i--)
+                stack.Push((current.Children[i], currentDepth + 1));
+        }
     }
 
     private void RebuildVisibleHierarchy()
     {
         _hierarchy.Clear();
-        foreach (var root in _hierarchyRoots) AddVisibleHierarchyNode(root, 0);
+        var visited = new HashSet<HierarchyRow>();
+        foreach (var root in _hierarchyRoots)
+        {
+            var stack = new Stack<(HierarchyRow Node, int Depth)>();
+            stack.Push((root, 0));
+            while (stack.Count > 0)
+            {
+                var (node, depth) = stack.Pop();
+                if (!visited.Add(node)) continue;
+                node.Depth = depth;
+                _hierarchy.Add(node);
+                if (!node.IsExpanded) continue;
+                for (int i = node.Children.Count - 1; i >= 0; i--)
+                    stack.Push((node.Children[i], depth + 1));
+            }
+        }
     }
 
     private void OnHierarchyExpandClicked(object sender, EventArgs e)
@@ -248,10 +300,14 @@ public partial class MainPage : ContentPage
 
     private static void SetHierarchyExpansionRecursive(IEnumerable<HierarchyRow> nodes, bool expanded)
     {
-        foreach (var node in nodes)
+        var visited = new HashSet<HierarchyRow>();
+        var stack = new Stack<HierarchyRow>(nodes.Reverse());
+        while (stack.Count > 0)
         {
+            var node = stack.Pop();
+            if (!visited.Add(node)) continue;
             node.IsExpanded = expanded && node.HasChildren;
-            SetHierarchyExpansionRecursive(node.Children, expanded);
+            for (int i = node.Children.Count - 1; i >= 0; i--) stack.Push(node.Children[i]);
         }
     }
 
@@ -472,6 +528,10 @@ public partial class MainPage : ContentPage
     private void OnAudioVolumeChanged(object sender, ValueChangedEventArgs e) => AudioVolumeChanged?.Invoke(e.NewValue);
 
     private bool _previewEnabled = true;
+    private double _previewSplitFraction = Preferences.Get("AssetStudioPreviewSplit", 0d); // Persist the user-adjusted pane size; default remains collapsed.
+    private double _splitPanStartFraction;
+    private bool _splitPanActive;
+
     private bool _displayAssetInformation = true;
     private bool _showErrorMessages = true;
 
@@ -640,15 +700,39 @@ public partial class MainPage : ContentPage
             var files = await FilePicker.PickMultipleAsync(new PickOptions { PickerTitle = "Select Unity asset files" });
             var selected = files?.ToList() ?? new List<FileResult>();
             if (selected.Count == 0) return;
-            var persisted = new List<FileResult>();
-            foreach (var file in selected) persisted.Add(await _documentLibrary.ImportAsync(file));
-            await LoadPersistentFilesAsync(persisted, "Imported files");
+            if (AssetFilesSelected == null)
+            {
+                ReportUnwired("Load file");
+                return;
+            }
+
+            ResetLoadedWorkspace();
+            using var cancellation = new CancellationTokenSource();
+            _loadCancellation = cancellation;
+            SetBusy(true, $"Loading {selected.Count} file(s)…");
+            var progress = new Progress<AssetLoadProgress>(update =>
+                SetLoadingProgress(Math.Clamp(update.Percent, 0, 100), update.Message ?? "Loading files…"));
+            try
+            {
+                await AssetFilesSelected.Invoke(selected, progress, cancellation.Token);
+                SetBusy(false, $"Files loaded · {_allAssets.Count} assets");
+            }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+            {
+                SetBusy(false, "Loading cancelled");
+            }
+            catch (Exception ex)
+            {
+                SetBusy(false, $"Load failed: {ex.Message}");
+                if (_showErrorMessages) await DisplayAlert("File loading failed", ex.Message, "OK");
+            }
+            finally { _loadCancellation = null; }
         }
         catch (Exception ex)
         {
             SetBusy(false, "Ready");
-            StatusLabel.Text = $"File import failed: {ex.Message}";
-            if (_showErrorMessages) await DisplayAlert("File import failed", ex.Message, "OK");
+            StatusLabel.Text = $"File selection failed: {ex.Message}";
+            if (_showErrorMessages) await DisplayAlert("File selection failed", ex.Message, "OK");
         }
     }
 
@@ -689,9 +773,11 @@ public partial class MainPage : ContentPage
         var safePercent = Math.Clamp(percent, 0, 100);
         MainThread.BeginInvokeOnMainThread(() =>
         {
+            LoadingProgressBar.Progress = safePercent / 100d;
+            LoadingProgressBar.IsVisible = safePercent < 100;
             BusyIndicator.IsVisible = safePercent < 100;
             BusyIndicator.IsRunning = safePercent < 100;
-            StatusLabel.Text = $"{safePercent}% · {message}";
+            StatusLabel.Text = message; // PC-style status text; progress is shown by the green bar.
         });
     }
 
@@ -704,6 +790,8 @@ public partial class MainPage : ContentPage
     {
         BusyIndicator.IsVisible = busy;
         BusyIndicator.IsRunning = busy;
+        LoadingProgressBar.IsVisible = busy;
+        if (!busy) LoadingProgressBar.Progress = 0;
         CancelLoadButton.IsVisible = busy && _loadCancellation != null;
         CancelLoadButton.IsEnabled = true;
         StatusLabel.Text = message;
@@ -890,7 +978,10 @@ public partial class MainPage : ContentPage
 
         var dialog = new AssetTypeFilterPage(types, _selectedTypes, selected =>
         {
-            _selectedTypes = selected == null || selected.Count == types.Length ? null : selected;
+            // Desktop AssetStudio keeps the dedicated All toggle distinct from
+            // an explicit selection of every type. null means All is checked;
+            // an empty set is a deliberate empty filter.
+            _selectedTypes = selected;
             ApplyAssetFilter();
         });
         await Navigation.PushModalAsync(new NavigationPage(dialog)
@@ -1005,9 +1096,28 @@ public partial class MainPage : ContentPage
 
     private static long ParseSize(string? value)
     {
-        if (long.TryParse(value, out var bytes)) return bytes;
-        var digits = new string((value ?? "").TakeWhile(c => char.IsDigit(c) || c == '-').ToArray());
-        return long.TryParse(digits, out bytes) ? bytes : long.MinValue;
+        if (string.IsNullOrWhiteSpace(value)) return long.MinValue;
+        var text = value.Trim();
+        if (long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var bytes)) return bytes;
+
+        // Size cells can be rendered as human-readable values (for example 1.25 MB).
+        // Parse the suffix rather than sorting on the leading digit alone.
+        var split = text.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+        if (split.Length == 0 || !double.TryParse(split[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var amount))
+            return long.MinValue;
+        var unit = split.Length > 1 ? split[1].Trim().ToUpperInvariant() : "B";
+        var multiplier = unit switch
+        {
+            "B" or "BYTE" or "BYTES" => 1d,
+            "KB" or "KIB" => 1024d,
+            "MB" or "MIB" => 1024d * 1024d,
+            "GB" or "GIB" => 1024d * 1024d * 1024d,
+            "TB" or "TIB" => 1024d * 1024d * 1024d * 1024d,
+            _ => 1d
+        };
+        var scaled = amount * multiplier;
+        if (double.IsNaN(scaled) || double.IsInfinity(scaled)) return long.MinValue;
+        return scaled >= long.MaxValue ? long.MaxValue : scaled <= long.MinValue ? long.MinValue : (long)scaled;
     }
 
     private void SortBy(int column)
@@ -1041,8 +1151,17 @@ public partial class MainPage : ContentPage
 
     private void CollectHierarchyMatches(HierarchyRow node, string query)
     {
-        if (Contains(node.DisplayName, query)) _hierarchySearchResults.Add(node);
-        foreach (var child in node.Children) CollectHierarchyMatches(child, query);
+        var visited = new HashSet<HierarchyRow>();
+        var stack = new Stack<HierarchyRow>();
+        stack.Push(node);
+        while (stack.Count > 0)
+        {
+            var current = stack.Pop();
+            if (!visited.Add(current)) continue;
+            if (Contains(current.DisplayName, query) || Contains(current.Id, query))
+                _hierarchySearchResults.Add(current);
+            for (int i = current.Children.Count - 1; i >= 0; i--) stack.Push(current.Children[i]);
+        }
     }
 
     private void OnHierarchySearchButtonPressed(object sender, EventArgs e) => SelectNextHierarchySearchResult();
@@ -1074,8 +1193,16 @@ public partial class MainPage : ContentPage
 
     private static void SetHierarchyCheckedRecursive(HierarchyRow node, bool value)
     {
-        node.IsChecked = value;
-        foreach (var child in node.Children) SetHierarchyCheckedRecursive(child, value);
+        var visited = new HashSet<HierarchyRow>();
+        var stack = new Stack<HierarchyRow>();
+        stack.Push(node);
+        while (stack.Count > 0)
+        {
+            var current = stack.Pop();
+            if (!visited.Add(current)) continue;
+            current.IsChecked = value;
+            foreach (var child in current.Children) stack.Push(child);
+        }
     }
 
     // Keep ancestor checkboxes synchronized with their descendants. A parent is
@@ -1190,8 +1317,7 @@ public partial class MainPage : ContentPage
 
     private void RefreshPreviewSurfaceVisibility()
     {
-        PreviewScroll.IsVisible = _previewEnabled && !_showingDump;
-        DumpScroll.IsVisible = _previewEnabled && _showingDump;
+        ApplyPreviewSplit();
         PreviewTab.BackgroundColor = !_showingDump ? Color.FromArgb("#46566D") : Color.FromArgb("#30353E");
         DumpTab.BackgroundColor = _showingDump ? Color.FromArgb("#46566D") : Color.FromArgb("#30353E");
     }
@@ -1229,6 +1355,41 @@ public partial class MainPage : ContentPage
         OnDumpTabClicked(this, EventArgs.Empty);
     }
 
+    private void OnPreviewSplitterPan(object sender, PanUpdatedEventArgs e)
+    {
+        if (WorkspaceSplitGrid.Height <= 0) return;
+        var usable = Math.Max(1, WorkspaceSplitGrid.Height - PreviewSplitHandle.HeightRequest);
+        switch (e.StatusType)
+        {
+            case GestureStatus.Started:
+                _splitPanStartFraction = _previewSplitFraction;
+                _splitPanActive = true;
+                break;
+            case GestureStatus.Running:
+                if (!_splitPanActive) return;
+                _previewSplitFraction = Math.Clamp(_splitPanStartFraction - e.TotalY / usable, 0, 0.85);
+                Preferences.Set("AssetStudioPreviewSplit", _previewSplitFraction);
+                ApplyPreviewSplit();
+                break;
+            case GestureStatus.Completed:
+            case GestureStatus.Canceled:
+                _splitPanActive = false;
+                break;
+        }
+    }
+
+    private void ApplyPreviewSplit()
+    {
+        if (WorkspaceSplitGrid.RowDefinitions.Count < 3) return;
+        // Use a fixed zero-sized preview row when collapsed so the asset workspace
+        // can reclaim all available height; otherwise star sizing keeps both panes fluid.
+        WorkspaceSplitGrid.RowDefinitions[0].Height = new GridLength(_previewSplitFraction <= 0.01 ? 1 : 1 - _previewSplitFraction, GridUnitType.Star);
+        WorkspaceSplitGrid.RowDefinitions[2].Height = new GridLength(_previewSplitFraction <= 0.01 ? 0 : _previewSplitFraction, GridUnitType.Star);
+        var visible = _previewSplitFraction > 0.01 && _previewEnabled;
+        PreviewScroll.IsVisible = visible && !_showingDump;
+        DumpScroll.IsVisible = visible && _showingDump;
+    }
+
     private void OnPreviewTabClicked(object sender, EventArgs e)
     {
         _showingDump = false;
@@ -1249,74 +1410,90 @@ public partial class MainPage : ContentPage
         private readonly HashSet<string> _selected;
         private readonly string[] _allTypes;
         private readonly Action<HashSet<string>?> _completed;
+        private readonly Dictionary<string, CheckBox> _typeChecks = new(StringComparer.Ordinal);
+        private CheckBox? _allCheck;
+        private bool _syncing;
         private bool _finished;
 
         public AssetTypeFilterPage(string[] types, HashSet<string>? current, Action<HashSet<string>?> completed)
         {
             _allTypes = types;
-            _selected = current == null ? new HashSet<string>(types, StringComparer.Ordinal)
-                                        : new HashSet<string>(current, StringComparer.Ordinal);
+            // PC AssetStudio uses a dedicated checked "All" item: when it is on,
+        // individual types are cleared and the asset list is unfiltered.
+        _selected = current == null ? new HashSet<string>(StringComparer.Ordinal)
+                                    : new HashSet<string>(current, StringComparer.Ordinal);
             _completed = completed;
             Title = "Filter Type";
             BackgroundColor = Color.FromArgb("#17191D");
 
-            var selectAll = new Button { Text = "Select all", BackgroundColor = Color.FromArgb("#303640"), TextColor = Colors.White };
-            selectAll.Clicked += (_, _) => SetAll(true);
-            var clearAll = new Button { Text = "Clear", BackgroundColor = Color.FromArgb("#303640"), TextColor = Colors.White };
-            clearAll.Clicked += (_, _) => SetAll(false);
-            var list = new VerticalStackLayout { Spacing = 2, Padding = new Thickness(12, 4) };
+            var list = new VerticalStackLayout { Spacing = 0, Padding = new Thickness(12, 4) };
+            _allCheck = new CheckBox { IsChecked = current == null, Color = Color.FromArgb("#65A8FF"), VerticalOptions = LayoutOptions.Center };
+            _allCheck.CheckedChanged += (_, args) => { if (!_syncing) SetAll(args.Value); };
+            list.Add(CreateCheckRow(_allCheck, "All", true));
+            list.Add(new BoxView { HeightRequest = 1, BackgroundColor = Color.FromArgb("#454A53"), Margin = new Thickness(0, 3, 0, 5) });
+
             foreach (var type in types)
             {
-                var check = new CheckBox { IsChecked = _selected.Contains(type), Color = Color.FromArgb("#65A8FF"), VerticalOptions = LayoutOptions.Center };
+                var check = new CheckBox { IsChecked = current != null && _selected.Contains(type), Color = Color.FromArgb("#65A8FF"), VerticalOptions = LayoutOptions.Center };
+                _typeChecks[type] = check;
                 check.CheckedChanged += (_, args) =>
                 {
+                    if (_syncing) return;
                     if (args.Value) _selected.Add(type); else _selected.Remove(type);
+                    SyncAllCheck();
                 };
-                var label = new Label { Text = type, TextColor = Color.FromArgb("#E7EAF0"), VerticalTextAlignment = TextAlignment.Center, FontSize = 14 };
-                var row = new Grid { ColumnDefinitions = { new ColumnDefinition(GridLength.Auto), new ColumnDefinition(GridLength.Star) }, Padding = new Thickness(4, 3) };
-                row.Add(check); row.Add(label, 1);
-                var tap = new TapGestureRecognizer();
-                tap.Tapped += (_, _) => check.IsChecked = !check.IsChecked;
-                row.GestureRecognizers.Add(tap);
-                list.Add(row);
+                list.Add(CreateCheckRow(check, type));
             }
 
             var apply = new Button { Text = "Apply", BackgroundColor = Color.FromArgb("#2878C8"), TextColor = Colors.White };
-            apply.Clicked += async (_, _) => await Finish(true);
+            apply.Clicked += (_, _) => Finish(true);
             var cancel = new Button { Text = "Cancel", BackgroundColor = Color.FromArgb("#303640"), TextColor = Colors.White };
-            cancel.Clicked += async (_, _) => await Finish(false);
-            var top = new Grid { ColumnDefinitions = { new ColumnDefinition(GridLength.Star), new ColumnDefinition(GridLength.Star) }, ColumnSpacing = 8 };
-            top.Add(selectAll); top.Add(clearAll, 1);
+            cancel.Clicked += (_, _) => Finish(false);
             var bottom = new Grid { ColumnDefinitions = { new ColumnDefinition(GridLength.Star), new ColumnDefinition(GridLength.Star) }, ColumnSpacing = 8, Padding = 12 };
             bottom.Add(cancel); bottom.Add(apply, 1);
-            Content = new Grid { RowDefinitions = { new RowDefinition(GridLength.Auto), new RowDefinition(GridLength.Star), new RowDefinition(GridLength.Auto) },
-                Children = { new VerticalStackLayout { Padding = 12, Children = { top } }, CreateRow(new ScrollView { Content = list }, 1), CreateRow(bottom, 2) } };
+            Content = new Grid { RowDefinitions = { new RowDefinition(GridLength.Star), new RowDefinition(GridLength.Auto) }, Children = { new ScrollView { Content = list }, CreateRow(bottom, 1) } };
         }
 
-        private static View CreateRow(View view, int row)
+        private static Grid CreateCheckRow(CheckBox check, string labelText, bool isAll = false)
         {
-            Grid.SetRow(view, row);
-            return view;
+            var label = new Label { Text = labelText, TextColor = Color.FromArgb("#E7EAF0"), VerticalTextAlignment = TextAlignment.Center, FontSize = 14, FontAttributes = isAll ? FontAttributes.Bold : FontAttributes.None };
+            var row = new Grid { ColumnDefinitions = { new ColumnDefinition(GridLength.Auto), new ColumnDefinition(GridLength.Star) }, Padding = new Thickness(6, 6), MinimumHeightRequest = 40 };
+            row.Add(check); row.Add(label, 1);
+            var tap = new TapGestureRecognizer(); tap.Tapped += (_, _) => check.IsChecked = !check.IsChecked; row.GestureRecognizers.Add(tap);
+            return row;
         }
+
+        private static View CreateRow(View view, int row) { Grid.SetRow(view, row); return view; }
 
         private void SetAll(bool enabled)
         {
+            _syncing = true;
             _selected.Clear();
-            if (enabled) foreach (var type in _allTypes) _selected.Add(type);
-            // Rebuild to synchronize visible checkbox states without relying on
-            // an implicit BindingContext or stale checkbox references.
-            if (Content is Grid grid && grid.Children.Count > 1 && grid.Children[1] is ScrollView scroll && scroll.Content is VerticalStackLayout rows)
-            {
-                foreach (var row in rows.Children.OfType<Grid>())
-                    if (row.Children.FirstOrDefault() is CheckBox check) check.IsChecked = enabled;
-            }
+            // Match the desktop menu: checked All means unfiltered; unchecked All
+            // permits an explicit selection of individual types (possibly none).
+            foreach (var check in _typeChecks.Values) check.IsChecked = false;
+            if (_allCheck != null) _allCheck.IsChecked = enabled;
+            _syncing = false;
         }
 
-        private async Task Finish(bool apply)
+        private void SyncAllCheck()
+        {
+            _syncing = true;
+            if (_allCheck != null) _allCheck.IsChecked = false;
+            _syncing = false;
+        }
+
+        private async void Finish(bool apply)
         {
             if (_finished) return;
             _finished = true;
-            _completed(apply ? new HashSet<string>(_selected, StringComparer.Ordinal) : null);
+            if (apply)
+            {
+                // Match WinForms FilterAssetList: checked All means the complete
+                // list; otherwise only checked type entries are shown, including
+                // the valid case where no entries are checked.
+                _completed(_allCheck?.IsChecked == true ? null : new HashSet<string>(_selected, StringComparer.Ordinal));
+            }
             await Navigation.PopModalAsync();
         }
     }
