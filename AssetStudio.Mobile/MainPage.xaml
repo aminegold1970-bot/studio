@@ -55,7 +55,7 @@
                     <Entry x:Name="HierarchySearch" TextColor="{AppThemeBinding Light=#777777, Dark=#9A9A9A}" BackgroundColor="Transparent" MinimumHeightRequest="0" FontSize="10" Margin="0" ReturnType="Search" Completed="OnHierarchySearchButtonPressed" TextChanged="OnHierarchySearchTextChanged" Focused="OnHierarchySearchFocused" Unfocused="OnHierarchySearchUnfocused"/>
                 </Border>
             </Grid>
-            <Label x:Name="DragHintLabel" Grid.Row="2" Text="Drag files here to load" TextColor="{AppThemeBinding Light=#2878C8, Dark=#4FA3F7}" FontSize="9" LineBreakMode="TailTruncation" VerticalTextAlignment="Center"/>
+            <Label x:Name="DragHintLabel" Grid.Row="2" Text="Drag files here to load" TextColor="{AppThemeBinding Light=#2878C8, Dark=#4FA3F7}" FontSize="9" LineBreakMode="WordWrap" VerticalTextAlignment="Center"/>
             <Grid x:Name="AssetColumnHeaders" Grid.Row="3" ColumnDefinitions="2*,1.25*,1.1*,1.1*,.7*" Padding="3,3" ColumnSpacing="2">
                 <Button Text="Name" Clicked="OnSortName" Style="{StaticResource HeaderButton}"/>
                 <Button Grid.Column="1" Text="Container" Clicked="OnSortContainer" Style="{StaticResource HeaderButton}"/>
@@ -155,24 +155,38 @@
                                 AutomationProperties.Name="Start Live2D viewer"
                                 SemanticProperties.Hint="Available when three matching texture, atlas and skeleton assets are selected"/>
                         <Border x:Name="ImagePreviewFrame" IsVisible="False" BackgroundColor="{AppThemeBinding Light=#FFFFFF, Dark=#1E1E1E}" Stroke="{AppThemeBinding Light=#C8C8C8, Dark=#3F3F3F}" StrokeThickness="1" Padding="6">
-                            <VerticalStackLayout Spacing="6">
-                                <Image x:Name="AssetImagePreview" Aspect="AspectFit" HeightRequest="230"/>
-                                <HorizontalStackLayout x:Name="TextureActionsRow" Spacing="6" IsVisible="False">
+                            <Grid RowDefinitions="Auto,Auto" RowSpacing="6">
+                                <Grid Grid.Row="0" HeightRequest="230">
+                                    <Image x:Name="AssetImagePreview" Aspect="AspectFit" HeightRequest="230"/>
+                                    <Label x:Name="ImageInfoOverlay" IsVisible="False" InputTransparent="True"
+                                           HorizontalOptions="Start" VerticalOptions="Start"
+                                           Margin="6" Padding="6,4" MaxLines="10"
+                                           BackgroundColor="#B3000000" TextColor="#FFFFFF"
+                                           FontSize="10" LineBreakMode="WordWrap"/>
+                                </Grid>
+                                <HorizontalStackLayout x:Name="TextureActionsRow" Grid.Row="1" Spacing="6" IsVisible="False">
                                     <Button x:Name="TextureChannelsButton" Text="Channels: BGRA" Clicked="OnTextureChannelsClicked"
                                             Style="{StaticResource TabButton}"/>
                                     <Button x:Name="OpenFullTexturePreviewButton" Text="Open full-screen" Clicked="OnFullTexturePreviewClicked"
                                             Style="{StaticResource TabButton}"/>
                                 </HorizontalStackLayout>
-                            </VerticalStackLayout>
+                            </Grid>
                         </Border>
                         <Border x:Name="Live2DPreviewFrame" IsVisible="False" BackgroundColor="{AppThemeBinding Light=#FFFFFF, Dark=#1E1E1E}" Stroke="{AppThemeBinding Light=#C8C8C8, Dark=#3F3F3F}" StrokeThickness="1" Padding="8">
-                            <VerticalStackLayout Spacing="6">
+                            <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto" RowSpacing="6">
                                 <Label Text="Live2D / Spine model" TextColor="{AppThemeBinding Light=#202020, Dark=#F2F2F2}" FontAttributes="Bold"/>
-                                <Image x:Name="Live2DTextureImage" Aspect="AspectFit" HeightRequest="220"/>
-                                <Label x:Name="Live2DStatusLabel" Text="Preparing model…" TextColor="{AppThemeBinding Light=#2878C8, Dark=#4FA3F7}" FontSize="11"/>
-                                <Label x:Name="Live2DDetailsLabel" Text="" TextColor="{AppThemeBinding Light=#444444, Dark=#D0D0D0}" FontSize="10"/>
-                                <Label Text="Static preview: runtime deformation and animation playback require the proprietary Live2D/Cubism engine." TextColor="{AppThemeBinding Light=#888888, Dark=#888888}" FontSize="9"/>
-                            </VerticalStackLayout>
+                                <Grid Grid.Row="1" HeightRequest="220">
+                                    <Image x:Name="Live2DTextureImage" Aspect="AspectFit" HeightRequest="220"/>
+                                    <ScrollView Margin="6" Padding="6,4" HeightRequest="150"
+                                                BackgroundColor="#B3000000"
+                                                HorizontalScrollBarVisibility="Never" VerticalScrollBarVisibility="Never">
+                                        <Label x:Name="Live2DDetailsLabel" Text="" TextColor="#FFFFFF" FontSize="10" LineBreakMode="WordWrap"/>
+                                    </ScrollView>
+                                </Grid>
+                                <Label x:Name="Live2DStatusLabel" Grid.Row="2" Text="Preparing model…" TextColor="{AppThemeBinding Light=#2878C8, Dark=#4FA3F7}" FontSize="11"/>
+                                <Label Grid.Row="3" Text="Static preview: runtime deformation and animation playback require the proprietary Live2D/Cubism engine." TextColor="{AppThemeBinding Light=#888888, Dark=#888888}" FontSize="9"/>
+                                <Label Grid.Row="4" Text="Static in-app viewer. Select other matching assets to reload." TextColor="{AppThemeBinding Light=#888888, Dark=#888888}" FontSize="9"/>
+                            </Grid>
                         </Border>
                         <Border x:Name="TextPreviewFrame" IsVisible="False" BackgroundColor="{AppThemeBinding Light=#FFFFFF, Dark=#1E1E1E}" Stroke="{AppThemeBinding Light=#C8C8C8, Dark=#3F3F3F}" StrokeThickness="1" Padding="8">
                             <VerticalStackLayout Spacing="6">

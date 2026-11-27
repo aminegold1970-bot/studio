@@ -106,6 +106,8 @@ public partial class MainPage : ContentPage
     private int _previewImageWidth;
     private int _previewImageHeight;
     private string _previewImageFormat = string.Empty;
+    private string _previewImageDetails = string.Empty;
+    private bool _imagePreviewActive;
     private const string TextureChannelNames = "BGRA";
     private readonly bool[] _textureChannels = { true, true, true, true };
     private string? _previewTextureMaskedPath;
@@ -140,7 +142,7 @@ public partial class MainPage : ContentPage
     {
         InitializeComponent();
 #if IOS
-        DragHintLabel.Text = "iPhone: Files drag is unavailable · use Load file / Load folder";
+        DragHintLabel.Text = "iPhone: Files drag is unavailable\nuse Load file / Load folder";
 #else
         DragHintLabel.Text = "Drag files here to load · drop an export folder to choose it";
 #endif
@@ -554,7 +556,7 @@ public partial class MainPage : ContentPage
     private static string DefaultDragHint()
     {
 #if IOS
-        return "iPhone: Files drag is unavailable · use Load file / Load folder";
+        return "iPhone: Files drag is unavailable\nuse Load file / Load folder";
 #else
         return "Drag files here to load · drop an export folder to choose it";
 #endif
@@ -860,10 +862,29 @@ public partial class MainPage : ContentPage
                        ?? new List<MetadataRow>();
         MainThread.BeginInvokeOnMainThread(() =>
         {
-            _metadataRows.Clear();
-            foreach (var row in incoming) _metadataRows.Add(row);
-            MetadataFrame.IsVisible = _metadataRows.Count > 0 && _displayAssetInformation;
+            _metadataRows.ResetWith(incoming);
+            RefreshImageInfoOverlay();
         });
+    }
+
+    // The desktop GUI paints assetInfoLabel directly over the preview image.
+    // Keep the same placement on mobile instead of stacking a metadata table
+    // underneath the picture.
+    private void RefreshImageInfoOverlay()
+    {
+        var hasInfo = _metadataRows.Count > 0 || !string.IsNullOrWhiteSpace(_previewImageDetails);
+        var showOverlay = _imagePreviewActive && _displayAssetInformation && hasInfo;
+        ImageInfoOverlay.IsVisible = showOverlay;
+        ImageInfoOverlay.Text = showOverlay ? BuildImageInfoText() : string.Empty;
+        MetadataFrame.IsVisible = _displayAssetInformation && _metadataRows.Count > 0 && !_imagePreviewActive;
+    }
+
+    private string BuildImageInfoText()
+    {
+        var lines = _metadataRows.Select(row => $"{row.Key}: {row.Value}").ToList();
+        if (!string.IsNullOrWhiteSpace(_previewImageDetails))
+            lines.Add(_previewImageDetails.Trim());
+        return string.Join(Environment.NewLine, lines);
     }
 
     public void SetTextureMetadata(int width, int height, string format, string filterMode,
@@ -1048,6 +1069,8 @@ public partial class MainPage : ContentPage
             _previewImageWidth = width;
             _previewImageHeight = height;
             _previewImageFormat = format ?? string.Empty;
+            _previewImageDetails = additionalInfo ?? string.Empty;
+            _imagePreviewActive = image != null;
             PreviewTitle.Text = title;
             PreviewKind.Text = "Texture / Sprite";
             ImagePreviewFrame.IsVisible = image != null;
@@ -1061,7 +1084,8 @@ public partial class MainPage : ContentPage
             else
                 SetAssetMetadata(new[] { new MetadataRow("Width", width.ToString()),
                     new MetadataRow("Height", height.ToString()), new MetadataRow("Format", format ?? string.Empty) });
-            PreviewDetails.Text = additionalInfo ?? string.Empty;
+            RefreshImageInfoOverlay();
+            PreviewDetails.Text = string.Empty;
             RefreshPreviewSurfaceVisibility();
         });
     }
@@ -1221,9 +1245,8 @@ public partial class MainPage : ContentPage
             TextPreviewFrame.IsVisible = true;
             AssetTextPreview.Text = string.Join(
                 Environment.NewLine, metadata.Select(row => $"{row.Key}: {row.Value}"));
-            foreach (var row in metadata)
-                _metadataRows.Add(row);
-            MetadataFrame.IsVisible = _metadataRows.Count > 0 && _displayAssetInformation;
+            _metadataRows.ResetWith(metadata);
+            RefreshImageInfoOverlay();
             VideoPreviewFrame.IsVisible = video.m_VideoData?.Size > 0;
             LoadVideoPlaybackButton.IsVisible = VideoPreviewFrame.IsVisible;
             VideoPlaybackStatus.Text = VideoPreviewFrame.IsVisible
@@ -1346,7 +1369,11 @@ public partial class MainPage : ContentPage
         _previewImageWidth = 0;
         _previewImageHeight = 0;
         _previewImageFormat = string.Empty;
+        _previewImageDetails = string.Empty;
+        _imagePreviewActive = false;
         MetadataFrame.IsVisible = false;
+        ImageInfoOverlay.IsVisible = false;
+        ImageInfoOverlay.Text = string.Empty;
         _metadataRows.Clear();
         TextPreviewFrame.IsVisible = false;
         ScriptAssemblyActionsRow.IsVisible = false;
@@ -2019,7 +2046,7 @@ public partial class MainPage : ContentPage
                 _displayAssetInformation = !_displayAssetInformation;
                 Preferences.Set("AssetStudio.DisplayAssetInformation", _displayAssetInformation);
                 PreviewDetails.IsVisible = _displayAssetInformation;
-                MetadataFrame.IsVisible = _displayAssetInformation && _metadataRows.Count > 0;
+                RefreshImageInfoOverlay();
                 break;
             case "Night mode":
                 _nightMode = !_nightMode;
@@ -2062,12 +2089,21 @@ public partial class MainPage : ContentPage
 
     private static bool IsAtlasRow(AssetRow row)
     {
-        if (row.SourceAsset is not AssetStudio.TextAsset)
+        if (row.SourceAsset is not AssetStudio.TextAsset text)
             return false;
+
         var name = row.Name ?? string.Empty;
-        return name.EndsWith(".atlas", StringComparison.OrdinalIgnoreCase)
+        if (name.EndsWith(".atlas", StringComparison.OrdinalIgnoreCase)
             || name.EndsWith(".atlas.txt", StringComparison.OrdinalIgnoreCase)
-            || name.Contains(".atlas.", StringComparison.OrdinalIgnoreCase);
+            || name.Contains(".atlas.", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        // Bundle assets often drop the original extension. Recognize an atlas
+        // by its region layout as well so atlas + skel pairs still load.
+        var script = text.m_Script ?? Array.Empty<byte>();
+        var sampleLength = Math.Min(script.Length, 64 * 1024);
+        return Live2DModel.LooksLikeAtlasText(
+            Encoding.UTF8.GetString(script, 0, sampleLength).Replace("\0", string.Empty));
     }
 
     private Live2DSelection? FindLive2DSelection()
@@ -2161,7 +2197,7 @@ public partial class MainPage : ContentPage
                 match.Texture.Name, (texture.m_Width, texture.m_Height), atlasInfo, skeletonInfo);
             Live2DStatusLabel.Text =
                 $"Showing {match.Identity} · {atlasInfo.Regions.Count} region(s) · {skeletonInfo.BoneCount} bone(s)";
-            PreviewDetails.Text = "Static in-app viewer. Select other matching assets to reload.";
+            PreviewDetails.Text = string.Empty;
             StatusLabel.Text = $"Live2D viewer started: {match.Identity}";
         }
         catch (Exception exception)

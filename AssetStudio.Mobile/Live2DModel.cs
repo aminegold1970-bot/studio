@@ -49,6 +49,20 @@ internal static class Live2DModel
         return name.Trim();
     }
 
+    // Used when a bundled atlas has lost its original filename extension.
+    public static bool LooksLikeAtlasText(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+
+        var lines = text.Replace("\r\n", "\n").Split('\n')
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0)
+            .ToArray();
+        return lines.Any(line => line.StartsWith("size:", StringComparison.OrdinalIgnoreCase))
+            && lines.Any(line => line.StartsWith("xy:", StringComparison.OrdinalIgnoreCase));
+    }
+
     public static string BuildDetails(
         string textureName,
         (int Width, int Height) imageSize,
@@ -110,6 +124,8 @@ internal static class Live2DModel
             if (string.IsNullOrWhiteSpace(rawLine))
                 continue;
             var line = rawLine.Trim();
+            if (line.StartsWith('#'))
+                continue;
             if (!char.IsWhiteSpace(rawLine[0]))
             {
                 FlushBlock();
@@ -126,7 +142,12 @@ internal static class Live2DModel
 
         if (blocks.Count > 0)
         {
-            var page = blocks[0];
+            // Cubism atlases may start with comment lines; find the real page
+            // header instead of assuming the first block is the page.
+            var pageIndex = blocks.FindIndex(block => LooksLikeImage(block.Header));
+            if (pageIndex < 0)
+                pageIndex = 0;
+            var page = blocks[pageIndex];
             pageName = page.Header;
             if (page.Properties.TryGetValue("size", out var pageSize)
                 && TryParsePair(pageSize, out pageWidth, out pageHeight))
@@ -138,7 +159,7 @@ internal static class Live2DModel
                 pageWidth = pageHeight = 0;
             }
 
-            foreach (var block in blocks.Skip(1))
+            foreach (var block in blocks.Skip(pageIndex + 1))
             {
                 // Additional image headers indicate another atlas page, not a region.
                 if (LooksLikeImage(block.Header))
@@ -172,28 +193,40 @@ internal static class Live2DModel
         var trimmed = text.TrimStart();
         if (trimmed.StartsWith('{') || trimmed.StartsWith('['))
         {
-            var root = JToken.Parse(text);
-            var bones = (root["bones"] as JArray)?.Select(token => NameOf(token, "bone")).ToArray()
-                        ?? Array.Empty<string>();
-            var slots = (root["slots"] as JArray)?.Select(token => NameOf(token, "slot")).ToArray()
-                        ?? Array.Empty<string>();
-            var animations = root["animations"] is JObject animationsObject
-                ? animationsObject.Properties().Select(property => property.Name).ToArray()
-                : Array.Empty<string>();
-            return new SkeletonInfo(
-                "JSON skeleton data",
-                bones.Length,
-                slots.Length,
-                animations.Length,
-                JoinNames(bones),
-                JoinNames(slots),
-                JoinNames(animations));
+            try
+            {
+                var root = JToken.Parse(text);
+                var bones = (root["bones"] as JArray)?.Select(token => NameOf(token, "bone")).ToArray()
+                            ?? Array.Empty<string>();
+                var slots = (root["slots"] as JArray)?.Select(token => NameOf(token, "slot")).ToArray()
+                            ?? Array.Empty<string>();
+                var animations = root["animations"] is JObject animationsObject
+                    ? animationsObject.Properties().Select(property => property.Name).ToArray()
+                    : Array.Empty<string>();
+                return new SkeletonInfo(
+                    "JSON skeleton data",
+                    bones.Length,
+                    slots.Length,
+                    animations.Length,
+                    JoinNames(bones),
+                    JoinNames(slots),
+                    JoinNames(animations));
+            }
+            catch (Exception)
+            {
+                // A truncated JSON skeleton still has useful header bytes; fall
+                // through to the binary summary instead of failing the viewer.
+            }
         }
 
         var headerLength = Math.Min(4, bytes.Length);
         var header = Encoding.ASCII.GetString(bytes, 0, headerLength);
+        var version = ReadNullTerminatedString(bytes, 1);
+        var description = string.IsNullOrWhiteSpace(version)
+            ? $"Binary skeleton data ({bytes.Length:N0} bytes, header \"{header}\")"
+            : $"Binary skeleton data ({bytes.Length:N0} bytes, header \"{header}\", version \"{version}\")";
         return new SkeletonInfo(
-            $"Binary skeleton data ({bytes.Length:N0} bytes, header \"{header}\")",
+            description,
             0, 0, 0,
             "Binary skeleton bones are not decoded by the static viewer.",
             "Binary skeleton slots are not decoded by the static viewer.",
@@ -206,7 +239,11 @@ internal static class Live2DModel
         return extension.Equals(".png", StringComparison.OrdinalIgnoreCase)
                || extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase)
                || extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase)
-               || extension.Equals(".tga", StringComparison.OrdinalIgnoreCase);
+               || extension.Equals(".tga", StringComparison.OrdinalIgnoreCase)
+               || extension.Equals(".psd", StringComparison.OrdinalIgnoreCase)
+               || extension.Equals(".webp", StringComparison.OrdinalIgnoreCase)
+               || extension.Equals(".tif", StringComparison.OrdinalIgnoreCase)
+               || extension.Equals(".tiff", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool TryParsePair(string value, out int first, out int second)
@@ -216,6 +253,18 @@ internal static class Live2DModel
         return parts.Length == 2
                && int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out first)
                && int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out second);
+    }
+
+    private static string ReadNullTerminatedString(byte[] bytes, int index)
+    {
+        if (bytes == null || index < 0 || index >= bytes.Length)
+            return string.Empty;
+
+        var start = index;
+        while (index < bytes.Length && bytes[index] != 0)
+            index++;
+        var value = Encoding.ASCII.GetString(bytes, start, index - start).Trim();
+        return value.Length <= 64 ? value : value[..64];
     }
 
     private static string NameOf(JToken token, string fallbackPrefix)
