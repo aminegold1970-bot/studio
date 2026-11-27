@@ -15,6 +15,7 @@ internal sealed class MeshPreviewPage : ContentPage
     private readonly Button _shadeButton;
     private readonly Button _normalsButton;
     private readonly Button _interactionButton;
+    private readonly Button _resetButton;
     private readonly Label _instructions;
 
     public MeshPreviewPage(Mesh mesh)
@@ -45,6 +46,7 @@ internal sealed class MeshPreviewPage : ContentPage
         _shadeButton = CreateControlButton(_drawable.ShadeLabel, OnShadeClicked);
         _normalsButton = CreateControlButton(_drawable.NormalsLabel, OnNormalsClicked);
         _interactionButton = CreateControlButton(_drawable.InteractionLabel, OnInteractionClicked);
+        _resetButton = CreateControlButton("Reset view", OnResetClicked);
 
         var controls = new FlexLayout
         {
@@ -58,6 +60,7 @@ internal sealed class MeshPreviewPage : ContentPage
         controls.Children.Add(_shadeButton);
         controls.Children.Add(_normalsButton);
         controls.Children.Add(_interactionButton);
+        controls.Children.Add(_resetButton);
 
         _instructions = new Label
         {
@@ -106,7 +109,9 @@ internal sealed class MeshPreviewPage : ContentPage
         _shadeButton.Text = _drawable.ShadeLabel;
         _normalsButton.Text = _drawable.NormalsLabel;
         _interactionButton.Text = _drawable.InteractionLabel;
-        _instructions.Text = $"Drag to {_drawable.InteractionLanguage} • Pinch to zoom • " +
+        _instructions.Text =
+            $"{_drawable.Statistics}\n" +
+            $"Drag to {_drawable.InteractionLanguage} • Pinch to zoom • " +
             $"{_drawable.ModeLabel} • {_drawable.ShadeLabel} • {_drawable.NormalsLabel}";
     }
 
@@ -138,6 +143,12 @@ internal sealed class MeshPreviewPage : ContentPage
         _graphicsView.Invalidate();
     }
 
+    private void OnResetClicked(object? sender, EventArgs e)
+    {
+        _drawable.ResetView();
+        _graphicsView.Invalidate();
+    }
+
     private void OnPanUpdated(object? sender, PanUpdatedEventArgs e)
     {
         _drawable.UpdatePan(e);
@@ -155,10 +166,21 @@ internal sealed class MeshPreviewDrawable : IDrawable
 {
     private const int MaxTriangles = 50_000;
     private static readonly MauiColor DefaultMaterialColor = MauiColor.FromArgb("#8EA7C1");
+    private static readonly NumericsVector3 LightDirection =
+        NumericsVector3.Normalize(new NumericsVector3(-0.35f, 0.55f, 1f));
+
     private readonly NumericsVector3[] _vertices;
     private readonly MeshTriangle[] _triangles;
-    private float _yaw = -0.55f;
-    private float _pitch = 0.35f;
+    private readonly NumericsVector3[] _calculatedNormals;
+    private readonly NumericsVector3[] _sourceNormals;
+    private readonly bool _hasSourceNormals;
+    private readonly MeshBounds _bounds;
+
+    private MeshRenderMode _renderMode;
+    private MeshShadeMode _shadeMode = MeshShadeMode.Lit;
+    private MeshNormalMode _normalMode;
+    private float _yaw = -MathF.PI / 4f;
+    private float _pitch = MathF.PI / 6f;
     private float _zoom = 1f;
     private float _startYaw;
     private float _startPitch;
@@ -168,20 +190,47 @@ internal sealed class MeshPreviewDrawable : IDrawable
     private float _startPanX;
     private float _startPanY;
 
-    public bool IsWireframe { get; private set; }
-    public bool UseShading { get; private set; } = true;
-    public bool ShowNormals { get; private set; }
     public bool IsPanMode { get; private set; }
 
-    public string ModeLabel => IsWireframe ? "Wireframe" : "Solid";
-    public string ShadeLabel => UseShading ? "Shade: On" : "Shade: Flat";
-    public string NormalsLabel => ShowNormals ? "Normals: On" : "Normals: Off";
+    public string ModeLabel => _renderMode switch
+    {
+        MeshRenderMode.Wireframe => "Wireframe",
+        MeshRenderMode.SolidAndWireframe => "Solid + wireframe",
+        _ => "Solid"
+    };
+
+    public string ShadeLabel => _shadeMode == MeshShadeMode.Lit ? "Shade: Lit" : "Shade: Color";
+
+    public string NormalsLabel => _normalMode switch
+    {
+        MeshNormalMode.Calculated => "Normals: Calc",
+        MeshNormalMode.Source when _hasSourceNormals => "Normals: Source",
+        _ => "Normals: Off"
+    };
+
     public string InteractionLabel => IsPanMode ? "Pan" : "Rotate";
     public string InteractionLanguage => IsPanMode ? "pan" : "rotate";
 
-    public void ToggleRenderMode() => IsWireframe = !IsWireframe;
-    public void ToggleShading() => UseShading = !UseShading;
-    public void ToggleNormals() => ShowNormals = !ShowNormals;
+    public string Statistics =>
+        $"{_vertices.Length:N0} vertices • {_triangles.Length:N0} triangles • " +
+        $"{_bounds.SizeX:N2} x {_bounds.SizeY:N2} x {_bounds.SizeZ:N2}";
+
+    public void ToggleRenderMode() =>
+        _renderMode = (MeshRenderMode)(((int)_renderMode + 1) % 3);
+
+    public void ToggleShading() =>
+        _shadeMode = _shadeMode == MeshShadeMode.Lit ? MeshShadeMode.Color : MeshShadeMode.Lit;
+
+    public void ToggleNormals()
+    {
+        _normalMode = _normalMode switch
+        {
+            MeshNormalMode.Off => MeshNormalMode.Calculated,
+            MeshNormalMode.Calculated when _hasSourceNormals => MeshNormalMode.Source,
+            _ => MeshNormalMode.Off
+        };
+    }
+
     public void TogglePanMode()
     {
         IsPanMode = !IsPanMode;
@@ -189,7 +238,45 @@ internal sealed class MeshPreviewDrawable : IDrawable
         _startPanY = _panY;
     }
 
+    public void ResetView()
+    {
+        _yaw = -MathF.PI / 4f;
+        _pitch = MathF.PI / 6f;
+        _zoom = 1f;
+        _panX = 0f;
+        _panY = 0f;
+    }
+
     private readonly record struct MeshTriangle(int A, int B, int C, MauiColor Color);
+    private readonly record struct ProjectedVertex(PointF Point, NumericsVector3 ViewPosition);
+    private readonly record struct RenderTriangle(MeshTriangle Triangle, float Depth);
+    private readonly record struct MeshBounds(
+        float MinX, float MaxX, float MinY, float MaxY, float MinZ, float MaxZ)
+    {
+        public float SizeX => MaxX - MinX;
+        public float SizeY => MaxY - MinY;
+        public float SizeZ => MaxZ - MinZ;
+    }
+
+    private enum MeshRenderMode
+    {
+        Solid,
+        Wireframe,
+        SolidAndWireframe
+    }
+
+    private enum MeshShadeMode
+    {
+        Lit,
+        Color
+    }
+
+    private enum MeshNormalMode
+    {
+        Off,
+        Calculated,
+        Source
+    }
 
     public MeshPreviewDrawable(Mesh mesh)
         : this(new[]
@@ -218,7 +305,9 @@ internal sealed class MeshPreviewDrawable : IDrawable
     {
         ArgumentNullException.ThrowIfNull(sceneMeshes);
         var vertices = new List<NumericsVector3>();
+        var sourceNormals = new List<NumericsVector3>();
         var triangles = new List<MeshTriangle>();
+        var foundSourceNormals = false;
         foreach (var geometry in sceneMeshes)
         {
             var mesh = geometry.Mesh;
@@ -232,11 +321,41 @@ internal sealed class MeshPreviewDrawable : IDrawable
             var vertexStride = positions.Length / mesh.m_VertexCount;
             if (vertexStride is not (3 or 4))
                 throw new NotSupportedException($"Mesh '{mesh.m_Name}' uses an unsupported vertex layout.");
+
+            var normals = mesh.m_Normals ?? Array.Empty<float>();
+            var normalStride = 0;
+            if (normals.Length > 0)
+            {
+                if (normals.Length % mesh.m_VertexCount != 0
+                    || normals.Length / mesh.m_VertexCount is not (3 or 4))
+                {
+                    throw new InvalidDataException($"Mesh '{mesh.m_Name}' has an unsupported normal layout.");
+                }
+                normalStride = normals.Length / mesh.m_VertexCount;
+            }
+
             if (geometry.BlendShapePositionDeltas is { } blendShapeDeltas
                 && blendShapeDeltas.Length < mesh.m_VertexCount)
             {
                 throw new InvalidDataException($"Mesh '{mesh.m_Name}' has incomplete blend-shape position data.");
             }
+            if (geometry.BlendShapeNormalDeltas is { } blendShapeNormalDeltas
+                && blendShapeNormalDeltas.Length < mesh.m_VertexCount)
+            {
+                throw new InvalidDataException($"Mesh '{mesh.m_Name}' has incomplete blend-shape normal data.");
+            }
+
+            var worldNormalTransform = NumericsMatrix4x4.Identity;
+            var inverseWorldTransform = NumericsMatrix4x4.Identity;
+            if (applySceneTransforms
+                && (!NumericsMatrix4x4.Invert(geometry.WorldTransform, out inverseWorldTransform)
+                    || !IsFinite(inverseWorldTransform)))
+            {
+                throw new InvalidDataException(
+                    $"Mesh '{mesh.m_Name}' has a singular or non-finite world transform.");
+            }
+            if (applySceneTransforms)
+                worldNormalTransform = NumericsMatrix4x4.Transpose(inverseWorldTransform);
 
             var colors = mesh.m_Colors ?? Array.Empty<float>();
             var colorStride = 0;
@@ -258,18 +377,33 @@ internal sealed class MeshPreviewDrawable : IDrawable
                     positions[sourceOffset],
                     positions[sourceOffset + 1],
                     positions[sourceOffset + 2]);
+                var normal = normalStride == 0
+                    ? NumericsVector3.UnitY
+                    : new NumericsVector3(
+                        normals[vertexIndex * normalStride],
+                        normals[vertexIndex * normalStride + 1],
+                        normals[vertexIndex * normalStride + 2]);
                 if (applySceneTransforms)
                 {
                     position.X = -position.X;
+                    normal.X = -normal.X;
                     if (geometry.BlendShapePositionDeltas is { } deltas)
                         position += deltas[vertexIndex];
+                    if (geometry.BlendShapeNormalDeltas is { } normalDeltas)
+                        normal += normalDeltas[vertexIndex];
                     position = MobileAssetExporter.TransformVertexPosition(
                         mesh, vertexIndex, position, geometry.WorldTransform, geometry.SkinTransforms);
+                    normal = MobileAssetExporter.TransformVertexNormal(
+                        mesh, vertexIndex, normal, worldNormalTransform, geometry.SkinNormalTransforms);
                 }
 
-                if (!float.IsFinite(position.X) || !float.IsFinite(position.Y) || !float.IsFinite(position.Z))
+                if (!IsFinite(position))
                     throw new InvalidDataException($"Mesh '{mesh.m_Name}' contains a non-finite preview vertex.");
+                if (!IsFinite(normal))
+                    normal = NumericsVector3.UnitY;
                 vertices.Add(position);
+                sourceNormals.Add(normal);
+                foundSourceNormals |= normalStride > 0;
             }
 
             var firstIndex = 0;
@@ -282,7 +416,9 @@ internal sealed class MeshPreviewDrawable : IDrawable
                 if (indexCount % 3 != 0
                     || firstIndex > mesh.m_Indices.Count
                     || indexCount > mesh.m_Indices.Count - firstIndex)
+                {
                     throw new InvalidDataException($"Mesh '{mesh.m_Name}' has an invalid triangle index range.");
+                }
                 var endIndex = checked(firstIndex + indexCount);
                 var materialColor = submeshIndex < geometry.Materials.Length
                     ? GetMaterialColor(geometry.Materials[submeshIndex])
@@ -317,8 +453,79 @@ internal sealed class MeshPreviewDrawable : IDrawable
 
         if (triangles.Count == 0)
             throw new NotSupportedException("The selected objects contain no triangle faces to preview.");
+
         _vertices = vertices.ToArray();
         _triangles = triangles.ToArray();
+        _sourceNormals = NormalizeVertexNormals(sourceNormals.ToArray());
+        _hasSourceNormals = foundSourceNormals;
+        _calculatedNormals = CalculateVertexNormals(_vertices, _triangles);
+        _bounds = CalculateBounds(_vertices);
+    }
+
+    private static bool IsFinite(NumericsVector3 value) =>
+        float.IsFinite(value.X) && float.IsFinite(value.Y) && float.IsFinite(value.Z);
+
+    private static bool IsFinite(NumericsMatrix4x4 matrix) =>
+        float.IsFinite(matrix.M11) && float.IsFinite(matrix.M12)
+        && float.IsFinite(matrix.M13) && float.IsFinite(matrix.M14)
+        && float.IsFinite(matrix.M21) && float.IsFinite(matrix.M22)
+        && float.IsFinite(matrix.M23) && float.IsFinite(matrix.M24)
+        && float.IsFinite(matrix.M31) && float.IsFinite(matrix.M32)
+        && float.IsFinite(matrix.M33) && float.IsFinite(matrix.M34)
+        && float.IsFinite(matrix.M41) && float.IsFinite(matrix.M42)
+        && float.IsFinite(matrix.M43) && float.IsFinite(matrix.M44);
+
+    private static NumericsVector3[] CalculateVertexNormals(
+        NumericsVector3[] vertices,
+        MeshTriangle[] triangles)
+    {
+        var accumulated = new NumericsVector3[vertices.Length];
+        foreach (var triangle in triangles)
+        {
+            var normal = NumericsVector3.Cross(
+                vertices[triangle.B] - vertices[triangle.A],
+                vertices[triangle.C] - vertices[triangle.A]);
+            if (!IsFinite(normal))
+                continue;
+            accumulated[triangle.A] += normal;
+            accumulated[triangle.B] += normal;
+            accumulated[triangle.C] += normal;
+        }
+        return NormalizeVertexNormals(accumulated);
+    }
+
+    private static NumericsVector3[] NormalizeVertexNormals(NumericsVector3[] normals)
+    {
+        var result = new NumericsVector3[normals.Length];
+        for (var index = 0; index < normals.Length; index++)
+        {
+            var normal = normals[index];
+            var squared = normal.LengthSquared();
+            result[index] = float.IsFinite(squared) && squared > 1e-12f
+                ? normal / MathF.Sqrt(squared)
+                : NumericsVector3.UnitY;
+        }
+        return result;
+    }
+
+    private static MeshBounds CalculateBounds(NumericsVector3[] vertices)
+    {
+        var minX = float.PositiveInfinity;
+        var maxX = float.NegativeInfinity;
+        var minY = float.PositiveInfinity;
+        var maxY = float.NegativeInfinity;
+        var minZ = float.PositiveInfinity;
+        var maxZ = float.NegativeInfinity;
+        foreach (var vertex in vertices)
+        {
+            minX = MathF.Min(minX, vertex.X);
+            maxX = MathF.Max(maxX, vertex.X);
+            minY = MathF.Min(minY, vertex.Y);
+            maxY = MathF.Max(maxY, vertex.Y);
+            minZ = MathF.Min(minZ, vertex.Z);
+            maxZ = MathF.Max(maxZ, vertex.Z);
+        }
+        return new MeshBounds(minX, maxX, minY, maxY, minZ, maxZ);
     }
 
     private static MauiColor GetMaterialColor(Material? material)
@@ -433,12 +640,11 @@ internal sealed class MeshPreviewDrawable : IDrawable
     {
         canvas.FillColor = MauiColor.FromArgb("#A7A5A6");
         canvas.FillRectangle(dirtyRect);
-        var bounds = GetBounds();
-        var centerX = (bounds.MinX + bounds.MaxX) * 0.5f;
-        var centerY = (bounds.MinY + bounds.MaxY) * 0.5f;
-        var centerZ = (bounds.MinZ + bounds.MaxZ) * 0.5f;
-        var extent = MathF.Max(bounds.MaxX - bounds.MinX,
-            MathF.Max(bounds.MaxY - bounds.MinY, bounds.MaxZ - bounds.MinZ));
+
+        var centerX = (_bounds.MinX + _bounds.MaxX) * 0.5f;
+        var centerY = (_bounds.MinY + _bounds.MaxY) * 0.5f;
+        var centerZ = (_bounds.MinZ + _bounds.MaxZ) * 0.5f;
+        var extent = MathF.Max(_bounds.SizeX, MathF.Max(_bounds.SizeY, _bounds.SizeZ));
         if (extent <= 0f || !float.IsFinite(extent))
             return;
 
@@ -448,37 +654,53 @@ internal sealed class MeshPreviewDrawable : IDrawable
         var sinYaw = MathF.Sin(_yaw);
         var cosPitch = MathF.Cos(_pitch);
         var sinPitch = MathF.Sin(_pitch);
-        for (var i = 0; i < projected.Length; i++)
+        for (var index = 0; index < projected.Length; index++)
         {
-            var x = _vertices[i].X - centerX;
-            var y = _vertices[i].Y - centerY;
-            var z = _vertices[i].Z - centerZ;
+            var vertex = _vertices[index];
+            var x = vertex.X - centerX;
+            var y = vertex.Y - centerY;
+            var z = vertex.Z - centerZ;
             var rotatedX = x * cosYaw - z * sinYaw;
             var rotatedZ = x * sinYaw + z * cosYaw;
             var rotatedY = y * cosPitch - rotatedZ * sinPitch;
             var viewDepth = y * sinPitch + rotatedZ * cosPitch;
-            projected[i] = new ProjectedVertex(
+            projected[index] = new ProjectedVertex(
                 new PointF(
                     dirtyRect.Center.X + rotatedX * scale + _panX,
                     dirtyRect.Center.Y - rotatedY * scale + _panY),
                 new NumericsVector3(rotatedX, rotatedY, viewDepth));
         }
 
-        if (IsWireframe)
+        if (_renderMode != MeshRenderMode.Wireframe)
         {
-            canvas.StrokeColor = MauiColor.FromArgb("#42474D");
-            canvas.StrokeSize = 1f;
-            foreach (var triangle in _triangles)
-            {
-                canvas.DrawLine(projected[triangle.A].Point, projected[triangle.B].Point);
-                canvas.DrawLine(projected[triangle.B].Point, projected[triangle.C].Point);
-                canvas.DrawLine(projected[triangle.C].Point, projected[triangle.A].Point);
-            }
-            if (ShowNormals)
-                DrawNormalLines(canvas, projected, scale);
-            return;
+            var shadeNormals = _normalMode == MeshNormalMode.Source && _hasSourceNormals
+                ? _sourceNormals
+                : _calculatedNormals;
+            var viewNormals = new NumericsVector3[shadeNormals.Length];
+            for (var index = 0; index < viewNormals.Length; index++)
+                viewNormals[index] = RotateDirection(
+                    shadeNormals[index], cosYaw, sinYaw, cosPitch, sinPitch);
+            DrawSolid(canvas, projected, viewNormals);
         }
 
+        if (_renderMode != MeshRenderMode.Solid)
+            DrawWireframe(canvas, projected);
+
+        if (_normalMode != MeshNormalMode.Off)
+        {
+            var displayNormals = _normalMode == MeshNormalMode.Source && _hasSourceNormals
+                ? _sourceNormals
+                : _calculatedNormals;
+            DrawNormalLines(
+                canvas, projected, displayNormals, scale, cosYaw, sinYaw, cosPitch, sinPitch);
+        }
+    }
+
+    private void DrawSolid(
+        ICanvas canvas,
+        ProjectedVertex[] projected,
+        NumericsVector3[] viewNormals)
+    {
         var orderedTriangles = new RenderTriangle[_triangles.Length];
         for (var index = 0; index < _triangles.Length; index++)
         {
@@ -490,29 +712,25 @@ internal sealed class MeshPreviewDrawable : IDrawable
         }
         Array.Sort(orderedTriangles, static (left, right) => left.Depth.CompareTo(right.Depth));
 
-        var lightDirection = NumericsVector3.Normalize(new NumericsVector3(-0.35f, 0.55f, 1f));
         foreach (var rendered in orderedTriangles)
         {
             var triangle = rendered.Triangle;
             var a = projected[triangle.A];
             var b = projected[triangle.B];
             var c = projected[triangle.C];
-            var normal = NumericsVector3.Cross(
-                b.ViewPosition - a.ViewPosition,
-                c.ViewPosition - a.ViewPosition);
+            var normal = (viewNormals[triangle.A]
+                + viewNormals[triangle.B]
+                + viewNormals[triangle.C]) / 3;
+            var squared = normal.LengthSquared();
             var diffuse = 0f;
-            var normalLengthSquared = normal.LengthSquared();
-            if (UseShading && float.IsFinite(normalLengthSquared) && normalLengthSquared > 1e-12f)
-            {
-                normal /= MathF.Sqrt(normalLengthSquared);
-                diffuse = MathF.Max(0, NumericsVector3.Dot(normal, lightDirection));
-            }
+            if (float.IsFinite(squared) && squared > 1e-12f)
+                diffuse = MathF.Max(0, NumericsVector3.Dot(normal / MathF.Sqrt(squared), LightDirection));
 
-            var shade = UseShading ? 0.24f + diffuse * 0.76f : 1f;
+            var shade = _shadeMode == MeshShadeMode.Lit ? 0.24f + diffuse * 0.76f : 1f;
             canvas.FillColor = new MauiColor(
-                triangle.Color.Red * shade,
-                triangle.Color.Green * shade,
-                triangle.Color.Blue * shade,
+                Math.Clamp(triangle.Color.Red * shade, 0, 1),
+                Math.Clamp(triangle.Color.Green * shade, 0, 1),
+                Math.Clamp(triangle.Color.Blue * shade, 0, 1),
                 triangle.Color.Alpha);
             var face = new PathF();
             face.MoveTo(a.Point);
@@ -521,12 +739,29 @@ internal sealed class MeshPreviewDrawable : IDrawable
             face.Close();
             canvas.FillPath(face);
         }
-
-        if (ShowNormals)
-            DrawNormalLines(canvas, projected, scale);
     }
 
-    private void DrawNormalLines(ICanvas canvas, ProjectedVertex[] projected, float scale)
+    private void DrawWireframe(ICanvas canvas, ProjectedVertex[] projected)
+    {
+        canvas.StrokeColor = MauiColor.FromArgb("#42474D");
+        canvas.StrokeSize = 1f;
+        foreach (var triangle in _triangles)
+        {
+            canvas.DrawLine(projected[triangle.A].Point, projected[triangle.B].Point);
+            canvas.DrawLine(projected[triangle.B].Point, projected[triangle.C].Point);
+            canvas.DrawLine(projected[triangle.C].Point, projected[triangle.A].Point);
+        }
+    }
+
+    private void DrawNormalLines(
+        ICanvas canvas,
+        ProjectedVertex[] projected,
+        NumericsVector3[] normals,
+        float scale,
+        float cosYaw,
+        float sinYaw,
+        float cosPitch,
+        float sinPitch)
     {
         canvas.StrokeColor = MauiColor.FromArgb("#D64A3A");
         canvas.StrokeSize = 1f;
@@ -538,9 +773,10 @@ internal sealed class MeshPreviewDrawable : IDrawable
             var a = projected[triangle.A];
             var b = projected[triangle.B];
             var c = projected[triangle.C];
-            var normal = NumericsVector3.Cross(
-                b.ViewPosition - a.ViewPosition,
-                c.ViewPosition - a.ViewPosition);
+            var normal = (normals[triangle.A]
+                + normals[triangle.B]
+                + normals[triangle.C]) / 3;
+            normal = RotateDirection(normal, cosYaw, sinYaw, cosPitch, sinPitch);
             var squared = normal.LengthSquared();
             if (!float.IsFinite(squared) || squared <= 1e-12f)
                 continue;
@@ -555,26 +791,16 @@ internal sealed class MeshPreviewDrawable : IDrawable
         }
     }
 
-    private readonly record struct ProjectedVertex(PointF Point, NumericsVector3 ViewPosition);
-    private readonly record struct RenderTriangle(MeshTriangle Triangle, float Depth);
-
-    private (float MinX, float MaxX, float MinY, float MaxY, float MinZ, float MaxZ) GetBounds()
+    private static NumericsVector3 RotateDirection(
+        NumericsVector3 normal,
+        float cosYaw,
+        float sinYaw,
+        float cosPitch,
+        float sinPitch)
     {
-        var minX = float.PositiveInfinity;
-        var maxX = float.NegativeInfinity;
-        var minY = float.PositiveInfinity;
-        var maxY = float.NegativeInfinity;
-        var minZ = float.PositiveInfinity;
-        var maxZ = float.NegativeInfinity;
-        foreach (var vertex in _vertices)
-        {
-            minX = MathF.Min(minX, vertex.X);
-            maxX = MathF.Max(maxX, vertex.X);
-            minY = MathF.Min(minY, vertex.Y);
-            maxY = MathF.Max(maxY, vertex.Y);
-            minZ = MathF.Min(minZ, vertex.Z);
-            maxZ = MathF.Max(maxZ, vertex.Z);
-        }
-        return (minX, maxX, minY, maxY, minZ, maxZ);
+        var rotatedX = normal.X * cosYaw - normal.Z * sinYaw;
+        var rotatedZ = normal.X * sinYaw + normal.Z * cosYaw;
+        var rotatedY = normal.Y * cosPitch - rotatedZ * sinPitch;
+        return new NumericsVector3(rotatedX, rotatedY, rotatedZ);
     }
 }
