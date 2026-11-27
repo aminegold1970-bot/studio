@@ -55,7 +55,7 @@ public partial class MainPage : ContentPage
             ["Display asset infromation"] =
                 "Toggle the overlay that shows information about each asset, eg. image size, format, audio bitrate, etc.",
             ["Night mode"] = "Use the dark color theme. The setting is remembered after the app closes.",
-            ["Live2D viewer"] = "Open the static Live2D/Spine atlas viewer. Select a PNG, atlas and skeleton with matching names."
+            ["Live2D"] = "Start the in-app Live2D/Spine viewer from three selected matching texture, atlas and skeleton assets."
         };
 
     private CancellationTokenSource? _loadCancellation;
@@ -66,16 +66,16 @@ public partial class MainPage : ContentPage
     private LoadMetadata? _loadMetadata;
     private bool _audioLoopEnabled;
     private bool _updatingAudioPosition;
-    private readonly ObservableCollection<AssetRow> _allAssets = new();
-    private readonly ObservableCollection<AssetRow> _visibleAssets = new();
+    private readonly RangeObservableCollection<AssetRow> _allAssets = new();
+    private readonly RangeObservableCollection<AssetRow> _visibleAssets = new();
     // _hierarchy contains only rows currently visible in the expanded tree.
-    private readonly ObservableCollection<HierarchyRow> _hierarchy = new();
+    private readonly RangeObservableCollection<HierarchyRow> _hierarchy = new();
     private readonly List<HierarchyRow> _hierarchyRoots = new();
     private readonly Dictionary<string, HierarchyRow> _hierarchyById = new(StringComparer.Ordinal);
-    private readonly ObservableCollection<ClassRow> _classes = new();
-    private readonly ObservableCollection<MetadataRow> _metadataRows = new();
-    private readonly ObservableCollection<ClassRow> _visibleClasses = new();
-    private readonly ObservableCollection<ClassGroup> _visibleClassGroups = new();
+    private readonly RangeObservableCollection<ClassRow> _classes = new();
+    private readonly RangeObservableCollection<MetadataRow> _metadataRows = new();
+    private readonly RangeObservableCollection<ClassRow> _visibleClasses = new();
+    private readonly RangeObservableCollection<ClassGroup> _visibleClassGroups = new();
     private string _classSortKey = "version";
     private bool _classSortDescending;
     private string _browserTab = "Asset List";
@@ -92,6 +92,8 @@ public partial class MainPage : ContentPage
 #endif
     private bool _isPickingAssetFiles;
     private readonly List<AssetRow> _selectedAssets = new();
+    private CancellationTokenSource? _previewCancellation;
+    private string? _live2DTexturePath;
     private bool _showingDump;
     private bool _showingEmptyPreview = true;
     private MobileImageFormat _textureExportFormat = MobileImageFormat.Png;
@@ -137,6 +139,11 @@ public partial class MainPage : ContentPage
     public MainPage()
     {
         InitializeComponent();
+#if IOS
+        DragHintLabel.Text = "iPhone: Files drag is unavailable · use Load file / Load folder";
+#else
+        DragHintLabel.Text = "Drag files here to load · drop an export folder to choose it";
+#endif
         // Original treeSearch contains the literal text " Search " until focused.
         _suppressFilterTextChanged = true;
         HierarchySearch.Text = HierarchySearchPlaceholder;
@@ -316,6 +323,20 @@ public partial class MainPage : ContentPage
         BrowserPane.IsVisible = !_showingPreviewPane;
         PreviewPane.IsVisible = _showingPreviewPane;
         RefreshWorkspaceTabs();
+    }
+
+    private void ShowPreviewPaneForCurrentSelection(bool presentSelectedAsset = true)
+    {
+        // Compact layouts swap panes; the desktop-style split layout shows both.
+        _showingPreviewPane = true;
+        var compact = _compactWorkspace == true;
+        BrowserPane.IsVisible = !compact;
+        PreviewPane.IsVisible = true;
+        WorkspaceViewTabs.IsVisible = compact;
+        OnPreviewTabClicked(this, EventArgs.Empty);
+        RefreshWorkspaceTabs();
+        if (presentSelectedAsset && _selectedAsset != null)
+            _ = PresentAssetPreviewAsync(_selectedAsset);
     }
 
     private void RefreshWorkspaceTabs()
@@ -518,6 +539,7 @@ public partial class MainPage : ContentPage
     private async void OnDropFailed(string message)
     {
         StatusLabel.Text = $"Drop failed: {message}";
+        DragHintLabel.Text = $"Drop failed: {message}";
         await ShowErrorAsync("Could not import dropped file", message);
     }
 
@@ -529,24 +551,29 @@ public partial class MainPage : ContentPage
 #endif
     }
 
+    private static string DefaultDragHint()
+    {
+#if IOS
+        return "iPhone: Files drag is unavailable · use Load file / Load folder";
+#else
+        return "Drag files here to load · drop an export folder to choose it";
+#endif
+    }
+
     private void OnDropTargetChanged(bool isTargeted) =>
         MainThread.BeginInvokeOnMainThread(() =>
         {
             DropTargetOverlay.IsVisible = isTargeted;
-            DropDetectionLabel.Text = isTargeted
-                ? "Drag detected — release to import"
-#if IOS
-                : "No external drag detected. Use Load file or Load folder."
-#else
-                : "Waiting for a file or folder drop."
-#endif
-            ;
+            var message = isTargeted ? "Drag detected — release to import" : DefaultDragHint();
+            DropDetectionLabel.Text = message;
+            DragHintLabel.Text = message;
         });
 
     private void OnDropActivity(string message) =>
         MainThread.BeginInvokeOnMainThread(() =>
         {
             StatusLabel.Text = message;
+            DragHintLabel.Text = message;
             if (DropTargetOverlay.IsVisible)
                 DropDetectionLabel.Text = message;
         });
@@ -656,12 +683,9 @@ public partial class MainPage : ContentPage
         var incoming = assets?.ToList() ?? new List<AssetRow>();
         void Apply()
         {
-            _allAssets.Clear();
             foreach (var asset in incoming)
-            {
                 asset.IsCompactLayout = _compactWorkspace == true;
-                _allAssets.Add(asset);
-            }
+            _allAssets.ResetWith(incoming);
             ApplyAssetFilter();
         }
         if (MainThread.IsMainThread) Apply();
@@ -675,7 +699,6 @@ public partial class MainPage : ContentPage
         var incoming = nodes?.ToList() ?? new List<HierarchyRow>();
         void Apply()
         {
-            _hierarchy.Clear();
             _hierarchyRoots.Clear();
             _hierarchyById.Clear();
             HierarchyCollection.SelectedItem = null;
@@ -706,8 +729,7 @@ public partial class MainPage : ContentPage
                 }
             }
 
-            for (var index = 0; index < _hierarchyRoots.Count; index++)
-                AddVisibleHierarchyNode(_hierarchyRoots[index], 0, "", index == _hierarchyRoots.Count - 1, new HashSet<HierarchyRow>());
+            _hierarchy.ResetWith(BuildVisibleHierarchyNodes());
             _hierarchySearchResults.Clear();
             _nextHierarchySearchResult = 0;
             if (_browserTab == "Scene Hierarchy")
@@ -739,8 +761,9 @@ public partial class MainPage : ContentPage
 
     // Render the visible nodes as a WinForms-style tree: ancestor guide columns
     // plus a +/- expander and a checkbox, matching the desktop scene hierarchy.
-    private void AddVisibleHierarchyNode(
-        HierarchyRow node, int depth, string ancestorPrefix, bool isLastChild, HashSet<HierarchyRow> visited)
+    private static void AddVisibleHierarchyNode(
+        HierarchyRow node, int depth, string ancestorPrefix, bool isLastChild,
+        HashSet<HierarchyRow> visited, List<HierarchyRow> output)
     {
         if (!visited.Add(node))
             return;
@@ -748,23 +771,27 @@ public partial class MainPage : ContentPage
         // File nodes are the TreeView roots and have no connector of their own.
         var isRoot = depth == 0;
         node.TreePrefix = isRoot ? "" : ancestorPrefix + (isLastChild ? "└─ " : "├─ ");
-        _hierarchy.Add(node);
+        output.Add(node);
         if (!node.IsExpanded)
             return;
 
         var childPrefix = isRoot ? "" : ancestorPrefix + (isLastChild ? "   " : "│  ");
         for (var index = 0; index < node.Children.Count; index++)
             AddVisibleHierarchyNode(node.Children[index], depth + 1, childPrefix,
-                index == node.Children.Count - 1, visited);
+                index == node.Children.Count - 1, visited, output);
     }
 
-    private void RebuildVisibleHierarchy()
+    private List<HierarchyRow> BuildVisibleHierarchyNodes()
     {
-        _hierarchy.Clear();
+        var result = new List<HierarchyRow>();
         var visited = new HashSet<HierarchyRow>();
         for (var index = 0; index < _hierarchyRoots.Count; index++)
-            AddVisibleHierarchyNode(_hierarchyRoots[index], 0, "", index == _hierarchyRoots.Count - 1, visited);
+            AddVisibleHierarchyNode(_hierarchyRoots[index], 0, "",
+                index == _hierarchyRoots.Count - 1, visited, result);
+        return result;
     }
+
+    private void RebuildVisibleHierarchy() => _hierarchy.ResetWith(BuildVisibleHierarchyNodes());
 
     private void OnHierarchyExpandClicked(object sender, EventArgs e)
     {
@@ -779,8 +806,7 @@ public partial class MainPage : ContentPage
         var incoming = classes?.ToList() ?? new List<ClassRow>();
         void Apply()
         {
-            _classes.Clear();
-            foreach (var item in incoming) _classes.Add(item);
+            _classes.ResetWith(incoming);
             ApplyClassFilter();
             if (_browserTab == "Asset Classes")
             {
@@ -959,6 +985,27 @@ public partial class MainPage : ContentPage
         {
             if (File.Exists(path))
                 File.Delete(path);
+        }
+        catch
+        {
+        }
+    }
+
+    private void TryDeleteLive2DTexture()
+    {
+        var path = _live2DTexturePath;
+        _live2DTexturePath = null;
+        if (string.IsNullOrWhiteSpace(path))
+            return;
+
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+            var directory = Path.GetDirectoryName(path);
+            if (!string.IsNullOrWhiteSpace(directory) && Directory.Exists(directory)
+                && !Directory.EnumerateFileSystemEntries(directory).Any())
+                Directory.Delete(directory);
         }
         catch
         {
@@ -1275,6 +1322,11 @@ public partial class MainPage : ContentPage
         TextureActionsRow.IsVisible = false;
         TextureChannelsButton.IsVisible = false;
         OpenFullTexturePreviewButton.IsVisible = false;
+        Live2DPreviewFrame.IsVisible = false;
+        Live2DTextureImage.Source = null;
+        Live2DStatusLabel.Text = string.Empty;
+        Live2DDetailsLabel.Text = string.Empty;
+        TryDeleteLive2DTexture();
         if (_videoPlayer?.Source != null)
             _videoPlayer.Stop();
         _videoPlayer = null;
@@ -1819,8 +1871,8 @@ public partial class MainPage : ContentPage
         _suppressFilterTextChanged = true;
         _loadMetadata = null;
         ShowBaseTitle();
-        _allAssets.Clear();
-        _visibleAssets.Clear();
+        _allAssets.ResetWith(Array.Empty<AssetRow>());
+        _visibleAssets.ResetWith(Array.Empty<AssetRow>());
         _selectedAssets.Clear();
         _selectedAsset = null;
         AssetSearch.Text = string.Empty;
@@ -1829,14 +1881,14 @@ public partial class MainPage : ContentPage
         HierarchySearch.TextColor = AssetStudioTheme.FromHex("#777777");
         _suppressFilterTextChanged = false;
         AssetCollection.SelectedItems.Clear();
-        _hierarchy.Clear();
+        _hierarchy.ResetWith(Array.Empty<HierarchyRow>());
         _hierarchyRoots.Clear();
         _hierarchyById.Clear();
         _hierarchySearchResults.Clear();
         _nextHierarchySearchResult = 0;
-        _classes.Clear();
-        _visibleClasses.Clear();
-        _metadataRows.Clear();
+        _classes.ResetWith(Array.Empty<ClassRow>());
+        _visibleClasses.ResetWith(Array.Empty<ClassRow>());
+        _metadataRows.ResetWith(Array.Empty<MetadataRow>());
         _selectedTypes = null;
         _sortColumn = -1;
         _reverseSort = false;
@@ -1936,7 +1988,7 @@ public partial class MainPage : ContentPage
             "Enable preview",
             "Display asset infromation",
             "Night mode",
-            "Live2D viewer",
+            "Live2D",
             "Specify Unity version",
             "Export options");
         if (choice == null) return;
@@ -1978,8 +2030,8 @@ public partial class MainPage : ContentPage
                 RefreshBrowserTab();
                 RefreshPreviewSurfaceVisibility();
                 break;
-            case "Live2D viewer":
-                await OpenLive2DViewerAsync();
+            case "Live2D":
+                await StartLive2DFromSelectionAsync();
                 break;
             case "Specify Unity version":
                 await SpecifyUnityVersionAsync();
@@ -2002,17 +2054,122 @@ public partial class MainPage : ContentPage
         }
     }
 
-    private async Task OpenLive2DViewerAsync()
+    private sealed record Live2DSelection(
+        AssetRow Texture, AssetRow Atlas, AssetRow Skeleton, string Identity);
+
+    private async void OnLive2DButtonClicked(object? sender, EventArgs e) =>
+        await StartLive2DFromSelectionAsync();
+
+    private static bool IsAtlasRow(AssetRow row)
     {
+        if (row.SourceAsset is not AssetStudio.TextAsset)
+            return false;
+        var name = row.Name ?? string.Empty;
+        return name.EndsWith(".atlas", StringComparison.OrdinalIgnoreCase)
+            || name.EndsWith(".atlas.txt", StringComparison.OrdinalIgnoreCase)
+            || name.Contains(".atlas.", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private Live2DSelection? FindLive2DSelection()
+    {
+        if (_selectedAssets.Count != 3)
+            return null;
+
+        var texture = _selectedAssets.FirstOrDefault(row => row.SourceAsset is AssetStudio.Texture2D);
+        var atlas = _selectedAssets.FirstOrDefault(IsAtlasRow);
+        var skeleton = _selectedAssets.FirstOrDefault(row =>
+            !ReferenceEquals(row, texture) && !ReferenceEquals(row, atlas)
+            && row.SourceAsset is AssetStudio.TextAsset);
+        if (texture == null || atlas == null || skeleton == null)
+            return null;
+
+        var identities = new[]
+        {
+            Live2DModel.Identity(texture.Name),
+            Live2DModel.Identity(atlas.Name),
+            Live2DModel.Identity(skeleton.Name)
+        };
+        if (identities.Any(string.IsNullOrWhiteSpace)
+            || identities.Skip(1).Any(id => !string.Equals(id, identities[0], StringComparison.OrdinalIgnoreCase)))
+            return null;
+
+        return new Live2DSelection(texture, atlas, skeleton, identities[0]);
+    }
+
+    private void UpdateLive2DAvailability() => Live2DButton.IsVisible = FindLive2DSelection() != null;
+
+    private bool IsCurrentLive2DSelection(Live2DSelection match)
+    {
+        var current = FindLive2DSelection();
+        return current != null
+            && ReferenceEquals(current.Texture, match.Texture)
+            && ReferenceEquals(current.Atlas, match.Atlas)
+            && ReferenceEquals(current.Skeleton, match.Skeleton);
+    }
+
+    private async Task StartLive2DFromSelectionAsync()
+    {
+        var match = FindLive2DSelection();
+        if (match == null)
+        {
+            StatusLabel.Text = "Select exactly one texture, one atlas and one skeleton with matching names to use Live2D.";
+            Live2DButton.IsVisible = false;
+            return;
+        }
+
+        if (!_previewEnabled)
+        {
+            _previewEnabled = true;
+            Preferences.Set("AssetStudio.EnablePreview", true);
+        }
+        _previewCancellation?.Cancel();
+        _showingDump = false;
+        _showingEmptyPreview = false;
+        ResetPreviewSurface();
+        Live2DPreviewFrame.IsVisible = true;
+        Live2DStatusLabel.Text = "Preparing model…";
+        Live2DDetailsLabel.Text = string.Empty;
+        RefreshPreviewSurfaceVisibility();
+        PreviewTitle.Text = $"Live2D · {match.Identity}";
+        PreviewKind.Text = "Live2D / Spine model";
+        PreviewDetails.Text = "Loading texture, atlas and skeleton from the selected assets…";
+        StatusLabel.Text = "Starting Live2D viewer…";
+
         try
         {
-            await Navigation.PushModalAsync(CreateModalNavigationPage(new Live2DViewerPage()));
-            StatusLabel.Text = "Live2D viewer opened. Select matching PNG, atlas and skeleton files.";
+            var texture = (AssetStudio.Texture2D)match.Texture.SourceAsset!;
+            var atlasAsset = (AssetStudio.TextAsset)match.Atlas.SourceAsset!;
+            var skeletonAsset = (AssetStudio.TextAsset)match.Skeleton.SourceAsset!;
+
+            var texturePath = await Task.Run(() => MobileAssetExporter.Export(texture));
+            _live2DTexturePath = texturePath;
+            if (!IsCurrentLive2DSelection(match)) return;
+
+            var atlasText = await Task.Run(() =>
+                Encoding.UTF8.GetString(atlasAsset.m_Script ?? Array.Empty<byte>()).Replace("\0", string.Empty));
+            if (!IsCurrentLive2DSelection(match)) return;
+
+            var skeletonBytes = await Task.Run(() => skeletonAsset.m_Script ?? Array.Empty<byte>());
+            if (!IsCurrentLive2DSelection(match)) return;
+
+            var atlasInfo = await Task.Run(() => Live2DModel.ParseAtlas(atlasText));
+            var skeletonInfo = await Task.Run(() => Live2DModel.DescribeSkeleton(skeletonBytes));
+            if (!IsCurrentLive2DSelection(match)) return;
+
+            Live2DTextureImage.Source = ImageSource.FromFile(texturePath);
+            Live2DDetailsLabel.Text = Live2DModel.BuildDetails(
+                match.Texture.Name, (texture.m_Width, texture.m_Height), atlasInfo, skeletonInfo);
+            Live2DStatusLabel.Text =
+                $"Showing {match.Identity} · {atlasInfo.Regions.Count} region(s) · {skeletonInfo.BoneCount} bone(s)";
+            PreviewDetails.Text = "Static in-app viewer. Select other matching assets to reload.";
+            StatusLabel.Text = $"Live2D viewer started: {match.Identity}";
         }
         catch (Exception exception)
         {
-            StatusLabel.Text = $"Could not open Live2D viewer: {exception.Message}";
-            await ShowErrorAsync("Live2D viewer", exception.Message);
+            if (!IsCurrentLive2DSelection(match)) return;
+            Live2DStatusLabel.Text = $"Could not start model: {exception.Message}";
+            StatusLabel.Text = $"Live2D viewer failed: {exception.Message}";
+            AssetErrorLog.Write("Live2D viewer", exception.Message);
         }
     }
 
@@ -3308,8 +3465,7 @@ public partial class MainPage : ContentPage
             void Publish()
             {
                 if (cancellation.IsCancellationRequested) return;
-                _visibleAssets.Clear();
-                foreach (var asset in visible) _visibleAssets.Add(asset);
+                _visibleAssets.ResetWith(visible);
                 var visibleSet = new HashSet<AssetRow>(visible);
                 _selectedAssets.RemoveAll(asset => !visibleSet.Contains(asset));
                 if (_selectedAsset != null && !visibleSet.Contains(_selectedAsset))
@@ -3513,7 +3669,13 @@ public partial class MainPage : ContentPage
 
     private async void OnAssetContextClicked(object sender, EventArgs e)
     {
-        if (sender is not Button button || button.CommandParameter is not AssetRow row)
+        var row = sender switch
+        {
+            Button button => button.CommandParameter as AssetRow,
+            TapGestureRecognizer gesture => gesture.CommandParameter as AssetRow,
+            _ => null
+        };
+        if (row == null)
             return;
 
         // The context action applies to the current multi-selection when the
@@ -3525,6 +3687,8 @@ public partial class MainPage : ContentPage
         // Desktop context menu order: Copy text, Export selected assets,
         // conditional Animator export, Go to scene hierarchy, Show original file.
         var actions = new List<string> { "Copy text", "Export selected assets" };
+        if (targets.Count == 1)
+            actions.Add("Preview");
         var hasAnimator = targets.Any(row => row.SourceAsset is AssetStudio.Animator);
         var hasAnimationClip = targets.Any(row => row.SourceAsset is AssetStudio.AnimationClip);
         if (hasAnimator && hasAnimationClip)
@@ -3555,6 +3719,12 @@ public partial class MainPage : ContentPage
             };
             await Clipboard.Default.SetTextAsync(text ?? string.Empty);
             StatusLabel.Text = $"Copied {field}";
+            return;
+        }
+
+        if (action == "Preview")
+        {
+            ShowPreviewPaneForCurrentSelection();
             return;
         }
 
@@ -3613,7 +3783,7 @@ public partial class MainPage : ContentPage
         StatusLabel.Text = $"Scene object: {node.DisplayName}";
     }
 
-    private async void OnAssetSelectionChanged(object sender, SelectionChangedEventArgs e)
+    private void OnAssetSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
 #if IOS || MACCATALYST || ANDROID || WINDOWS
         StopPreviewAudio();
@@ -3627,35 +3797,25 @@ public partial class MainPage : ContentPage
             return;
         }
 
+        _previewCancellation?.Cancel();
+        var previewCancellation = new CancellationTokenSource();
+        _previewCancellation = previewCancellation;
         _selectedAsset = row;
         _showingEmptyPreview = false;
         ResetPreviewSurface();
         PreviewTitle.Text = row.Name;
         PreviewKind.Text = row.Type;
         PreviewDetails.Text = BuildAssetSummary(row);
-        DumpText.Text = "Building serialized dump…";
+        // Serialized dumps are generated only when the Dump tab is opened.
+        DumpText.Text = "Open the Dump tab to build the serialized dump…";
         _showingDump = false;
+        UpdateLive2DAvailability();
         RefreshPreviewSurfaceVisibility();
         StatusLabel.Text = $"{_selectedAssets.Count} selected · Preview: {row.Name}";
-        _ = PresentAssetPreviewAsync(row);
-
-        var selectedRow = row;
-        try
-        {
-            var dump = await Task.Run(() => selectedRow.SourceAsset is AssetStudio.Object source
-                ? source.Dump() ?? "No serialized type tree is available for this asset."
-                : "No parsed asset data is available for this row.");
-            if (ReferenceEquals(_selectedAsset, selectedRow))
-                DumpText.Text = dump;
-        }
-        catch (Exception ex)
-        {
-            if (ReferenceEquals(_selectedAsset, selectedRow))
-                DumpText.Text = $"Could not create serialized dump: {ex.Message}";
-        }
+        _ = PresentAssetPreviewAsync(row, previewCancellation.Token);
     }
 
-    private async Task PresentAssetPreviewAsync(AssetRow row)
+    private async Task PresentAssetPreviewAsync(AssetRow row, CancellationToken cancellationToken = default)
     {
         if (!_previewEnabled)
             return;
@@ -3667,7 +3827,7 @@ public partial class MainPage : ContentPage
                 case AssetStudio.TextAsset text:
                     var script = text.m_Script;
                     var decoded = await Task.Run(() => Encoding.UTF8.GetString(script).Replace("\n", "\r\n").Replace("\0", ""));
-                    if (!IsActivePreview(row)) return;
+                    if (cancellationToken.IsCancellationRequested || !IsActivePreview(row)) return;
                     ShowTextPreview(row.Name, "TextAsset", decoded);
                     break;
                 case AssetStudio.Texture2D texture:
@@ -3682,14 +3842,14 @@ public partial class MainPage : ContentPage
                         // Desktop reports unsupported images instead of a generic preview error.
                         AssetErrorLog.Write("Texture preview", ex.Message);
                     }
-                    if (!IsActivePreview(row)) return;
+                    if (cancellationToken.IsCancellationRequested || !IsActivePreview(row)) return;
                     if (string.IsNullOrWhiteSpace(exportedPath))
                     {
                         StatusLabel.Text = "Unsupported image for preview";
                         break;
                     }
                     var (previewPath, temporaryPreview) = await ApplyTextureChannelMaskAsync(exportedPath);
-                    if (!IsActivePreview(row))
+                    if (cancellationToken.IsCancellationRequested || !IsActivePreview(row))
                     {
                         if (temporaryPreview) TryDeletePreviewFile(previewPath);
                         return;
@@ -3723,13 +3883,13 @@ public partial class MainPage : ContentPage
                     break;
                 case AssetStudio.MonoBehaviour behaviour:
                     var conversion = await Task.Run(() => _monoBehaviourAssemblyService.Convert(behaviour));
-                    if (!IsActivePreview(row)) return;
+                    if (cancellationToken.IsCancellationRequested || !IsActivePreview(row)) return;
                     if (conversion.Data != null)
                     {
                         var data = conversion.Data;
                         var json = await Task.Run(() => Newtonsoft.Json.JsonConvert.SerializeObject(
                             data, Newtonsoft.Json.Formatting.Indented));
-                        if (!IsActivePreview(row)) return;
+                        if (cancellationToken.IsCancellationRequested || !IsActivePreview(row)) return;
                         ShowTextPreview(
                             row.Name,
                             conversion.AssemblyAssisted ? "MonoBehaviour · assembly-assisted" : "MonoBehaviour",
@@ -3767,7 +3927,7 @@ public partial class MainPage : ContentPage
                     break;
                 case AssetStudio.Shader shader:
                     var shaderSource = await Task.Run(() => AssetStudio.ShaderConverter.Convert(shader));
-                    if (!IsActivePreview(row)) return;
+                    if (cancellationToken.IsCancellationRequested || !IsActivePreview(row)) return;
                     if (string.IsNullOrEmpty(shaderSource))
                     {
                         ShowTextPreview(row.Name, "Shader source", "Serialized Shader can't be read");
@@ -3788,7 +3948,7 @@ public partial class MainPage : ContentPage
                         // Desktop reports unsupported sprites instead of a generic preview error.
                         AssetErrorLog.Write("Sprite preview", ex.Message);
                     }
-                    if (!IsActivePreview(row)) return;
+                    if (cancellationToken.IsCancellationRequested || !IsActivePreview(row)) return;
                     if (string.IsNullOrWhiteSpace(spriteImage))
                     {
                         StatusLabel.Text = "Unsupported sprite for preview.";
@@ -3801,30 +3961,33 @@ public partial class MainPage : ContentPage
                 case AssetStudio.VideoClip video:
                     ShowVideoClipPreview(row.Name, video);
                     break;
+                case AssetStudio.MonoScript monoScript:
+                    ShowMonoScriptPreview(row, monoScript);
+                    break;
                 case AssetStudio.MovieTexture:
-                    await ShowAssetDumpOrSummaryAsync(row,
+                    await ShowAssetDumpOrSummaryAsync(row, cancellationToken,
                         "Movie data is available through Export in its stored OGV format.");
                     StatusLabel.Text = "Only supported export.";
                     break;
                 case AssetStudio.Animator:
-                    await ShowAssetDumpOrSummaryAsync(row,
+                    await ShowAssetDumpOrSummaryAsync(row, cancellationToken,
                         "Animator clips can be exported with the selected Animator or scene objects.");
                     StatusLabel.Text = "Can be exported to FBX file.";
                     break;
                 case AssetStudio.AnimationClip:
-                    await ShowAssetDumpOrSummaryAsync(row,
+                    await ShowAssetDumpOrSummaryAsync(row, cancellationToken,
                         "AnimationClip data can be exported with an Animator or selected scene objects.");
                     StatusLabel.Text = "Can be exported with Animator or Objects";
                     break;
                 default:
-                    await ShowAssetDumpOrSummaryAsync(row,
+                    await ShowAssetDumpOrSummaryAsync(row, cancellationToken,
                         "Use the Dump tab to inspect serialized fields when available, or Export to save this asset.");
                     break;
             }
         }
         catch (Exception ex)
         {
-            if (!IsActivePreview(row)) return;
+            if (cancellationToken.IsCancellationRequested || !IsActivePreview(row)) return;
             ShowUnsupportedPreview(row.Name, row.Type,
                 $"Preview {row.Type}:{row.Name} error\r\n{ex.Message}\r\n{ex.StackTrace}");
         }
@@ -4115,18 +4278,64 @@ public partial class MainPage : ContentPage
     }
 #endif
 
-    private async Task ShowAssetDumpOrSummaryAsync(AssetRow row, string details)
+    private void ShowMonoScriptPreview(AssetRow row, AssetStudio.MonoScript script)
     {
-        var dump = row.SourceAsset is AssetStudio.Object asset
-            ? await Task.Run(() => asset.Dump())
-            : null;
-        if (_selectedAsset?.Id != row.Id)
+        var content = new StringBuilder()
+            .AppendLine("MonoScript / managed script reference")
+            .AppendLine()
+            .Append("Name: ").AppendLine(script.m_Name)
+            .Append("Class: ").AppendLine(string.IsNullOrWhiteSpace(script.m_ClassName) ? "(unknown)" : script.m_ClassName)
+            .Append("Namespace: ").AppendLine(string.IsNullOrWhiteSpace(script.m_Namespace) ? "(none)" : script.m_Namespace)
+            .Append("Assembly: ").AppendLine(string.IsNullOrWhiteSpace(script.m_AssemblyName) ? "(unknown)" : script.m_AssemblyName)
+            .Append("Serialized type tree: ")
+            .AppendLine(script.serializedType?.m_Type == null ? "not available" : "available")
+            .AppendLine()
+            .AppendLine("The script's managed DLL can be loaded from the MonoBehaviour preview to decode objects that reference this script.");
+        ShowTextPreview(row.Name, "MonoScript", content.ToString(), BuildAssetSummary(row));
+        StatusLabel.Text = $"MonoScript: {script.m_ClassName}";
+    }
+
+    // Most Unity asset types have no dedicated visual preview. Show useful
+    // metadata immediately, then append a bounded serialized dump in the
+    // background so large files never block the UI thread.
+    private async Task ShowAssetDumpOrSummaryAsync(
+        AssetRow row,
+        CancellationToken cancellationToken,
+        string details)
+    {
+        var summary = BuildAssetSummary(row);
+        ShowTextPreview(row.Name, $"{row.Type} preview",
+            "Building serialized preview…\n\n" + summary, details);
+
+        if (row.SourceAsset is not AssetStudio.Object asset)
             return;
 
-        if (!string.IsNullOrWhiteSpace(dump))
-            ShowTextPreview(row.Name, $"{row.Type} serialized data", dump, details);
-        else
-            ShowTextPreview(row.Name, $"{row.Type} details", BuildAssetSummary(row), details);
+        var dump = await Task.Run(() =>
+        {
+            try
+            {
+                return asset.Dump();
+            }
+            catch
+            {
+                return null;
+            }
+        }, cancellationToken);
+        if (cancellationToken.IsCancellationRequested || !IsActivePreview(row))
+            return;
+
+        if (string.IsNullOrWhiteSpace(dump))
+        {
+            ShowTextPreview(row.Name, $"{row.Type} details", summary, details);
+            return;
+        }
+
+        const int maxPreviewCharacters = 200_000;
+        var text = dump.Length <= maxPreviewCharacters
+            ? dump
+            : dump[..maxPreviewCharacters] +
+              $"\n\n… preview truncated ({dump.Length:N0} characters total). Use the Dump tab or Export for the full data.";
+        ShowTextPreview(row.Name, $"{row.Type} serialized data", text, details);
     }
 
     private static string BuildAssetSummary(AssetRow row)
@@ -4530,6 +4739,7 @@ public partial class MainPage : ContentPage
 #if IOS || MACCATALYST || ANDROID || WINDOWS
         StopPreviewAudio();
 #endif
+        _previewCancellation?.Cancel();
         _selectedAsset = null;
         _selectedAssets.Clear();
         _showingEmptyPreview = true;
@@ -4539,6 +4749,7 @@ public partial class MainPage : ContentPage
         PreviewDetails.Text = "Select an asset to inspect it.";
         DumpText.Text = "Select an asset to view its dump.";
         _showingDump = false;
+        UpdateLive2DAvailability();
         RefreshPreviewSurfaceVisibility();
     }
 
@@ -4582,8 +4793,7 @@ public partial class MainPage : ContentPage
         };
         if (_classSortDescending) filtered = filtered.Reverse();
         var selectedClass = ClassesCollection?.SelectedItem as ClassRow;
-        _visibleClasses.Clear();
-        foreach (var item in filtered) _visibleClasses.Add(item);
+        _visibleClasses.ResetWith(filtered);
         RefreshClassGroups();
         if (selectedClass != null && _visibleClasses.Contains(selectedClass))
             ClassesCollection.SelectedItem = selectedClass;
@@ -4600,13 +4810,10 @@ public partial class MainPage : ContentPage
     // CollectionView gets the same headers without WinForms ListViewGroup.
     private void RefreshClassGroups()
     {
-        _visibleClassGroups.Clear();
-        foreach (var group in _visibleClasses.GroupBy(
+        _visibleClassGroups.ResetWith(_visibleClasses.GroupBy(
             item => string.IsNullOrWhiteSpace(item.Version) ? "(unknown version)" : item.Version,
-            StringComparer.OrdinalIgnoreCase))
-        {
-            _visibleClassGroups.Add(new ClassGroup(group.Key, group));
-        }
+            StringComparer.OrdinalIgnoreCase)
+            .Select(group => new ClassGroup(group.Key, group)));
     }
 
     private static long ParseClassId(string value) => long.TryParse(value, out var id) ? id : long.MaxValue;
@@ -4627,19 +4834,25 @@ public partial class MainPage : ContentPage
     private void OnClassSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (e.CurrentSelection.FirstOrDefault() is not ClassRow item) return;
-        _showingEmptyPreview = false;
-        PreviewTitle.Text = $"{item.Name} ({item.Id})";
-        PreviewKind.Text = $"Class ID: {item.Id} · {item.Version}";
-        // Desktop shows the serialized type tree in the Preview tab, not Dump.
-        PreviewDetails.Text = string.IsNullOrWhiteSpace(item.StructureText)
+        var text = string.IsNullOrWhiteSpace(item.StructureText)
             ? string.IsNullOrWhiteSpace(item.Summary)
-                ? $"No type-tree structure was supplied for {item.Name}.\n\nClass ID: {item.Id}\nVersion: {item.Version}"
-                : item.Summary
+                ? $"No type-tree structure was supplied for {item.Name}.\n\nClass ID: {item.Id}\nUnity version: {item.Version}"
+                : item.Summary + $"\n\nClass ID: {item.Id}\nUnity version: {item.Version}"
             : item.StructureText;
-        DumpText.Text = string.IsNullOrWhiteSpace(item.StructureText)
-            ? $"No type-tree structure was supplied for {item.Name}.\n\nClass ID: {item.Id}\nVersion: {item.Version}"
-            : item.StructureText;
-        OnPreviewTabClicked(this, EventArgs.Empty);
+        // Do not let a still-running asset preview overwrite the class tree.
+        _previewCancellation?.Cancel();
+        DumpText.Text = text;
+        _showingDump = false;
+        _showingEmptyPreview = false;
+        // Desktop shows the serialized type tree in the Preview tab, not Dump.
+        ShowTextPreview(
+            $"{item.Name} ({item.Id})",
+            $"Class ID: {item.Id} · {item.Version}",
+            text,
+            item.Summary);
+        ScriptAssemblyActionsRow.IsVisible = false;
+        Live2DButton.IsVisible = false;
+        ShowPreviewPaneForCurrentSelection(presentSelectedAsset: false);
         StatusLabel.Text = $"Selected class: {item.Name} ({item.Id})";
     }
 

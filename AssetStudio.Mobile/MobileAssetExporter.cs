@@ -2209,6 +2209,7 @@ internal static class MobileAssetExporter
             VideoClip video => ExportVideo(video, cancellationToken),
             MonoBehaviour behaviour => ExportMonoBehaviour(
                 behaviour, cancellationToken, monoBehaviourAssemblyService),
+            MonoScript script => ExportMonoScript(script),
             AnimationClip animationClip => ExportAnimationClip(
                 animationClip, cancellationToken, animationPathBindings),
             Mesh mesh => (Encoding.UTF8.GetBytes(ExportObj(mesh, cancellationToken)), ".obj"),
@@ -2283,6 +2284,19 @@ internal static class MobileAssetExporter
         var path = Path.Combine(FileSystem.CacheDirectory, $"AssetStudio_Classes_{Guid.NewGuid():N}.xml");
         document.Save(path);
         return path;
+    }
+
+    private static (byte[] Data, string Extension) ExportMonoScript(MonoScript script)
+    {
+        var data = JsonConvert.SerializeObject(new
+        {
+            name = script.m_Name,
+            className = script.m_ClassName,
+            namespaceName = script.m_Namespace,
+            assemblyName = script.m_AssemblyName,
+            serializedTypeTreeAvailable = script.serializedType?.m_Type != null
+        }, Formatting.Indented);
+        return (Encoding.UTF8.GetBytes(data), ".json");
     }
 
     private static (byte[] Data, string Extension) ExportFont(AssetStudio.Font font)

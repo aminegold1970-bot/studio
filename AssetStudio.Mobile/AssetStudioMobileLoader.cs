@@ -468,6 +468,9 @@ public sealed class AssetStudioMobileLoader : IDisposable
             MonoBehaviour behaviour when string.IsNullOrWhiteSpace(behaviour.m_Name)
                 && behaviour.m_Script.TryGet(out var script) => script.m_ClassName,
             MonoBehaviour behaviour => behaviour.m_Name,
+            MonoScript script => string.IsNullOrWhiteSpace(script.m_ClassName)
+                ? script.m_Name
+                : script.m_ClassName,
             PlayerSettings settings => settings.productName,
             NamedObject named => named.m_Name,
             _ => null
@@ -490,7 +493,8 @@ public sealed class AssetStudioMobileLoader : IDisposable
 
     private static bool IsExportable(AssetStudio.Object asset) =>
         asset is Texture2D or AudioClip or VideoClip or Shader or Mesh or TextAsset
-            or AnimationClip or AssetStudio.Font or MovieTexture or Sprite or Animator or MonoBehaviour;
+            or AnimationClip or AssetStudio.Font or MovieTexture or Sprite or Animator
+            or MonoBehaviour or MonoScript;
 
     private sealed record BrowseSnapshot(
         List<MainPage.AssetRow> Assets,
