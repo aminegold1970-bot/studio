@@ -29,13 +29,13 @@ internal sealed class TextureChannelsPage : ContentPage
 
         _apply = apply ?? throw new ArgumentNullException(nameof(apply));
         Title = "Texture channels";
-        BackgroundColor = Color.FromArgb("#FFFFFF");
+        BackgroundColor = AssetStudioTheme.FromHex("#FFFFFF");
 
         var layout = new VerticalStackLayout { Padding = 16, Spacing = 12 };
         layout.Children.Add(new Label
         {
             Text = "Choose which decoded channels are visible in the preview:",
-            TextColor = Color.FromArgb("#202020"),
+            TextColor = AssetStudioTheme.FromHex("#202020"),
             FontSize = 13
         });
 
@@ -44,7 +44,7 @@ internal sealed class TextureChannelsPage : ContentPage
             _checks[index] = new CheckBox
             {
                 IsChecked = channels[index],
-                Color = Color.FromArgb("#2878C8"),
+                Color = AssetStudioTheme.FromHex("#2878C8"),
                 MinimumWidthRequest = 24,
                 MinimumHeightRequest = 24
             };
@@ -57,7 +57,7 @@ internal sealed class TextureChannelsPage : ContentPage
                     new Label
                     {
                         Text = ChannelLabels[index],
-                        TextColor = Color.FromArgb("#202020"),
+                        TextColor = AssetStudioTheme.FromHex("#202020"),
                         FontSize = 13,
                         VerticalTextAlignment = TextAlignment.Center
                     }

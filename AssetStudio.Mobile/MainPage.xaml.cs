@@ -38,7 +38,8 @@ public partial class MainPage : ContentPage
     private static readonly IReadOnlyDictionary<string, int[]> MenuSeparatorIndices =
         new Dictionary<string, int[]>(StringComparer.Ordinal)
         {
-            ["File"] = new[] { 1 },
+            ["File"] = new[] { 2 },
+            ["Recent files"] = Array.Empty<int>(),
             ["Export"] = new[] { 2, 3, 5 },
             ["Model"] = new[] { 2, 4 }
         };
@@ -52,7 +53,8 @@ public partial class MainPage : ContentPage
                 "Toggle the loading and preview of readable assets, such as images, sounds, text, etc.\r\n" +
                 "Disable preview if you have performance or compatibility issues.",
             ["Display asset infromation"] =
-                "Toggle the overlay that shows information about each asset, eg. image size, format, audio bitrate, etc."
+                "Toggle the overlay that shows information about each asset, eg. image size, format, audio bitrate, etc.",
+            ["Night mode"] = "Use the dark color theme. The setting is remembered after the app closes."
         };
 
     private CancellationTokenSource? _loadCancellation;
@@ -150,6 +152,7 @@ public partial class MainPage : ContentPage
         _previewEnabled = Preferences.Get("AssetStudio.EnablePreview", true);
         _displayAssetInformation = Preferences.Get("AssetStudio.DisplayAssetInformation", true);
         _showErrorMessages = Preferences.Get("AssetStudio.ShowErrorMessages", true);
+        _nightMode = Preferences.Get("AssetStudio.NightMode", false);
         PreviewDetails.IsVisible = _displayAssetInformation;
         // Desktop loads every export option from settings at startup, including
         // the default export kind and the type-name grouping default.
@@ -172,9 +175,9 @@ public partial class MainPage : ContentPage
         BindableLayout.SetItemsSource(MetadataHost, _metadataRows);
         BindableLayout.SetItemTemplate(MetadataHost, new DataTemplate(() =>
         {
-            var key = new Label { TextColor = Color.FromArgb("#777777"), FontSize = 11 };
+            var key = new Label { TextColor = AssetStudioTheme.FromHex("#777777"), FontSize = 11 };
             key.SetBinding(Label.TextProperty, nameof(MetadataRow.Key));
-            var value = new Label { TextColor = Color.FromArgb("#202020"), FontSize = 11, HorizontalTextAlignment = TextAlignment.End };
+            var value = new Label { TextColor = AssetStudioTheme.FromHex("#202020"), FontSize = 11, HorizontalTextAlignment = TextAlignment.End };
             value.SetBinding(Label.TextProperty, nameof(MetadataRow.Value));
             var row = new Grid { ColumnDefinitions = { new ColumnDefinition(GridLength.Star), new ColumnDefinition(new GridLength(1.2, GridUnitType.Star)) }, Padding = new Thickness(2, 5), ColumnSpacing = 8 };
             row.Add(key); row.Add(value, 1);
@@ -318,11 +321,11 @@ public partial class MainPage : ContentPage
         var selectedTab = _showingPreviewPane
             ? (_showingDump ? "Dump" : "Preview")
             : _browserTab;
-        SceneWorkspaceTab.BackgroundColor = selectedTab == "Scene Hierarchy" ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
-        AssetsWorkspaceTab.BackgroundColor = selectedTab == "Asset List" ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
-        ClassesWorkspaceTab.BackgroundColor = selectedTab == "Asset Classes" ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
-        PreviewWorkspaceTab.BackgroundColor = selectedTab == "Preview" ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
-        DumpWorkspaceTab.BackgroundColor = selectedTab == "Dump" ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
+        SceneWorkspaceTab.BackgroundColor = selectedTab == "Scene Hierarchy" ? AssetStudioTheme.FromHex("#FFFFFF") : AssetStudioTheme.FromHex("#E2E2E2");
+        AssetsWorkspaceTab.BackgroundColor = selectedTab == "Asset List" ? AssetStudioTheme.FromHex("#FFFFFF") : AssetStudioTheme.FromHex("#E2E2E2");
+        ClassesWorkspaceTab.BackgroundColor = selectedTab == "Asset Classes" ? AssetStudioTheme.FromHex("#FFFFFF") : AssetStudioTheme.FromHex("#E2E2E2");
+        PreviewWorkspaceTab.BackgroundColor = selectedTab == "Preview" ? AssetStudioTheme.FromHex("#FFFFFF") : AssetStudioTheme.FromHex("#E2E2E2");
+        DumpWorkspaceTab.BackgroundColor = selectedTab == "Dump" ? AssetStudioTheme.FromHex("#FFFFFF") : AssetStudioTheme.FromHex("#E2E2E2");
     }
 
     private void OnWorkspaceDividerPanUpdated(object? sender, PanUpdatedEventArgs e)
@@ -527,6 +530,7 @@ public partial class MainPage : ContentPage
         try
         {
             await _assetLoader.LoadFilesAsync(selected, progress, cancellation.Token);
+            RecentImportsStore.AddFiles(selected);
             SetBusy(false, BuildDesktopLoadStatus(sourceLabel));
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
@@ -573,6 +577,7 @@ public partial class MainPage : ContentPage
         try
         {
             await _assetLoader.LoadFolderAsync(folderPath, progress, cancellation.Token);
+            RecentImportsStore.AddFolder(folderPath);
             SetBusy(false, BuildDesktopLoadStatus(sourceLabel));
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
@@ -1297,8 +1302,8 @@ public partial class MainPage : ContentPage
     private void SetAudioLoopVisualState()
     {
         AudioLoopButton.Text = "Loop";
-        AudioLoopButton.BackgroundColor = _audioLoopEnabled ? Color.FromArgb("#2878C8") : Color.FromArgb("#E8E8E8");
-        AudioLoopButton.TextColor = _audioLoopEnabled ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#202020");
+        AudioLoopButton.BackgroundColor = _audioLoopEnabled ? AssetStudioTheme.FromHex("#2878C8") : AssetStudioTheme.FromHex("#E8E8E8");
+        AudioLoopButton.TextColor = _audioLoopEnabled ? AssetStudioTheme.FromHex("#FFFFFF") : AssetStudioTheme.FromHex("#202020");
     }
 
     private void OnAudioPlayClicked(object sender, EventArgs e) => AudioPlayRequested?.Invoke(this, EventArgs.Empty);
@@ -1322,6 +1327,7 @@ public partial class MainPage : ContentPage
     private bool _previewEnabled = true;
     private bool _displayAssetInformation = true;
     private bool _showErrorMessages = true;
+    private bool _nightMode;
 
     // Always persist the error, even when popups are off. The Debug toggle only
     // controls whether the user also sees the message immediately.
@@ -1344,7 +1350,7 @@ public partial class MainPage : ContentPage
     {
         _menuAnchor = sender as Button;
         // The desktop Load file command uses a multi-select OpenFileDialog.
-        var choice = await Choose("File", "Load file", "Load folder",
+        var choice = await Choose("File", "Load file", "Load folder", "Recent files",
             "Extract file", "Extract folder");
         if (choice == null) return;
 
@@ -1356,6 +1362,9 @@ public partial class MainPage : ContentPage
             case "Load folder":
                 await PickAssetFolderAsync();
                 break;
+            case "Recent files":
+                await OpenRecentFilesMenuAsync();
+                break;
             case "Extract file":
                 await ExtractFilesAsync();
                 break;
@@ -1363,6 +1372,46 @@ public partial class MainPage : ContentPage
                 await ExtractFolderAsync();
                 break;
         }
+    }
+
+    private async Task OpenRecentFilesMenuAsync()
+    {
+        var recent = RecentImportsStore.Load();
+        if (recent.Count == 0)
+        {
+            StatusLabel.Text = "No recent files.";
+            return;
+        }
+
+        _menuAnchor = null;
+        var labels = recent
+            .Select(entry => entry.IsFolder ? $"{entry.DisplayName} (folder)" : entry.DisplayName)
+            .ToArray();
+        var choice = await Choose("Recent files", labels);
+        if (choice == null) return;
+        var index = Array.IndexOf(labels, choice);
+        if (index < 0 || index >= recent.Count) return;
+        var entry = recent[index];
+
+        if (entry.IsFolder)
+        {
+            if (!Directory.Exists(entry.Path))
+            {
+                RecentImportsStore.Remove(entry);
+                StatusLabel.Text = "The recent folder is no longer available.";
+                return;
+            }
+            await LoadPersistentFolderAsync(entry.Path, "Recent folder");
+            return;
+        }
+
+        if (!File.Exists(entry.Path))
+        {
+            RecentImportsStore.Remove(entry);
+            StatusLabel.Text = "The recent file is no longer available.";
+            return;
+        }
+        await LoadPersistentFilesAsync(new[] { new FileResult(entry.Path) }, "Recent file");
     }
 
     private async Task<List<FileResult>> PickFilesForExtractionAsync(
@@ -1686,7 +1735,7 @@ public partial class MainPage : ContentPage
         AssetSearch.Text = string.Empty;
         ClassSearch.Text = string.Empty;
         HierarchySearch.Text = HierarchySearchPlaceholder;
-        HierarchySearch.TextColor = Color.FromArgb("#777777");
+        HierarchySearch.TextColor = AssetStudioTheme.FromHex("#777777");
         _suppressFilterTextChanged = false;
         AssetCollection.SelectedItems.Clear();
         _hierarchy.Clear();
@@ -1789,10 +1838,13 @@ public partial class MainPage : ContentPage
             checkedOptions.Add("Enable preview");
         if (_displayAssetInformation)
             checkedOptions.Add("Display asset infromation");
+        if (_nightMode)
+            checkedOptions.Add("Night mode");
         var choice = await Choose("Options", checkedOptions, OptionMenuHints,
             "Display all assets",
             "Enable preview",
             "Display asset infromation",
+            "Night mode",
             "Specify Unity version",
             "Export options");
         if (choice == null) return;
@@ -1824,6 +1876,15 @@ public partial class MainPage : ContentPage
                 Preferences.Set("AssetStudio.DisplayAssetInformation", _displayAssetInformation);
                 PreviewDetails.IsVisible = _displayAssetInformation;
                 MetadataFrame.IsVisible = _displayAssetInformation && _metadataRows.Count > 0;
+                break;
+            case "Night mode":
+                _nightMode = !_nightMode;
+                Preferences.Set("AssetStudio.NightMode", _nightMode);
+                if (Application.Current != null)
+                    Application.Current.UserAppTheme = _nightMode ? AppTheme.Dark : AppTheme.Light;
+                RefreshWorkspaceTabs();
+                RefreshBrowserTab();
+                RefreshPreviewSurfaceVisibility();
                 break;
             case "Specify Unity version":
                 await SpecifyUnityVersionAsync();
@@ -2564,7 +2625,7 @@ public partial class MainPage : ContentPage
         var check = new Label
         {
             Text = IsFilterTypeChecked(option) ? "✓" : string.Empty,
-            TextColor = Color.FromArgb("#202020"),
+            TextColor = AssetStudioTheme.FromHex("#202020"),
             FontSize = 12,
             FontAutoScalingEnabled = false,
             VerticalTextAlignment = TextAlignment.Center,
@@ -2573,7 +2634,7 @@ public partial class MainPage : ContentPage
         var label = new Label
         {
             Text = option,
-            TextColor = Color.FromArgb("#202020"),
+            TextColor = AssetStudioTheme.FromHex("#202020"),
             FontSize = 12,
             FontAutoScalingEnabled = false,
             VerticalTextAlignment = TextAlignment.Center,
@@ -2844,7 +2905,7 @@ public partial class MainPage : ContentPage
             content.Add(new Label
             {
                 Text = checkedOptions.Contains(option, StringComparer.Ordinal) ? "✓" : string.Empty,
-                TextColor = Color.FromArgb("#202020"),
+                TextColor = AssetStudioTheme.FromHex("#202020"),
                 FontSize = 12,
                 FontAutoScalingEnabled = false,
                 VerticalTextAlignment = TextAlignment.Center,
@@ -2854,7 +2915,7 @@ public partial class MainPage : ContentPage
             content.Add(new Label
             {
                 Text = option,
-                TextColor = Color.FromArgb("#202020"),
+                TextColor = AssetStudioTheme.FromHex("#202020"),
                 FontSize = 12,
                 FontAutoScalingEnabled = false,
                 VerticalTextAlignment = TextAlignment.Center,
@@ -2866,7 +2927,7 @@ public partial class MainPage : ContentPage
                 content.Add(new Label
                 {
                     Text = "▸",
-                    TextColor = Color.FromArgb("#555555"),
+                    TextColor = AssetStudioTheme.FromHex("#555555"),
                     FontSize = 12,
                     FontAutoScalingEnabled = false,
                     VerticalTextAlignment = TextAlignment.Center,
@@ -2898,7 +2959,7 @@ public partial class MainPage : ContentPage
                 MenuOptionsHost.Children.Add(new BoxView
                 {
                     HeightRequest = 1,
-                    BackgroundColor = Color.FromArgb("#B7B7B7")
+                    BackgroundColor = AssetStudioTheme.FromHex("#B7B7B7")
                 });
         }
 
@@ -2933,7 +2994,7 @@ public partial class MainPage : ContentPage
             content.Add(new Label
             {
                 Text = option,
-                TextColor = Color.FromArgb("#202020"),
+                TextColor = AssetStudioTheme.FromHex("#202020"),
                 FontSize = 12,
                 FontAutoScalingEnabled = false,
                 VerticalTextAlignment = TextAlignment.Center,
@@ -3042,9 +3103,9 @@ public partial class MainPage : ContentPage
 
     private void RefreshBrowserTab()
     {
-        HierarchyTab.BackgroundColor = _browserTab == "Scene Hierarchy" ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
-        AssetListTab.BackgroundColor = _browserTab == "Asset List" ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
-        ClassesTab.BackgroundColor = _browserTab == "Asset Classes" ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
+        HierarchyTab.BackgroundColor = _browserTab == "Scene Hierarchy" ? AssetStudioTheme.FromHex("#FFFFFF") : AssetStudioTheme.FromHex("#E2E2E2");
+        AssetListTab.BackgroundColor = _browserTab == "Asset List" ? AssetStudioTheme.FromHex("#FFFFFF") : AssetStudioTheme.FromHex("#E2E2E2");
+        ClassesTab.BackgroundColor = _browserTab == "Asset Classes" ? AssetStudioTheme.FromHex("#FFFFFF") : AssetStudioTheme.FromHex("#E2E2E2");
         AssetCollection.IsVisible = _browserTab == "Asset List";
         HierarchyCollection.IsVisible = _browserTab == "Scene Hierarchy";
         ClassesCollection.IsVisible = _browserTab == "Asset Classes";
@@ -3199,7 +3260,7 @@ public partial class MainPage : ContentPage
         if (!string.Equals(HierarchySearch.Text, HierarchySearchPlaceholder, StringComparison.Ordinal))
             return;
         HierarchySearch.Text = string.Empty;
-        HierarchySearch.TextColor = Color.FromArgb("#202020");
+        HierarchySearch.TextColor = AssetStudioTheme.FromHex("#202020");
     }
 
     private void OnHierarchySearchUnfocused(object sender, FocusEventArgs e)
@@ -3207,7 +3268,7 @@ public partial class MainPage : ContentPage
         if (!string.IsNullOrEmpty(HierarchySearch.Text))
             return;
         HierarchySearch.Text = HierarchySearchPlaceholder;
-        HierarchySearch.TextColor = Color.FromArgb("#777777");
+        HierarchySearch.TextColor = AssetStudioTheme.FromHex("#777777");
     }
 
     private void OnHierarchySearchTextChanged(object sender, TextChangedEventArgs e)
@@ -4290,8 +4351,8 @@ public partial class MainPage : ContentPage
     private static NavigationPage CreateModalNavigationPage(Page page) =>
         new(page)
         {
-            BarBackgroundColor = Color.FromArgb("#E2E2E2"),
-            BarTextColor = Color.FromArgb("#202020")
+            BarBackgroundColor = AssetStudioTheme.FromHex("#E2E2E2"),
+            BarTextColor = AssetStudioTheme.FromHex("#202020")
         };
 
     // Returns the current multi-selection in CollectionView order.
@@ -4324,8 +4385,8 @@ public partial class MainPage : ContentPage
         PreviewEmptyLabel.Text = _previewEnabled
             ? "Select an asset\nto preview"
             : "Preview disabled\nEnable it in Options to view assets";
-        PreviewTab.BackgroundColor = !_showingDump ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
-        DumpTab.BackgroundColor = _showingDump ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#E2E2E2");
+        PreviewTab.BackgroundColor = !_showingDump ? AssetStudioTheme.FromHex("#FFFFFF") : AssetStudioTheme.FromHex("#E2E2E2");
+        DumpTab.BackgroundColor = _showingDump ? AssetStudioTheme.FromHex("#FFFFFF") : AssetStudioTheme.FromHex("#E2E2E2");
     }
 
     private void OnHierarchySelectionChanged(object sender, SelectionChangedEventArgs e)

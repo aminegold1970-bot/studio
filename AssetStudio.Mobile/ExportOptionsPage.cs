@@ -47,7 +47,7 @@ internal sealed class ExportOptionsPage : ContentPage
 #if IOS
     private readonly Label _exportFolderValue = new()
     {
-        TextColor = Color.FromArgb("#202020"),
+        TextColor = AssetStudioTheme.FromHex("#202020"),
         FontSize = 12,
         LineBreakMode = LineBreakMode.TailTruncation,
         HorizontalTextAlignment = TextAlignment.End
@@ -59,7 +59,7 @@ internal sealed class ExportOptionsPage : ContentPage
         _source = settings ?? throw new ArgumentNullException(nameof(settings));
         _apply = apply ?? throw new ArgumentNullException(nameof(apply));
         Title = "Export options";
-        BackgroundColor = Color.FromArgb("#FFFFFF");
+        BackgroundColor = AssetStudioTheme.FromHex("#FFFFFF");
 
         ConfigurePicker(_imageFormat, ImageFormatLabels, ImageIndex(_source.TextureFormat));
         ConfigurePicker(_grouping, GroupingLabels, (int)_source.ArchiveGrouping);
@@ -94,7 +94,7 @@ internal sealed class ExportOptionsPage : ContentPage
         layout.Children.Add(new Label
         {
             Text = "Mobile converts PCM, Vorbis/Ogg, IMA ADPCM, VAG and DSP ADPCM to WAV. MP3/AAC use native playback; other codecs stay as original embedded data. Desktop FMOD conversion is not available on iOS.",
-            TextColor = Color.FromArgb("#666666"),
+            TextColor = AssetStudioTheme.FromHex("#666666"),
             FontSize = 11,
             Margin = new Thickness(0, 4, 0, 8)
         });
@@ -106,7 +106,7 @@ internal sealed class ExportOptionsPage : ContentPage
         layout.Children.Add(new Label
         {
             Text = "Choose a folder in Files to set the export destination. Cross-app drag and drop is iPad-only; iPhone uses this picker.",
-            TextColor = Color.FromArgb("#666666"),
+            TextColor = AssetStudioTheme.FromHex("#666666"),
             FontSize = 11,
             Margin = new Thickness(0, 2, 0, 4)
         });
@@ -128,7 +128,7 @@ internal sealed class ExportOptionsPage : ContentPage
         layout.Children.Add(new Label
         {
             Text = "On mobile this also opens the share sheet. Exports are saved to the dropped export folder, or Files → AssetStudio → Exports on iPhone.",
-            TextColor = Color.FromArgb("#666666"),
+            TextColor = AssetStudioTheme.FromHex("#666666"),
             FontSize = 11,
             Margin = new Thickness(0, 4, 0, 6)
         });
@@ -155,7 +155,7 @@ internal sealed class ExportOptionsPage : ContentPage
         layout.Children.Add(new Label
         {
             Text = "The iOS static FBX exporter applies format and baked-pose options. Animation, Euler and skeleton values are stored for desktop-equivalent settings parity.",
-            TextColor = Color.FromArgb("#666666"),
+            TextColor = AssetStudioTheme.FromHex("#666666"),
             FontSize = 11,
             Margin = new Thickness(0, 4, 0, 8)
         });
@@ -175,7 +175,7 @@ internal sealed class ExportOptionsPage : ContentPage
     private static Label Heading(string text) => new()
     {
         Text = text,
-        TextColor = Color.FromArgb("#202020"),
+        TextColor = AssetStudioTheme.FromHex("#202020"),
         FontAttributes = FontAttributes.Bold,
         FontSize = 14,
         Margin = new Thickness(0, 10, 0, 4)
@@ -248,7 +248,7 @@ internal sealed class ExportOptionsPage : ContentPage
     private static Label CreateRowLabel(string text) => new()
     {
         Text = text,
-        TextColor = Color.FromArgb("#202020"),
+        TextColor = AssetStudioTheme.FromHex("#202020"),
         FontSize = 12,
         VerticalTextAlignment = TextAlignment.Center
     };

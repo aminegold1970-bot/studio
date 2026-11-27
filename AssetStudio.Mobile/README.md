@@ -39,7 +39,7 @@ On iPhone, **File → Load folder** opens the native Files folder picker and imp
 
 When audio conversion is enabled, embedded Unity PCM and Vorbis clips are exported as WAV; Vorbis is decoded to 16-bit PCM. MP3 and AAC remain in their original encoded formats for native playback. Other codecs are preserved as original data and are not decoded by the mobile player.
 
-The **Display all assets**, **Enable preview**, and **Display asset information** options retain their state across launches and show their current state in the Options menu. Disabling previews stops preview generation and playback while keeping the serialized Dump view available.
+The **Display all assets**, **Enable preview**, **Display asset information**, and **Night mode** options retain their state across launches and show their current state in the Options menu. Disabling previews stops preview generation and playback while keeping the serialized Dump view available. The last three loaded files or folders are listed under **File → Recent files** and reopen the cached import after a restart.
 
 VideoClip preview shows parsed metadata and includes an embedded player for streams supported by the device's media codecs. On iOS, selecting a clip with embedded video data also generates a thumbnail from the stream, using the native duration when available and the parsed frame count/rate as a fallback. Thumbnail generation is best-effort and never blocks playback or export. Playback controls and format support are platform-dependent. VideoClip export preserves the original path extension when available and otherwise detects common MP4/QuickTime, Ogg, WebM/Matroska, AVI, or MPEG containers. Unrecognized payloads retain the `.video` extension.
 
