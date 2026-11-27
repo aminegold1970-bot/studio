@@ -177,6 +177,7 @@ public partial class MainPage : ContentPage
         DroppedFilesReceived += OnDroppedFilesReceived;
         DropFailed += OnDropFailed;
         DropTargetChanged += OnDropTargetChanged;
+        ExportFolderDropped += OnExportFolderDropped;
 #if IOS
         Loaded += OnDropPageLoaded;
 #endif
@@ -426,9 +427,12 @@ public partial class MainPage : ContentPage
     public static event Action<IReadOnlyList<string>>? DroppedFilesReceived;
     public static event Action<string>? DropFailed;
     public static event Action<bool>? DropTargetChanged;
+    public static event Action<string, string>? ExportFolderDropped;
     public static void PublishDroppedFiles(IReadOnlyList<string> paths) => DroppedFilesReceived?.Invoke(paths);
     public static void PublishDropFailure(string message) => DropFailed?.Invoke(message);
     public static void PublishDropTargetChanged(bool isTargeted) => DropTargetChanged?.Invoke(isTargeted);
+    public static void PublishDroppedExportFolder(string bookmark, string displayName) =>
+        ExportFolderDropped?.Invoke(bookmark, displayName);
 
     private async void OnDroppedFilesReceived(IReadOnlyList<string> paths)
     {
@@ -476,6 +480,14 @@ public partial class MainPage : ContentPage
     {
         StatusLabel.Text = $"Drop failed: {message}";
         await ShowErrorAsync("Could not import dropped file", message);
+    }
+
+    private void OnExportFolderDropped(string bookmark, string displayName)
+    {
+#if IOS
+        IOSExportFolder.Set(bookmark, displayName);
+        StatusLabel.Text = $"Export folder set to {displayName}.";
+#endif
     }
 
     private void OnDropTargetChanged(bool isTargeted) =>
@@ -2655,14 +2667,23 @@ public partial class MainPage : ContentPage
         return string.IsNullOrWhiteSpace(cleaned) ? "unnamed" : cleaned;
     }
 
-    // Desktop exports always land in a chosen folder. Mobile cannot open that
-    // folder directly on iOS, so exports always land in Files → AssetStudio →
-    // Exports; "Open folder after export" additionally opens the share sheet.
+    // Desktop exports land in a chosen folder. On iPhone a folder dropped from
+    // Files becomes that chosen folder; otherwise exports land in the Files-visible
+    // Documents/AssetStudio/Exports folder. "Open folder after export" also opens
+    // the share sheet for the saved file.
     private async Task PresentExportResultAsync(string shareTitle, string outputPath, string status)
     {
+#if IOS
+        using var scopedFolder = IOSExportFolder.Resolve();
+        var exportDirectory = scopedFolder?.Path ?? GetDefaultExportDirectory();
+        var destination = scopedFolder?.DisplayName ?? "Files → AssetStudio → Exports";
+        var savedPath = CopyExportToFolder(outputPath, exportDirectory);
+#else
+        var destination = "Files → AssetStudio → Exports";
         var savedPath = CopyExportToDocuments(outputPath);
+#endif
         TryDeleteTemporaryExport(outputPath, savedPath);
-        var savedStatus = $"{status} Saved to Files → AssetStudio → Exports ({Path.GetFileName(savedPath)}).";
+        var savedStatus = $"{status} Saved to {destination} ({Path.GetFileName(savedPath)}).";
 
         if (_shareAfterExport)
         {
@@ -2699,10 +2720,14 @@ public partial class MainPage : ContentPage
         }
     }
 
-    private static string CopyExportToDocuments(string sourcePath)
+    private static string CopyExportToDocuments(string sourcePath) =>
+        CopyExportToFolder(sourcePath, GetDefaultExportDirectory());
+
+    private static string GetDefaultExportDirectory() => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "AssetStudio", "Exports");
+
+    private static string CopyExportToFolder(string sourcePath, string exportDirectory)
     {
-        var exportDirectory = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "AssetStudio", "Exports");
         Directory.CreateDirectory(exportDirectory);
         var fileName = Path.GetFileName(sourcePath);
         var destination = Path.Combine(exportDirectory, fileName);

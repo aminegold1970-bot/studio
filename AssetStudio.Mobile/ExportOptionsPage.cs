@@ -1,5 +1,9 @@
 using System.Globalization;
 using Microsoft.Maui.Controls;
+#if IOS
+using Microsoft.Maui.ApplicationModel;
+using UIKit;
+#endif
 using Color = Microsoft.Maui.Graphics.Color;
 
 namespace AssetStudioMobile;
@@ -40,6 +44,15 @@ internal sealed class ExportOptionsPage : ContentPage
     private readonly Picker _fbxFormat = new();
     private readonly Switch _bakeSkinPose = new();
     private readonly Switch _bakeBlendShapePose = new();
+#if IOS
+    private readonly Label _exportFolderValue = new()
+    {
+        TextColor = Color.FromArgb("#202020"),
+        FontSize = 12,
+        LineBreakMode = LineBreakMode.TailTruncation,
+        HorizontalTextAlignment = TextAlignment.End
+    };
+#endif
 
     public ExportOptionsPage(MobileExportSettings settings, Action<MobileExportSettings> apply)
     {
@@ -85,11 +98,27 @@ internal sealed class ExportOptionsPage : ContentPage
             FontSize = 11,
             Margin = new Thickness(0, 4, 0, 8)
         });
-        AddSwitch(layout, "Open folder after export", _shareAfterExport,
-            "On mobile this also opens the share sheet. Exports are always saved to Files → AssetStudio → Exports.");
+#if IOS
+        var exportFolderRow = CreateRow(GridLength.Auto);
+        exportFolderRow.Add(CreateRowLabel("Export folder"));
+        exportFolderRow.Add(_exportFolderValue, 1);
+        layout.Children.Add(exportFolderRow);
         layout.Children.Add(new Label
         {
-            Text = "On mobile this also opens the share sheet. Exports are always saved to Files → AssetStudio → Exports.",
+            Text = "On iPhone, drag a folder from the Files app onto this page to export into it.",
+            TextColor = Color.FromArgb("#666666"),
+            FontSize = 11,
+            Margin = new Thickness(0, 2, 0, 6)
+        });
+        RefreshExportFolderLabel();
+        Appearing += OnExportOptionsAppearing;
+        Disappearing += OnExportOptionsDisappearing;
+#endif
+        AddSwitch(layout, "Open folder after export", _shareAfterExport,
+            "On mobile this also opens the share sheet. Exports are saved to the dropped export folder, or Files → AssetStudio → Exports on iPhone.");
+        layout.Children.Add(new Label
+        {
+            Text = "On mobile this also opens the share sheet. Exports are saved to the dropped export folder, or Files → AssetStudio → Exports on iPhone.",
             TextColor = Color.FromArgb("#666666"),
             FontSize = 11,
             Margin = new Thickness(0, 4, 0, 6)
@@ -236,6 +265,47 @@ internal sealed class ExportOptionsPage : ContentPage
 
     private void OnConvertTexturesToggled(object? sender, ToggledEventArgs e) =>
         _imageFormat.IsEnabled = e.Value;
+
+#if IOS
+    private void OnExportOptionsAppearing(object? sender, EventArgs e)
+    {
+        AssetStudioDropBridge.ExportDropTargetActive = true;
+        MainPage.ExportFolderDropped += OnMainExportFolderDropped;
+        RefreshExportFolderLabel();
+        MainThread.BeginInvokeOnMainThread(AttachExportFolderDropTarget);
+    }
+
+    private void OnExportOptionsDisappearing(object? sender, EventArgs e)
+    {
+        AssetStudioDropBridge.ExportDropTargetActive = false;
+        MainPage.ExportFolderDropped -= OnMainExportFolderDropped;
+    }
+
+    private void OnMainExportFolderDropped(string bookmark, string displayName) =>
+        RefreshExportFolderLabel();
+
+    protected override void OnHandlerChanged()
+    {
+        base.OnHandlerChanged();
+        if (AssetStudioDropBridge.ExportDropTargetActive)
+            MainThread.BeginInvokeOnMainThread(AttachExportFolderDropTarget);
+    }
+
+    private void AttachExportFolderDropTarget()
+    {
+        if (!AssetStudioDropBridge.ExportDropTargetActive)
+            return;
+
+        if (Handler?.PlatformView is UIView nativeView)
+            AssetStudioDropBridge.Attach(nativeView, AssetStudioDropTargetMode.ExportFolder);
+        else if (Handler?.PlatformView is UIViewController controller &&
+                 controller.View is UIView controllerView)
+            AssetStudioDropBridge.Attach(controllerView, AssetStudioDropTargetMode.ExportFolder);
+    }
+
+    private void RefreshExportFolderLabel() =>
+        _exportFolderValue.Text = IOSExportFolder.DisplayName ?? "Files → AssetStudio → Exports";
+#endif
 
     private async void OnCancelClicked(object? sender, EventArgs e) =>
         await Navigation.PopModalAsync();
