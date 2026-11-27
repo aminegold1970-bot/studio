@@ -199,7 +199,7 @@ public sealed class AssetStudioMobileLoader : IDisposable
         }
 
         var hierarchyRows = BuildHierarchy(manager, rowsByObject, cancellationToken, (completed, total) =>
-            ReportBrowseProgress(reportProgress, 94, 95, completed, total, "Building scene hierarchy"));
+            ReportBrowseProgress(reportProgress, 94, 95, completed, total, "Building tree structure..."));
         var classRows = BuildClassRows(manager, cancellationToken, (completed, total) =>
             ReportBrowseProgress(reportProgress, 95, 96, completed, total, "Building class browser"));
 
@@ -275,13 +275,17 @@ public sealed class AssetStudioMobileLoader : IDisposable
         CancellationToken cancellationToken,
         Action<int, int> reportProgress)
     {
-        var rows = new List<MainPage.HierarchyRow>();
-        var fileIndex = 0;
+        // The original GUI builds one global GameObject dictionary before it
+        // resolves parents, so a transform may point at an object in another
+        // serialized file. Collect IDs first, then create rows in file order.
+        var fileEntries = new List<(int Index, string FileName, List<GameObject> GameObjects)>();
+        var gameObjectIds = new Dictionary<GameObject, string>();
         var processedFiles = 0;
         var totalFiles = manager.assetsFileList.Count;
-        foreach (var file in manager.assetsFileList)
+        for (var fileIndex = 0; fileIndex < totalFiles; fileIndex++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var file = manager.assetsFileList[fileIndex];
             var gameObjects = new List<GameObject>();
             foreach (var asset in file.Objects)
             {
@@ -289,26 +293,24 @@ public sealed class AssetStudioMobileLoader : IDisposable
                 if (asset is GameObject gameObject)
                     gameObjects.Add(gameObject);
             }
-
-            if (gameObjects.Count == 0)
-            {
-                fileIndex++;
-                reportProgress(++processedFiles, totalFiles);
-                continue;
-            }
-
-            // Stable IDs allow selection/search state to survive reloads of the same file set.
-            // Include the file index because PathIDs are only unique within an assets file.
-            var fileId = $"file:{fileIndex}:{file.fileName}";
-            var gameObjectIds = new Dictionary<GameObject, string>();
+            fileEntries.Add((fileIndex, file.fileName, gameObjects));
             foreach (var gameObject in gameObjects)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                gameObjectIds.Add(gameObject, $"go:{fileIndex}:{gameObject.m_PathID}");
+                // Stable IDs allow selection/search state to survive reloads of
+                // the same file set. PathIDs are only unique within a file.
+                gameObjectIds.TryAdd(gameObject, $"go:{fileIndex}:{gameObject.m_PathID}");
             }
-            rows.Add(new MainPage.HierarchyRow { Id = fileId, DisplayName = file.fileName });
+            reportProgress(++processedFiles, totalFiles);
+        }
 
-            foreach (var gameObject in gameObjects)
+        var rows = new List<MainPage.HierarchyRow>();
+        foreach (var entry in fileEntries)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var fileId = $"file:{entry.Index}:{entry.FileName}";
+            var fileRows = new List<MainPage.HierarchyRow>();
+            foreach (var gameObject in entry.GameObjects)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var parentId = fileId;
@@ -321,13 +323,12 @@ public sealed class AssetStudioMobileLoader : IDisposable
                 }
 
                 var gameObjectId = gameObjectIds[gameObject];
-                rows.Add(new MainPage.HierarchyRow
+                fileRows.Add(new MainPage.HierarchyRow
                 {
                     Id = gameObjectId,
                     ParentId = parentId,
-                    DisplayName = string.IsNullOrWhiteSpace(gameObject.m_Name)
-                        ? $"GameObject #{gameObject.m_PathID}"
-                        : gameObject.m_Name,
+                    // Original GameObjectTreeNode.Text is the raw m_Name.
+                    DisplayName = gameObject.m_Name ?? string.Empty,
                     SourceAsset = gameObject
                 });
                 if (rowsByObject.TryGetValue(gameObject, out var gameObjectRow))
@@ -351,8 +352,11 @@ public sealed class AssetStudioMobileLoader : IDisposable
                         meshRow.HierarchyNodeId = gameObjectId;
                 }
             }
-            fileIndex++;
-            reportProgress(++processedFiles, totalFiles);
+
+            // Original adds a file root only when it actually has child objects.
+            if (fileRows.Any(row => string.Equals(row.ParentId, fileId, StringComparison.Ordinal)))
+                rows.Add(new MainPage.HierarchyRow { Id = fileId, DisplayName = entry.FileName });
+            rows.AddRange(fileRows);
         }
 
         return rows;

@@ -49,7 +49,7 @@ public partial class MainPage : ContentPage
             ["Display all assets"] =
                 "Check this option will display all types assets. Not extractable assets can export the RAW file.",
             ["Enable preview"] =
-                "Toggle the loading and preview of readable assets, such as images, sounds, text, etc.\n" +
+                "Toggle the loading and preview of readable assets, such as images, sounds, text, etc.\r\n" +
                 "Disable preview if you have performance or compatibility issues.",
             ["Display asset infromation"] =
                 "Toggle the overlay that shows information about each asset, eg. image size, format, audio bitrate, etc."
@@ -82,6 +82,7 @@ public partial class MainPage : ContentPage
     private bool _updatingHierarchyChecks;
     private readonly List<HierarchyRow> _hierarchySearchResults = new();
     private int _nextHierarchySearchResult;
+    private const string HierarchySearchPlaceholder = " Search ";
     private AssetRow? _selectedAsset;
 #if IOS || MACCATALYST || ANDROID || WINDOWS
     private AssetStudio.AudioClip? _selectedAudioClip;
@@ -120,6 +121,10 @@ public partial class MainPage : ContentPage
     private double _workspaceDragStartRatio = 0.62;
     private TaskCompletionSource<string?>? _menuChoiceCompletion;
     private Button? _menuAnchor;
+    private string? _menuTitle;
+    private string[] _menuOptions = Array.Empty<string>();
+    private IReadOnlyCollection<string> _menuCheckedOptions = Array.Empty<string>();
+    private IReadOnlyDictionary<string, string>? _menuHints;
     // Filter Type mirrors the desktop menu: "All" is a mode, not the set of
     // every type, so the menu stays open while individual types are checked.
     private bool _filterMenuOpen;
@@ -129,6 +134,10 @@ public partial class MainPage : ContentPage
     public MainPage()
     {
         InitializeComponent();
+        // Original treeSearch contains the literal text " Search " until focused.
+        _suppressFilterTextChanged = true;
+        HierarchySearch.Text = HierarchySearchPlaceholder;
+        _suppressFilterTextChanged = false;
         // Desktop installs GUILogger at startup so parser errors honor the
         // Debug -> Show error message toggle and other events reach the status strip.
         AssetStudio.Logger.Default = new MobileLogger(this);
@@ -525,7 +534,9 @@ public partial class MainPage : ContentPage
         }
         catch (Exception ex)
         {
-            SetBusy(false, $"Load failed: {ex.Message}");
+            SetBusy(false, IsNoUnityFileError(ex)
+                ? "No Unity file can be loaded."
+                : $"Load failed: {ex.Message}");
             await LogErrorAsync("Asset loading failed", ex.Message);
         }
         finally
@@ -569,7 +580,9 @@ public partial class MainPage : ContentPage
         }
         catch (Exception exception)
         {
-            SetBusy(false, $"Folder load failed: {exception.Message}");
+            SetBusy(false, IsNoUnityFileError(exception)
+                ? "No Unity file can be loaded."
+                : $"Folder load failed: {exception.Message}");
             await LogErrorAsync("Folder loading failed", exception.Message);
         }
         finally
@@ -615,6 +628,7 @@ public partial class MainPage : ContentPage
                 node.Children.Clear();
                 node.Parent = null;
                 node.IsExpanded = false;
+                node.IsChecked = false;
                 node.Depth = 0;
                 _hierarchyById[node.Id] = node;
             }
@@ -1655,7 +1669,8 @@ public partial class MainPage : ContentPage
         _selectedAsset = null;
         AssetSearch.Text = string.Empty;
         ClassSearch.Text = string.Empty;
-        HierarchySearch.Text = string.Empty;
+        HierarchySearch.Text = HierarchySearchPlaceholder;
+        HierarchySearch.TextColor = Color.FromArgb("#777777");
         _suppressFilterTextChanged = false;
         AssetCollection.SelectedItems.Clear();
         _hierarchy.Clear();
@@ -1708,6 +1723,9 @@ public partial class MainPage : ContentPage
         using var archive = System.IO.Compression.ZipFile.OpenRead(archivePath);
         return archive.Entries.Count;
     }
+
+    private static bool IsNoUnityFileError(Exception exception) =>
+        exception.Message.Contains("No Unity asset files", StringComparison.OrdinalIgnoreCase);
 
     // Mirrors the desktop status strip: "Finished loading N files with M
     // exportable assets", including the failed-read count when present.
@@ -1768,7 +1786,6 @@ public partial class MainPage : ContentPage
                 _showAllAssets = !_showAllAssets;
                 Preferences.Set("AssetStudio.DisplayAllAssets", _showAllAssets);
                 ApplyAssetFilter();
-                StatusLabel.Text = $"Display all assets: {(_showAllAssets ? "On" : "Off")}";
                 break;
             case "Enable preview":
                 _previewEnabled = !_previewEnabled;
@@ -1784,14 +1801,12 @@ public partial class MainPage : ContentPage
                     await PresentAssetPreviewAsync(_selectedAsset);
                 }
                 RefreshPreviewSurfaceVisibility();
-                StatusLabel.Text = $"Preview: {(_previewEnabled ? "Enabled" : "Disabled")}";
                 break;
             case "Display asset infromation":
                 _displayAssetInformation = !_displayAssetInformation;
                 Preferences.Set("AssetStudio.DisplayAssetInformation", _displayAssetInformation);
                 PreviewDetails.IsVisible = _displayAssetInformation;
                 MetadataFrame.IsVisible = _displayAssetInformation && _metadataRows.Count > 0;
-                StatusLabel.Text = $"Asset information: {(_displayAssetInformation ? "Shown" : "Hidden")}";
                 break;
             case "Specify Unity version":
                 await SpecifyUnityVersionAsync();
@@ -1836,11 +1851,6 @@ public partial class MainPage : ContentPage
         _restoreTextAssetExtension = settings.RestoreTextAssetExtension;
         _archiveGrouping = settings.ArchiveGrouping;
         _shareAfterExport = settings.ShareAfterExport;
-        if (announce)
-        {
-            StatusLabel.Text = "Export options saved · "
-                + $"texture {settings.TextureFormat} · grouping {settings.ArchiveGrouping} · FBX {settings.Fbx.Format}";
-        }
     }
 
     private async Task LoadMonoBehaviourAssembliesAsync()
@@ -1951,25 +1961,38 @@ public partial class MainPage : ContentPage
             return;
         }
 
-        var exportAll = choice.StartsWith("Export all", StringComparison.Ordinal);
+        var exportAllMeshes = choice == "Export all meshes (static FBX)";
+        var exportAllObjects = choice == "Export all objects (split)";
+        var exportAll = exportAllMeshes || exportAllObjects;
         var merge = choice.Contains("(merge)", StringComparison.Ordinal);
         var withAnimationClips = choice.EndsWith("+ selected AnimationClips", StringComparison.Ordinal);
         var exportFbx = choice.Contains("(static FBX)", StringComparison.Ordinal);
-        var sceneObjects = exportAll ? null : GetCheckedSceneObjects().ToList();
-        var materialContexts = exportAll
-            ? _allAssets.Select(row => row.SourceAsset).OfType<AssetStudio.GameObject>().Distinct().ToList()
-            : sceneObjects!;
-        var meshes = exportAll
-            ? _allAssets.Select(row => row.SourceAsset).OfType<AssetStudio.Mesh>().Distinct().ToList()
-            : sceneObjects!
-                .SelectMany(GetMeshes)
-                .Distinct()
-                .ToList();
+
+        // The four original Model commands use checked hierarchy nodes only.
+        // The iOS preview/static-FBX commands keep their existing fallback to
+        // the selected node or selected asset rows.
+        IReadOnlyList<AssetStudio.GameObject>? sceneObjects;
+        if (exportAllMeshes)
+            sceneObjects = null;
+        else if (exportAllObjects)
+            sceneObjects = GetTopLevelHierarchyGameObjects();
+        else if (!exportFbx)
+            sceneObjects = GetCheckedParentGameObjects();
+        else
+            sceneObjects = GetCheckedSceneObjects().ToList();
+
+        var materialContexts = sceneObjects
+            ?? _allAssets.Select(row => row.SourceAsset).OfType<AssetStudio.GameObject>().Distinct().ToList();
+        var meshes = sceneObjects != null
+            ? sceneObjects.SelectMany(GetMeshes).Distinct().ToList()
+            : _allAssets.Select(row => row.SourceAsset).OfType<AssetStudio.Mesh>().Distinct().ToList();
         if (meshes.Count == 0)
         {
-            StatusLabel.Text = exportAll
-                ? "No meshes are loaded"
-                : "Check scene objects in Scene Hierarchy before exporting their meshes";
+            StatusLabel.Text = exportAllObjects && _hierarchyRoots.Count == 0
+                ? "No Objects available for export"
+                : exportAllMeshes
+                    ? "No meshes are loaded"
+                    : "No Object selected for export.";
             return;
         }
 
@@ -1979,14 +2002,10 @@ public partial class MainPage : ContentPage
             .Distinct()
             .ToList();
         var animationContext = FindExportAnimationContext(sceneObjects, explicitClips);
-        var animationClips = withAnimationClips
-            ? CollectExportAnimationClips(sceneObjects, explicitClips)
-            : null;
-        if (withAnimationClips && (animationClips == null || animationClips.Count == 0))
-        {
-            StatusLabel.Text = "Select AnimationClips or an Animator with controller clips before exporting with animations";
-            return;
-        }
+        // Original "+ selected AnimationClips" uses only clips selected in the
+        // asset list; it neither expands Animator controllers nor blocks when
+        // the selection is empty.
+        var animationClips = withAnimationClips && explicitClips.Count > 0 ? explicitClips : null;
 
         var fbxOptions = MobileFbxExportOptions.Load();
         using var cancellation = new CancellationTokenSource();
@@ -2120,6 +2139,40 @@ public partial class MainPage : ContentPage
         }
     }
 
+    // Mirrors Studio.GetSelectedParentNode(): file roots are always traversed,
+    // and a checked GameObject stops recursion into its children.
+    private IReadOnlyList<AssetStudio.GameObject> GetCheckedParentGameObjects()
+    {
+        var result = new List<AssetStudio.GameObject>();
+        var visited = new HashSet<HierarchyRow>();
+        void Walk(HierarchyRow node)
+        {
+            if (!visited.Add(node))
+                return;
+            if (node.IsChecked && node.SourceAsset is AssetStudio.GameObject gameObject)
+            {
+                result.Add(gameObject);
+                return;
+            }
+            foreach (var child in node.Children)
+                Walk(child);
+        }
+        foreach (var root in _hierarchyRoots)
+            Walk(root);
+        return result.Distinct().ToList();
+    }
+
+    // Original "Export all objects (split)" starts from each file root's direct
+    // GameObject children, not from a flat list of loaded Mesh assets.
+    private IReadOnlyList<AssetStudio.GameObject> GetTopLevelHierarchyGameObjects()
+    {
+        var result = new List<AssetStudio.GameObject>();
+        foreach (var root in _hierarchyRoots)
+        foreach (var child in root.Children)
+            result.AddRange(GetHierarchyGameObjects(child));
+        return result.Distinct().ToList();
+    }
+
     private IEnumerable<AssetStudio.GameObject> GetCheckedSceneObjects()
     {
         var checkedNodes = _hierarchyById.Values.Where(node => node.IsChecked).ToList();
@@ -2214,49 +2267,6 @@ public partial class MainPage : ContentPage
         return null;
     }
 
-    private static List<AssetStudio.AnimationClip> CollectExportAnimationClips(
-        IReadOnlyList<AssetStudio.GameObject>? sceneObjects,
-        IEnumerable<AssetStudio.AnimationClip> explicitClips)
-    {
-        var clips = explicitClips.Distinct().ToList();
-        if (clips.Count > 0 || sceneObjects == null)
-            return clips;
-
-        foreach (var gameObject in sceneObjects)
-        {
-            foreach (var pointer in gameObject.m_Components)
-            {
-                if (!pointer.TryGet(out var component)
-                    || component is not AssetStudio.Animator animator
-                    || !animator.m_Controller.TryGet(out var controller))
-                {
-                    continue;
-                }
-
-                switch (controller)
-                {
-                    case AssetStudio.AnimatorController assetController:
-                        foreach (var clipPointer in assetController.m_AnimationClips)
-                        {
-                            if (clipPointer.TryGet(out var clip))
-                                clips.Add(clip);
-                        }
-                        break;
-                    case AssetStudio.AnimatorOverrideController overrideController:
-                        foreach (var mapping in overrideController.m_Clips)
-                        {
-                            if (mapping.m_OverrideClip.TryGet(out var clip))
-                                clips.Add(clip);
-                            else if (mapping.m_OriginalClip.TryGet(out clip))
-                                clips.Add(clip);
-                        }
-                        break;
-                }
-            }
-        }
-        return clips.Distinct().ToList();
-    }
-
     private static List<AssetStudio.GameObject> GetHierarchyGameObjects(HierarchyRow root)
     {
         var gameObjects = new List<AssetStudio.GameObject>();
@@ -2283,10 +2293,11 @@ public partial class MainPage : ContentPage
             "Animator + selected AnimationClips", "Raw", "Dump", "Asset list to XML");
         if (choice == null) return;
 
-        // Desktop top-level Export commands always mean Convert. Raw and Dump
-        // are separate submenus and do not inherit an export-options default.
-        var exportKind = "Convert";
-        var scope = choice;
+        // Desktop top-level Export commands always mean Convert. Raw, Dump and
+        // Asset list to XML are submenus, returned here as "parent|scope".
+        var separatorIndex = choice.IndexOf('|');
+        var exportKind = separatorIndex < 0 ? "Convert" : choice[..separatorIndex];
+        var scope = separatorIndex < 0 ? choice : choice[(separatorIndex + 1)..];
         if (choice == "Animator + selected AnimationClips")
         {
             var animatorAndClips = _selectedAssets
@@ -2305,13 +2316,7 @@ public partial class MainPage : ContentPage
                 "Convert", "Selected assets", animatorAndClips, selectedAnimators[0]);
             return;
         }
-        if (choice is "Raw" or "Dump" or "Asset list to XML")
-        {
-            scope = await Choose(choice, "All assets", "Selected assets", "Filtered assets");
-            if (scope == null) return;
-            exportKind = choice;
-        }
-        if (choice == "Asset list to XML")
+        if (exportKind == "Asset list to XML")
         {
             await RunAssetListXmlExportAsync(scope);
             return;
@@ -2600,7 +2605,6 @@ public partial class MainPage : ContentPage
         {
             _showErrorMessages = !_showErrorMessages;
             Preferences.Set("AssetStudio.ShowErrorMessages", _showErrorMessages);
-            StatusLabel.Text = $"Show error message: {(_showErrorMessages ? "On" : "Off")}";
         }
         else if (choice == "Export class structures")
             await ExportClassStructuresAsync();
@@ -2613,10 +2617,7 @@ public partial class MainPage : ContentPage
     private async Task ExportClassStructuresAsync()
     {
         if (_classes.Count == 0)
-        {
-            StatusLabel.Text = "No class structures are loaded";
             return;
-        }
 
         try
         {
@@ -2764,6 +2765,20 @@ public partial class MainPage : ContentPage
         _menuChoiceCompletion?.TrySetResult(null);
         var completion = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         _menuChoiceCompletion = completion;
+        _menuTitle = title;
+        _menuOptions = options;
+        _menuCheckedOptions = checkedOptions;
+        _menuHints = hints;
+        RenderMenuItems(title, checkedOptions, hints, options);
+        return completion.Task;
+    }
+
+    private void RenderMenuItems(
+        string title,
+        IReadOnlyCollection<string> checkedOptions,
+        IReadOnlyDictionary<string, string>? hints,
+        string[] options)
+    {
         MenuOptionsHost.Children.Clear();
         for (var index = 0; index < options.Length; index++)
         {
@@ -2825,7 +2840,11 @@ public partial class MainPage : ContentPage
                 SemanticProperties.SetHint(item, hint);
             }
             var tap = new TapGestureRecognizer();
-            tap.Tapped += (_, _) => FinishMenuChoice(option);
+            tap.Tapped += (_, _) =>
+            {
+                if (hasSubmenu) ShowExportSubmenu(option);
+                else FinishMenuChoice(option);
+            };
             item.GestureRecognizers.Add(tap);
             MenuOptionsHost.Children.Add(item);
 
@@ -2840,7 +2859,65 @@ public partial class MainPage : ContentPage
 
         PositionMenuPopup(title, options);
         MenuOverlay.IsVisible = true;
-        return completion.Task;
+    }
+
+    // Original Raw / Dump / Asset list to XML are submenus of Export. Rebuild
+    // the same popup in place so the parent menu completion stays pending.
+    private void ShowExportSubmenu(string parent)
+    {
+        var options = new[] { "← Export", "All assets", "Selected assets", "Filtered assets" };
+        MenuOptionsHost.Children.Clear();
+        foreach (var option in options)
+        {
+            var content = new Grid
+            {
+                ColumnDefinitions =
+                {
+                    new ColumnDefinition(new GridLength(14)),
+                    new ColumnDefinition(GridLength.Star),
+                    new ColumnDefinition(GridLength.Auto)
+                },
+                HeightRequest = 24
+            };
+            content.Add(new Label
+            {
+                Text = string.Empty,
+                FontSize = 12,
+                VerticalTextAlignment = TextAlignment.Center
+            }, 0);
+            content.Add(new Label
+            {
+                Text = option,
+                TextColor = Color.FromArgb("#202020"),
+                FontSize = 12,
+                FontAutoScalingEnabled = false,
+                VerticalTextAlignment = TextAlignment.Center,
+                HorizontalTextAlignment = TextAlignment.Start,
+                LineBreakMode = LineBreakMode.NoWrap
+            }, 1);
+            var item = new Border
+            {
+                Style = (Style)Resources["PopupMenuItem"],
+                Content = content
+            };
+            var tap = new TapGestureRecognizer();
+            tap.Tapped += (_, _) =>
+            {
+                if (option == "← Export")
+                {
+                    if (_menuTitle == "Export")
+                        RenderMenuItems(_menuTitle, _menuCheckedOptions, _menuHints, _menuOptions);
+                    else
+                        FinishMenuChoice(null);
+                    return;
+                }
+                FinishMenuChoice($"{parent}|{option}");
+            };
+            item.GestureRecognizers.Add(tap);
+            MenuOptionsHost.Children.Add(item);
+        }
+        PositionMenuPopup(parent, options);
+        MenuOverlay.IsVisible = true;
     }
 
     private void OnMenuScrollSizeChanged(object? sender, EventArgs e) =>
@@ -3061,7 +3138,6 @@ public partial class MainPage : ContentPage
         AssetCollection.SelectedItems.Clear();
         foreach (var asset in selected.Where(_visibleAssets.Contains))
             AssetCollection.SelectedItems.Add(asset);
-        StatusLabel.Text = $"Sorted by {(new[] { "Name", "Container", "Type", "PathID", "Size" })[column]} · {(_reverseSort ? "descending" : "ascending")}";
     }
     private void OnSortName(object sender, EventArgs e) => SortBy(0);
     private void OnSortContainer(object sender, EventArgs e) => SortBy(1);
@@ -3071,11 +3147,33 @@ public partial class MainPage : ContentPage
 
     // Mirrors the original WinForms tree search: Enter selects the next matching
     // object, wraps at the end, and makes its ancestor path visible.
+    private void OnHierarchySearchFocused(object sender, FocusEventArgs e)
+    {
+        // Original treeSearch stores the literal " Search " text and clears it
+        // when the control receives focus.
+        if (!string.Equals(HierarchySearch.Text, HierarchySearchPlaceholder, StringComparison.Ordinal))
+            return;
+        HierarchySearch.Text = string.Empty;
+        HierarchySearch.TextColor = Color.FromArgb("#202020");
+    }
+
+    private void OnHierarchySearchUnfocused(object sender, FocusEventArgs e)
+    {
+        if (!string.IsNullOrEmpty(HierarchySearch.Text))
+            return;
+        HierarchySearch.Text = HierarchySearchPlaceholder;
+        HierarchySearch.TextColor = Color.FromArgb("#777777");
+    }
+
     private void OnHierarchySearchTextChanged(object sender, TextChangedEventArgs e)
     {
+        if (_suppressFilterTextChanged)
+            return;
         _hierarchySearchResults.Clear();
         _nextHierarchySearchResult = 0;
-        var query = e.NewTextValue?.Trim() ?? string.Empty;
+        var query = e.NewTextValue ?? string.Empty;
+        if (string.Equals(query, HierarchySearchPlaceholder, StringComparison.Ordinal))
+            query = string.Empty;
         if (query.Length == 0)
         {
             StatusLabel.Text = $"{_hierarchy.Count} visible / {_hierarchyById.Count} scene objects";
@@ -3117,7 +3215,9 @@ public partial class MainPage : ContentPage
         RebuildVisibleHierarchy();
         HierarchyCollection.SelectedItem = match;
         HierarchyCollection.ScrollTo(match, ScrollToPosition.MakeVisible, animate: true);
-        HierarchyCollection.Focus();
+        // Keep the search entry focused so repeated Enter advances like the
+        // original treeSearch.KeyDown handler.
+        HierarchySearch.Focus();
         StatusLabel.Text = $"Scene object {_nextHierarchySearchResult} / {_hierarchySearchResults.Count}: {match.DisplayName}";
     }
 
@@ -3236,7 +3336,7 @@ public partial class MainPage : ContentPage
         if (string.IsNullOrEmpty(row.HierarchyNodeId)
             || !_hierarchyById.TryGetValue(row.HierarchyNodeId, out var node))
         {
-            StatusLabel.Text = $"{row.Name} is not associated with a scene object";
+            // Original silently ignores assets without a hierarchy node.
             return;
         }
 
@@ -3297,7 +3397,8 @@ public partial class MainPage : ContentPage
             switch (row.SourceAsset)
             {
                 case AssetStudio.TextAsset text:
-                    ShowTextPreview(row.Name, "TextAsset", Encoding.UTF8.GetString(text.m_Script));
+                    ShowTextPreview(row.Name, "TextAsset",
+                        Encoding.UTF8.GetString(text.m_Script).Replace("\n", "\r\n").Replace("\0", ""));
                     break;
                 case AssetStudio.Texture2D texture:
                     PreviewDetails.Text = "Decoding texture…";
@@ -3336,7 +3437,7 @@ public partial class MainPage : ContentPage
                             texture.m_TextureSettings?.m_MipBias ?? 0f,
                             DescribeTextureWrapMode(texture.m_TextureSettings?.m_WrapMode),
                             DescribeEnabledTextureChannels()));
-                    StatusLabel.Text = "'Ctrl'+'R'/'G'/'B'/'A' for Channel Toggle · or tap Channels";
+                    StatusLabel.Text = "'Ctrl'+'R'/'G'/'B'/'A' for Channel Toggle";
                     break;
                 case AssetStudio.Mesh mesh:
                     ShowModelPreview(row.Name,
@@ -3395,6 +3496,11 @@ public partial class MainPage : ContentPage
                 case AssetStudio.Shader shader:
                     var shaderSource = await Task.Run(() => AssetStudio.ShaderConverter.Convert(shader));
                     if (!IsActivePreview(row)) return;
+                    if (string.IsNullOrEmpty(shaderSource))
+                    {
+                        ShowTextPreview(row.Name, "Shader source", "Serialized Shader can't be read");
+                        break;
+                    }
                     ShowTextPreview(row.Name, "Shader source",
                         shaderSource.Replace("\n", "\r\n").Replace("\0", ""));
                     break;
@@ -3447,7 +3553,8 @@ public partial class MainPage : ContentPage
         catch (Exception ex)
         {
             if (!IsActivePreview(row)) return;
-            ShowUnsupportedPreview(row.Name, row.Type, $"Preview failed: {ex.Message}");
+            ShowUnsupportedPreview(row.Name, row.Type,
+                $"Preview {row.Type}:{row.Name} error\r\n{ex.Message}\r\n{ex.StackTrace}");
         }
     }
 
@@ -4179,26 +4286,8 @@ public partial class MainPage : ContentPage
 
     private void OnHierarchySelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_browserTab != "Scene Hierarchy"
-            || e.CurrentSelection.FirstOrDefault() is not HierarchyRow node)
-        {
-            return;
-        }
-
-        var gameObjects = GetHierarchyGameObjects(node);
-        var meshCount = gameObjects.SelectMany(GetMeshes).Distinct().Count();
-        _showingEmptyPreview = false;
-        ResetPreviewSurface();
-        PreviewTitle.Text = node.DisplayName;
-        PreviewKind.Text = "Scene Hierarchy Object";
-        ModelPreviewFrame.IsVisible = true;
-        ModelPreviewInfo.Text = meshCount > 0
-            ? $"{gameObjects.Count} object(s) in this subtree · {meshCount} mesh(es). Preview applies scene transforms and the stored skin/blend-shape pose."
-            : $"{gameObjects.Count} object(s) in this subtree · no renderable meshes.";
-        OpenSceneObjectPreviewButton.IsVisible = meshCount > 0;
-        PreviewDetails.Text = "Check objects to export or use Model → Preview checked scene objects for a combined preview.";
-        RefreshPreviewSurfaceVisibility();
-        StatusLabel.Text = $"Selected scene object: {node.DisplayName} · {meshCount} mesh(es)";
+        // Original has no AfterSelect handler: selecting a tree node only marks
+        // it for "Go to scene hierarchy" and does not change the preview/status.
     }
 
     private void OnClassSearchTextChanged(object sender, TextChangedEventArgs e)
