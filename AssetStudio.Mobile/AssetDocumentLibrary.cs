@@ -5,8 +5,8 @@ namespace AssetStudioMobile;
 
 /// <summary>
 /// Temporary, content-deduplicated cache for source files picked through the
-/// mobile document pickers. Kept in the app cache directory so Documents/
-/// AssetStudio contains only the Errors folder.
+/// mobile document pickers. Kept in the app cache directory so Documents
+/// contains only the top-level Errors folder.
 /// </summary>
 public sealed class AssetDocumentLibrary
 {

@@ -19,10 +19,13 @@ WHAT THIS VERSION ADDS
    temporary provider URL can be released immediately.
 4. Files selected through File -> Load file are also copied into that same cache
    before the host loader callback is invoked.
-5. Errors shown by the app are written to:
-      <App Sandbox>/Documents/AssetStudio/Errors/error-log.txt
-   The Debug -> Show error message option controls popups and is remembered across
-   launches; logging happens even when the popups are turned off.
+5. Errors shown by the app are written to one text file per source file under:
+      <App Sandbox>/Documents/Errors/<source file name>.txt
+   For example, an error from a bundle named foo.bundle is written to
+   Documents/Errors/foo.bundle.txt. The Debug -> Show error message option
+   controls popups and is remembered across launches; logging happens even when
+   the popups are turned off. Older Documents/AssetStudio folders are migrated
+   and removed on launch.
 6. The source cache uses unique stored filenames, so files with identical original
    names do not overwrite each other.
 7. Existing Info.plist in the supplied unsigned IPA already has:
@@ -47,16 +50,17 @@ adapter), then call MainPage.SetAssets(...), SetHierarchy(...), etc.
 If that callback is not connected, files are safely saved but cannot yet be parsed or
 shown as Unity objects. This is not hidden or simulated by the UI.
 
-The Errors folder contains only text logs of errors shown to the user. It does not
-serialize individual Unity sub-assets. Source files are kept in the app cache only for
-the duration of the current import and can be removed by the OS.
+The top-level Errors folder contains only text logs of errors shown to the user, one
+file per source asset file. It does not serialize individual Unity sub-assets. Source
+files are kept in the app cache only for the duration of the current import and can be
+removed by the OS.
 
 FILES
 -----
 MainPage.xaml                         Updated toolbar and drop hint.
 MainPage.xaml.cs                     Persistent import, error popups, drop dispatch.
 AssetDocumentLibrary.cs              Copies, hashes, and deduplicates source files into the app cache.
-AssetErrorLog.cs                     Writes shown errors to Documents/AssetStudio/Errors/error-log.txt.
+AssetErrorLog.cs                     Writes shown errors to Documents/Errors/<source file name>.txt.
 Platforms/iOS/AssetStudioDropBridge.cs Native UIDropInteraction implementation.
 Platforms/iOS/InfoPlist-settings.txt  Info.plist keys to preserve/merge.
 
@@ -70,13 +74,13 @@ INTEGRATION NOTES
 - Keep UIFileSharingEnabled and LSSupportsOpeningDocumentsInPlace enabled.
 - Ensure the host subscribes to AssetFilesSelected before the user drops or selects files.
 - The iOS Files app can browse the app's Documents directory through On My iPhone when
-  file sharing is enabled. The error log folder is Documents/AssetStudio/Errors.
+  file sharing is enabled. The error log folder is Documents/Errors.
 
 SECURITY / STORAGE
 ------------------
 - Files are copied into the app cache; the original Files.app item is not modified.
 - Error logs are kept in Documents and survive app restarts; users can view or delete
-  them through Files.app under On My iPhone -> AssetStudio -> Errors (if exposed by iOS).
+  them through Files.app under On My iPhone -> Errors (if exposed by iOS).
 - Large bundles consume device storage. The app does not yet impose a quota.
 
 VALIDATION PERFORMED

@@ -568,17 +568,11 @@ internal sealed class MeshPreviewDrawable : IDrawable
             if (property.Key is "_Color" or "_BaseColor")
             {
                 var color = property.Value;
-                if (!float.IsFinite(color.R) || !float.IsFinite(color.G)
-                    || !float.IsFinite(color.B) || !float.IsFinite(color.A))
-                {
-                    throw new InvalidDataException($"Material '{material.m_Name}' contains a non-finite color.");
-                }
-
                 return new MauiColor(
-                    Math.Clamp(color.R, 0, 1),
-                    Math.Clamp(color.G, 0, 1),
-                    Math.Clamp(color.B, 0, 1),
-                    Math.Clamp(color.A, 0, 1));
+                    SanitizeColorComponent(color.R, 0f),
+                    SanitizeColorComponent(color.G, 0f),
+                    SanitizeColorComponent(color.B, 0f),
+                    SanitizeColorComponent(color.A, 1f));
             }
         }
 
@@ -620,8 +614,15 @@ internal sealed class MeshPreviewDrawable : IDrawable
     private static float GetVertexChannel(float[] colors, int stride, int vertex, int channel)
     {
         var value = colors[vertex * stride + channel];
+        // Unity can contain NaN/Infinity colors in imported meshes. Clamp them
+        // for preview instead of rejecting the whole mesh.
+        return SanitizeColorComponent(value, channel == 3 ? 1f : 0f);
+    }
+
+    private static float SanitizeColorComponent(float value, float fallback)
+    {
         if (!float.IsFinite(value))
-            throw new InvalidDataException("The mesh contains a non-finite vertex color.");
+            return fallback;
         return Math.Clamp(value, 0, 1);
     }
 
