@@ -142,7 +142,7 @@ public partial class MainPage : ContentPage
     {
         InitializeComponent();
 #if IOS
-        DragHintLabel.Text = "iPhone: Files drag is unavailable\nuse Load file / Load folder";
+        DragHintLabel.Text = "iPhone: Files drag is unavailable\nUse Load file / Load folder";
 #else
         DragHintLabel.Text = "Drag files here to load · drop an export folder to choose it";
 #endif
@@ -556,7 +556,7 @@ public partial class MainPage : ContentPage
     private static string DefaultDragHint()
     {
 #if IOS
-        return "iPhone: Files drag is unavailable\nuse Load file / Load folder";
+        return "iPhone: Files drag is unavailable\nUse Load file / Load folder";
 #else
         return "Drag files here to load · drop an export folder to choose it";
 #endif
@@ -689,6 +689,7 @@ public partial class MainPage : ContentPage
                 asset.IsCompactLayout = _compactWorkspace == true;
             _allAssets.ResetWith(incoming);
             ApplyAssetFilter();
+            UpdateLive2DAvailability();
         }
         if (MainThread.IsMainThread) Apply();
         else MainThread.BeginInvokeOnMainThread(Apply);
@@ -2087,49 +2088,122 @@ public partial class MainPage : ContentPage
     private async void OnLive2DButtonClicked(object? sender, EventArgs e) =>
         await StartLive2DFromSelectionAsync();
 
-    private static bool IsAtlasRow(AssetRow row)
+    private static string GetTextAssetSample(AssetRow row)
     {
         if (row.SourceAsset is not AssetStudio.TextAsset text)
+            return string.Empty;
+
+        var script = text.m_Script ?? Array.Empty<byte>();
+        var sampleLength = Math.Min(script.Length, 64 * 1024);
+        return Encoding.UTF8.GetString(script, 0, sampleLength).Replace("\0", string.Empty);
+    }
+
+    private static bool IsAtlasRow(AssetRow row)
+    {
+        if (row.SourceAsset is not AssetStudio.TextAsset)
             return false;
 
         var name = row.Name ?? string.Empty;
         if (name.EndsWith(".atlas", StringComparison.OrdinalIgnoreCase)
             || name.EndsWith(".atlas.txt", StringComparison.OrdinalIgnoreCase)
-            || name.Contains(".atlas.", StringComparison.OrdinalIgnoreCase))
+            || name.Contains(".atlas.", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("atlas", StringComparison.OrdinalIgnoreCase))
             return true;
 
         // Bundle assets often drop the original extension. Recognize an atlas
         // by its region layout as well so atlas + skel pairs still load.
-        var script = text.m_Script ?? Array.Empty<byte>();
-        var sampleLength = Math.Min(script.Length, 64 * 1024);
-        return Live2DModel.LooksLikeAtlasText(
-            Encoding.UTF8.GetString(script, 0, sampleLength).Replace("\0", string.Empty));
+        return Live2DModel.LooksLikeAtlasText(GetTextAssetSample(row));
     }
 
-    private Live2DSelection? FindLive2DSelection()
+    private static bool IsSkeletonRow(AssetRow row)
     {
-        if (_selectedAssets.Count != 3)
+        if (row.SourceAsset is not AssetStudio.TextAsset)
+            return false;
+
+        var name = row.Name ?? string.Empty;
+        if (name.EndsWith(".skel", StringComparison.OrdinalIgnoreCase)
+            || name.EndsWith(".skel.bytes", StringComparison.OrdinalIgnoreCase)
+            || name.Contains(".skel.", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("skeleton", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        var sample = GetTextAssetSample(row);
+        return sample.Contains("\"bones\"", StringComparison.OrdinalIgnoreCase)
+            || sample.Contains("\"slots\"", StringComparison.OrdinalIgnoreCase)
+            || sample.Contains("\"animations\"", StringComparison.OrdinalIgnoreCase);
+    }
+
+    // Prefer the current selection, but fall back to loaded assets: iOS
+    // CollectionView multi-selection is easy to miss and the desktop action
+    // should keep working when the three matching rows are merely loaded.
+    private Live2DSelection? FindLive2DSelection() =>
+        FindLive2DSelection(_selectedAssets) ?? FindLive2DSelection(_allAssets);
+
+    private static Live2DSelection? FindLive2DSelection(IEnumerable<AssetRow> source)
+    {
+        var rows = source?.Where(row => row != null).ToList() ?? new List<AssetRow>();
+        if (rows.Count < 3)
             return null;
 
-        var texture = _selectedAssets.FirstOrDefault(row => row.SourceAsset is AssetStudio.Texture2D);
-        var atlas = _selectedAssets.FirstOrDefault(IsAtlasRow);
-        var skeleton = _selectedAssets.FirstOrDefault(row =>
-            !ReferenceEquals(row, texture) && !ReferenceEquals(row, atlas)
-            && row.SourceAsset is AssetStudio.TextAsset);
-        if (texture == null || atlas == null || skeleton == null)
+        var textures = rows.Where(row => row.SourceAsset is AssetStudio.Texture2D).ToList();
+        var textAssets = rows.Where(row => row.SourceAsset is AssetStudio.TextAsset).ToList();
+        if (textures.Count == 0 || textAssets.Count < 2)
             return null;
 
-        var identities = new[]
+        Live2DSelection? best = null;
+        var bestScore = -1;
+
+        foreach (var texture in textures)
         {
-            Live2DModel.Identity(texture.Name),
-            Live2DModel.Identity(atlas.Name),
-            Live2DModel.Identity(skeleton.Name)
-        };
-        if (identities.Any(string.IsNullOrWhiteSpace)
-            || identities.Skip(1).Any(id => !string.Equals(id, identities[0], StringComparison.OrdinalIgnoreCase)))
-            return null;
+            var identity = Live2DModel.IdentityKey(texture.Name);
+            if (string.IsNullOrWhiteSpace(identity))
+                continue;
 
-        return new Live2DSelection(texture, atlas, skeleton, identities[0]);
+            var matching = textAssets
+                .Where(row => IdentitiesMatch(identity, Live2DModel.IdentityKey(row.Name)))
+                .Distinct()
+                .ToList();
+            if (matching.Count < 2)
+                continue;
+
+            var atlasRows = matching.Where(IsAtlasRow).ToList();
+            var skeletonRows = matching.Where(row => !atlasRows.Contains(row)).ToList();
+            if (atlasRows.Count == 0 || skeletonRows.Count == 0)
+            {
+                // Unity sometimes strips both extensions. Keep the viewer usable
+                // by pairing the first two distinct matching text assets.
+                atlasRows = new List<AssetRow> { matching[0] };
+                skeletonRows = matching.Skip(1).Where(row => !ReferenceEquals(row, matching[0])).ToList();
+            }
+
+            foreach (var atlas in atlasRows)
+            foreach (var skeleton in skeletonRows)
+            {
+                if (ReferenceEquals(atlas, skeleton))
+                    continue;
+
+                var score = (IsAtlasRow(atlas) ? 2 : 0) + (IsSkeletonRow(skeleton) ? 2 : 0);
+                if (score <= bestScore)
+                    continue;
+
+                bestScore = score;
+                best = new Live2DSelection(texture, atlas, skeleton, identity);
+            }
+        }
+
+        return best;
+    }
+
+    private static bool IdentitiesMatch(string first, string second)
+    {
+        if (string.IsNullOrWhiteSpace(first) || string.IsNullOrWhiteSpace(second))
+            return false;
+        if (first.Equals(second, StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (first.Length < 4 || second.Length < 4)
+            return false;
+        return first.StartsWith(second, StringComparison.OrdinalIgnoreCase)
+            || second.StartsWith(first, StringComparison.OrdinalIgnoreCase);
     }
 
     private void UpdateLive2DAvailability() => Live2DButton.IsVisible = FindLive2DSelection() != null;
@@ -2145,10 +2219,11 @@ public partial class MainPage : ContentPage
 
     private async Task StartLive2DFromSelectionAsync()
     {
+        var fromSelection = FindLive2DSelection(_selectedAssets) != null;
         var match = FindLive2DSelection();
         if (match == null)
         {
-            StatusLabel.Text = "Select exactly one texture, one atlas and one skeleton with matching names to use Live2D.";
+            StatusLabel.Text = "No matching Live2D assets found. Select or load a texture, atlas and skeleton with the same base name.";
             Live2DButton.IsVisible = false;
             return;
         }
@@ -2168,7 +2243,9 @@ public partial class MainPage : ContentPage
         RefreshPreviewSurfaceVisibility();
         PreviewTitle.Text = $"Live2D · {match.Identity}";
         PreviewKind.Text = "Live2D / Spine model";
-        PreviewDetails.Text = "Loading texture, atlas and skeleton from the selected assets…";
+        PreviewDetails.Text = fromSelection
+            ? "Loading the selected texture, atlas and skeleton…"
+            : "Loading the matching texture, atlas and skeleton from the loaded assets…";
         StatusLabel.Text = "Starting Live2D viewer…";
 
         try
@@ -2198,7 +2275,8 @@ public partial class MainPage : ContentPage
             Live2DStatusLabel.Text =
                 $"Showing {match.Identity} · {atlasInfo.Regions.Count} region(s) · {skeletonInfo.BoneCount} bone(s)";
             PreviewDetails.Text = string.Empty;
-            StatusLabel.Text = $"Live2D viewer started: {match.Identity}";
+            StatusLabel.Text = $"Live2D viewer started: {match.Identity}"
+                + (fromSelection ? string.Empty : " (from loaded assets)");
         }
         catch (Exception exception)
         {

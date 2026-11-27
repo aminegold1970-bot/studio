@@ -153,7 +153,7 @@
                         <Button x:Name="Live2DButton" Text="Live2D" Clicked="OnLive2DButtonClicked" IsVisible="False"
                                 Style="{StaticResource TabButton}" HorizontalOptions="Start"
                                 AutomationProperties.Name="Start Live2D viewer"
-                                SemanticProperties.Hint="Available when three matching texture, atlas and skeleton assets are selected"/>
+                                SemanticProperties.Hint="Available when matching texture, atlas and skeleton assets are loaded"/>
                         <Border x:Name="ImagePreviewFrame" IsVisible="False" BackgroundColor="{AppThemeBinding Light=#FFFFFF, Dark=#1E1E1E}" Stroke="{AppThemeBinding Light=#C8C8C8, Dark=#3F3F3F}" StrokeThickness="1" Padding="6">
                             <Grid RowDefinitions="Auto,Auto" RowSpacing="6">
                                 <Grid Grid.Row="0" HeightRequest="230">
@@ -161,7 +161,7 @@
                                     <Label x:Name="ImageInfoOverlay" IsVisible="False" InputTransparent="True"
                                            HorizontalOptions="Start" VerticalOptions="Start"
                                            Margin="6" Padding="6,4" MaxLines="10"
-                                           BackgroundColor="#B3000000" TextColor="#FFFFFF"
+                                           BackgroundColor="#66FFFFFF" TextColor="#202020"
                                            FontSize="10" LineBreakMode="WordWrap"/>
                                 </Grid>
                                 <HorizontalStackLayout x:Name="TextureActionsRow" Grid.Row="1" Spacing="6" IsVisible="False">
@@ -178,9 +178,9 @@
                                 <Grid Grid.Row="1" HeightRequest="220">
                                     <Image x:Name="Live2DTextureImage" Aspect="AspectFit" HeightRequest="220"/>
                                     <ScrollView Margin="6" Padding="6,4" HeightRequest="150"
-                                                BackgroundColor="#B3000000"
+                                                BackgroundColor="#66FFFFFF"
                                                 HorizontalScrollBarVisibility="Never" VerticalScrollBarVisibility="Never">
-                                        <Label x:Name="Live2DDetailsLabel" Text="" TextColor="#FFFFFF" FontSize="10" LineBreakMode="WordWrap"/>
+                                        <Label x:Name="Live2DDetailsLabel" Text="" TextColor="#202020" FontSize="10" LineBreakMode="WordWrap"/>
                                     </ScrollView>
                                 </Grid>
                                 <Label x:Name="Live2DStatusLabel" Grid.Row="2" Text="Preparing model…" TextColor="{AppThemeBinding Light=#2878C8, Dark=#4FA3F7}" FontSize="11"/>

@@ -49,6 +49,16 @@ internal static class Live2DModel
         return name.Trim();
     }
 
+    // Comparison key for model asset names. Unity imports sometimes keep role
+    // suffixes or punctuation that Identity() cannot normalize, so compare the
+    // alphanumeric form as well.
+    public static string IdentityKey(string fileName)
+    {
+        var identity = Identity(fileName);
+        var chars = identity.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray();
+        return new string(chars);
+    }
+
     // Used when a bundled atlas has lost its original filename extension.
     public static bool LooksLikeAtlasText(string text)
     {
