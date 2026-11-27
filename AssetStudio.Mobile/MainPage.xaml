@@ -50,16 +50,11 @@
             <Border x:Name="ClassSearchFrame" Grid.Row="0" IsVisible="False" Stroke="#B7B7B7" StrokeThickness="1" StrokeShape="Rectangle" Padding="5,0" BackgroundColor="#FFFFFF" HeightRequest="21">
                 <Entry x:Name="ClassSearch" Placeholder="Search" PlaceholderColor="#777777" TextColor="#202020" BackgroundColor="Transparent" MinimumHeightRequest="0" FontSize="10" Margin="0" TextChanged="OnClassSearchTextChanged"/>
             </Border>
-            <Grid x:Name="HierarchySearchPanel" Grid.Row="0" IsVisible="False" ColumnDefinitions="*,Auto" ColumnSpacing="5">
+            <Grid x:Name="HierarchySearchPanel" Grid.Row="0" IsVisible="False">
                 <Border x:Name="HierarchySearchFrame" Stroke="#B7B7B7" StrokeThickness="1" StrokeShape="Rectangle" Padding="5,0" BackgroundColor="#FFFFFF" HeightRequest="21">
                     <Entry x:Name="HierarchySearch" Placeholder=" Search " PlaceholderColor="#777777" TextColor="#202020" BackgroundColor="Transparent" MinimumHeightRequest="0" FontSize="10" Margin="0" ReturnType="Search" Completed="OnHierarchySearchButtonPressed" TextChanged="OnHierarchySearchTextChanged"/>
                 </Border>
-                <Button x:Name="HierarchySearchNextButton" Grid.Column="1" Text="Next" IsVisible="False" Clicked="OnHierarchySearchNextClicked" Style="{StaticResource TabButton}"/>
             </Grid>
-            <HorizontalStackLayout x:Name="HierarchyActions" Grid.Row="1" IsVisible="False" Spacing="5" Padding="0,3">
-                <Button Text="Expand all" Clicked="OnHierarchyExpandAllClicked" Style="{StaticResource TabButton}"/>
-                <Button Text="Collapse all" Clicked="OnHierarchyCollapseAllClicked" Style="{StaticResource TabButton}"/>
-            </HorizontalStackLayout>
             <Grid x:Name="AssetColumnHeaders" Grid.Row="3" ColumnDefinitions="2*,1.25*,1.1*,1.1*,.7*,34" Padding="3,3" ColumnSpacing="2">
                 <Button Text="Name" Clicked="OnSortName" Style="{StaticResource HeaderButton}"/>
                 <Button Grid.Column="1" Text="Container" Clicked="OnSortContainer" Style="{StaticResource HeaderButton}"/>
@@ -105,10 +100,11 @@
                     <CollectionView.EmptyView><Label Text="No scene hierarchy loaded" TextColor="#555555" HorizontalTextAlignment="Center" VerticalTextAlignment="Center"/></CollectionView.EmptyView>
                     <CollectionView.ItemTemplate>
                         <DataTemplate>
-                            <Grid ColumnDefinitions="20,Auto,*" Padding="{Binding IndentPadding}" ColumnSpacing="4" MinimumHeightRequest="24">
-                                <Button Text="{Binding ExpandGlyph}" Clicked="OnHierarchyExpandClicked" IsVisible="{Binding HasChildren}" Padding="0" WidthRequest="20" HeightRequest="20" MinimumWidthRequest="0" MinimumHeightRequest="0" BackgroundColor="Transparent" TextColor="#555555" FontSize="11"/>
-                                <CheckBox Grid.Column="1" IsChecked="{Binding IsChecked, Mode=TwoWay}" CheckedChanged="OnHierarchyCheckChanged" WidthRequest="16" HeightRequest="16" MinimumWidthRequest="0" MinimumHeightRequest="0" Color="#2878C8"/>
-                                <Label Grid.Column="2" Text="{Binding DisplayName}" TextColor="#202020" VerticalTextAlignment="Center" FontSize="11" LineBreakMode="TailTruncation"/>
+                            <Grid ColumnDefinitions="Auto,18,Auto,*" Padding="4,1" ColumnSpacing="2" MinimumHeightRequest="24">
+                                <Label Text="{Binding TreePrefix}" TextColor="#888888" FontSize="11" FontFamily="Courier New" VerticalTextAlignment="Center" LineBreakMode="NoWrap"/>
+                                <Button Grid.Column="1" Text="{Binding ExpandGlyph}" Clicked="OnHierarchyExpandClicked" IsVisible="{Binding HasChildren}" Padding="0" WidthRequest="16" HeightRequest="16" MinimumWidthRequest="16" MinimumHeightRequest="16" BackgroundColor="#FFFFFF" BorderColor="#888888" BorderWidth="1" CornerRadius="0" TextColor="#444444" FontSize="11"/>
+                                <CheckBox Grid.Column="2" IsChecked="{Binding IsChecked, Mode=TwoWay}" CheckedChanged="OnHierarchyCheckChanged" WidthRequest="16" HeightRequest="16" MinimumWidthRequest="0" MinimumHeightRequest="0" Color="#2878C8"/>
+                                <Label Grid.Column="3" Text="{Binding DisplayName}" TextColor="#202020" VerticalTextAlignment="Center" FontSize="11" LineBreakMode="TailTruncation"/>
                             </Grid>
                         </DataTemplate>
                     </CollectionView.ItemTemplate>

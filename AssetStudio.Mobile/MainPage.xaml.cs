@@ -628,10 +628,10 @@ public partial class MainPage : ContentPage
                 }
             }
 
-            foreach (var root in _hierarchyRoots) AddVisibleHierarchyNode(root, 0);
+            for (var index = 0; index < _hierarchyRoots.Count; index++)
+                AddVisibleHierarchyNode(_hierarchyRoots[index], 0, "", index == _hierarchyRoots.Count - 1, new HashSet<HierarchyRow>());
             _hierarchySearchResults.Clear();
             _nextHierarchySearchResult = 0;
-            HierarchySearchNextButton.IsVisible = false;
             if (_browserTab == "Scene Hierarchy")
                 StatusLabel.Text = $"Scene Hierarchy · {incoming.Count} objects";
         }
@@ -659,25 +659,33 @@ public partial class MainPage : ContentPage
         return false;
     }
 
-    private void AddVisibleHierarchyNode(HierarchyRow node, int depth)
-    {
-        AddVisibleHierarchyNode(node, depth, new HashSet<HierarchyRow>());
-    }
-
-    private void AddVisibleHierarchyNode(HierarchyRow node, int depth, HashSet<HierarchyRow> visited)
+    // Render the visible nodes as a WinForms-style tree: ancestor guide columns
+    // plus a +/- expander and a checkbox, matching the desktop scene hierarchy.
+    private void AddVisibleHierarchyNode(
+        HierarchyRow node, int depth, string ancestorPrefix, bool isLastChild, HashSet<HierarchyRow> visited)
     {
         if (!visited.Add(node))
             return;
         node.Depth = depth;
+        // File nodes are the TreeView roots and have no connector of their own.
+        var isRoot = depth == 0;
+        node.TreePrefix = isRoot ? "" : ancestorPrefix + (isLastChild ? "└─ " : "├─ ");
         _hierarchy.Add(node);
-        if (node.IsExpanded)
-            foreach (var child in node.Children) AddVisibleHierarchyNode(child, depth + 1, visited);
+        if (!node.IsExpanded)
+            return;
+
+        var childPrefix = isRoot ? "" : ancestorPrefix + (isLastChild ? "   " : "│  ");
+        for (var index = 0; index < node.Children.Count; index++)
+            AddVisibleHierarchyNode(node.Children[index], depth + 1, childPrefix,
+                index == node.Children.Count - 1, visited);
     }
 
     private void RebuildVisibleHierarchy()
     {
         _hierarchy.Clear();
-        foreach (var root in _hierarchyRoots) AddVisibleHierarchyNode(root, 0);
+        var visited = new HashSet<HierarchyRow>();
+        for (var index = 0; index < _hierarchyRoots.Count; index++)
+            AddVisibleHierarchyNode(_hierarchyRoots[index], 0, "", index == _hierarchyRoots.Count - 1, visited);
     }
 
     private void OnHierarchyExpandClicked(object sender, EventArgs e)
@@ -686,33 +694,6 @@ public partial class MainPage : ContentPage
             return;
         node.IsExpanded = !node.IsExpanded;
         RebuildVisibleHierarchy();
-    }
-
-    private void OnHierarchyExpandAllClicked(object sender, EventArgs e)
-    {
-        SetHierarchyExpansionRecursive(_hierarchyRoots, true);
-        RebuildVisibleHierarchy();
-        StatusLabel.Text = $"Expanded all scene objects · {_hierarchyById.Count} objects";
-    }
-
-    private void OnHierarchyCollapseAllClicked(object sender, EventArgs e)
-    {
-        SetHierarchyExpansionRecursive(_hierarchyRoots, false);
-        RebuildVisibleHierarchy();
-        StatusLabel.Text = $"Collapsed scene hierarchy · {_hierarchyRoots.Count} root objects";
-    }
-
-    private static void SetHierarchyExpansionRecursive(IEnumerable<HierarchyRow> nodes, bool expanded) =>
-        SetHierarchyExpansionRecursive(nodes, expanded, new HashSet<HierarchyRow>());
-
-    private static void SetHierarchyExpansionRecursive(IEnumerable<HierarchyRow> nodes, bool expanded, HashSet<HierarchyRow> visited)
-    {
-        foreach (var node in nodes)
-        {
-            if (!visited.Add(node)) continue;
-            node.IsExpanded = expanded && node.HasChildren;
-            SetHierarchyExpansionRecursive(node.Children, expanded, visited);
-        }
     }
 
     public void SetClasses(IEnumerable<ClassRow> classes)
@@ -1656,7 +1637,6 @@ public partial class MainPage : ContentPage
         _hierarchyById.Clear();
         _hierarchySearchResults.Clear();
         _nextHierarchySearchResult = 0;
-        HierarchySearchNextButton.IsVisible = false;
         _classes.Clear();
         _visibleClasses.Clear();
         _metadataRows.Clear();
@@ -3015,8 +2995,6 @@ public partial class MainPage : ContentPage
         AssetSearchFrame.IsVisible = _browserTab == "Asset List";
         ClassSearchFrame.IsVisible = _browserTab == "Asset Classes";
         HierarchySearchPanel.IsVisible = _browserTab == "Scene Hierarchy";
-        HierarchySearchNextButton.IsVisible = _browserTab == "Scene Hierarchy" && _hierarchySearchResults.Count > 0;
-        HierarchyActions.IsVisible = _browserTab == "Scene Hierarchy" && _hierarchy.Count > 0;
         AssetColumnHeaders.IsVisible = _compactWorkspace != true && _browserTab == "Asset List";
         ClassColumnHeaders.IsVisible = _browserTab == "Asset Classes";
         StatusLabel.Text = _browserTab switch
@@ -3166,8 +3144,6 @@ public partial class MainPage : ContentPage
         var query = e.NewTextValue?.Trim() ?? string.Empty;
         if (query.Length == 0)
         {
-            HierarchySearchNextButton.IsVisible = false;
-            HierarchySearchNextButton.Text = "Next";
             StatusLabel.Text = $"{_hierarchy.Count} visible / {_hierarchyById.Count} scene objects";
             return;
         }
@@ -3175,13 +3151,9 @@ public partial class MainPage : ContentPage
         // current expansion state. A visited guard protects malformed graphs.
         var visited = new HashSet<HierarchyRow>();
         foreach (var root in _hierarchyRoots) CollectHierarchyMatches(root, query, visited);
-        HierarchySearchNextButton.IsVisible = _hierarchySearchResults.Count > 0;
         StatusLabel.Text = _hierarchySearchResults.Count == 0
             ? "No matching scene objects"
-            : $"{_hierarchySearchResults.Count} scene object matches · press Enter or Next";
-        HierarchySearchNextButton.Text = _hierarchySearchResults.Count > 0
-            ? $"Next ({_hierarchySearchResults.Count})"
-            : "Next";
+            : $"{_hierarchySearchResults.Count} scene object matches · press Enter to select next";
     }
 
     private void CollectHierarchyMatches(HierarchyRow node, string query, HashSet<HierarchyRow> visited)
@@ -3194,7 +3166,6 @@ public partial class MainPage : ContentPage
     }
 
     private void OnHierarchySearchButtonPressed(object sender, EventArgs e) => SelectNextHierarchySearchResult();
-    private void OnHierarchySearchNextClicked(object sender, EventArgs e) => SelectNextHierarchySearchResult();
 
     private void SelectNextHierarchySearchResult()
     {
@@ -4443,13 +4414,19 @@ public partial class MainPage : ContentPage
         public int Depth
         {
             get => _depth;
-            set { if (_depth == value) return; _depth = value; OnPropertyChanged(); OnPropertyChanged(nameof(IndentPadding)); }
+            set { if (_depth == value) return; _depth = value; OnPropertyChanged(); }
         }
-        public Thickness IndentPadding => new(5 + Math.Max(0, Depth) * 15, 1, 3, 1);
+        // WinForms TreeView-style guide columns for the ancestor path.
+        private string _treePrefix = "";
+        public string TreePrefix
+        {
+            get => _treePrefix;
+            set { if (_treePrefix == value) return; _treePrefix = value; OnPropertyChanged(); }
+        }
         public List<HierarchyRow> Children { get; } = new();
         public HierarchyRow? Parent { get; set; }
         public bool HasChildren => Children.Count > 0;
-        public string ExpandGlyph => IsExpanded ? "▾" : "▸";
+        public string ExpandGlyph => IsExpanded ? "−" : "+";
         public bool IsExpanded
         {
             get => _isExpanded;
