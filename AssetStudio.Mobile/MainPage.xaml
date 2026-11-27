@@ -209,7 +209,7 @@
                                     <Label Text="Volume" TextColor="#444444" FontSize="11" VerticalTextAlignment="Center"/>
                                     <Slider x:Name="AudioVolumeSlider" Grid.Column="1" Minimum="0" Maximum="1" Value="1" ValueChanged="OnAudioVolumeChanged"/>
                                 </Grid>
-                                <Label Text="PCM and Vorbis are converted to WAV; MP3 and AAC use native playback. Other codecs remain exportable as original data." TextColor="#666666" FontSize="10"/>
+                                <Label Text="PCM, Vorbis/Ogg and managed ADPCM/VAG convert to WAV; MP3 and AAC use native playback. Other codecs remain exportable as original data." TextColor="#666666" FontSize="10"/>
                             </VerticalStackLayout>
                         </Border>
                         <Border x:Name="ModelPreviewFrame" IsVisible="False" BackgroundColor="#FFFFFF" Stroke="#C8C8C8" StrokeThickness="1" Padding="8">

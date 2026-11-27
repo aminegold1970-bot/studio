@@ -14,7 +14,7 @@ using System.Text;
 using AVFoundation;
 using Foundation;
 #endif
-#if IOS
+#if IOS || MACCATALYST
 using CoreText;
 using UIKit;
 #endif
@@ -1150,7 +1150,7 @@ public partial class MainPage : ContentPage
 
     private void ResetPreviewSurface()
     {
-#if IOS
+#if IOS || MACCATALYST
         UnregisterEmbeddedPreviewFont();
 #endif
         ImagePreviewFrame.IsVisible = false;
@@ -3367,9 +3367,10 @@ public partial class MainPage : ContentPage
                     {
                         exportedPath = await Task.Run(() => MobileAssetExporter.Export(texture));
                     }
-                    catch
+                    catch (Exception ex)
                     {
                         // Desktop reports unsupported images instead of a generic preview error.
+                        AssetErrorLog.Write("Texture preview", ex.Message);
                     }
                     if (!IsActivePreview(row)) return;
                     if (string.IsNullOrWhiteSpace(exportedPath))
@@ -3443,7 +3444,7 @@ public partial class MainPage : ContentPage
                         font.m_FontData is { Length: > 0 }
                             ? $"Embedded font data · {font.m_FontData.Length:N0} bytes."
                             : "This font has no embedded data to preview or export.");
-#if IOS
+#if IOS || MACCATALYST
                     if (font.m_FontData is { Length: > 0 })
                         await ApplyEmbeddedFontPreviewAsync(font, row);
                     else
@@ -3465,9 +3466,10 @@ public partial class MainPage : ContentPage
                     {
                         spriteImage = await Task.Run(() => MobileAssetExporter.Export(sprite));
                     }
-                    catch
+                    catch (Exception ex)
                     {
                         // Desktop reports unsupported sprites instead of a generic preview error.
+                        AssetErrorLog.Write("Sprite preview", ex.Message);
                     }
                     if (!IsActivePreview(row)) return;
                     if (string.IsNullOrWhiteSpace(spriteImage))
@@ -3739,7 +3741,7 @@ public partial class MainPage : ContentPage
         return string.Join(Environment.NewLine, lines);
     }
 
-#if IOS
+#if IOS || MACCATALYST
     private string? _registeredPreviewFontPath;
 
     private async Task ApplyEmbeddedFontPreviewAsync(AssetStudio.Font font, AssetRow row)
@@ -3751,7 +3753,7 @@ public partial class MainPage : ContentPage
         var registrationError = CTFontManager.RegisterFontsForUrl(url, CTFontManagerScope.Process);
         if (registrationError != null)
             throw new InvalidDataException(
-                $"iOS could not register the embedded font: {registrationError.LocalizedDescription}");
+                $"The platform font manager could not register the embedded font: {registrationError.LocalizedDescription}");
         _registeredPreviewFontPath = path;
 
         var descriptor = CTFontManager.GetFonts(url).FirstOrDefault()
@@ -3759,7 +3761,7 @@ public partial class MainPage : ContentPage
         var attributes = descriptor.GetAttributes();
         var fontName = attributes.Name ?? attributes.FamilyName;
         if (string.IsNullOrWhiteSpace(fontName) || UIFont.FromName(fontName, 12f) == null)
-            throw new InvalidDataException("iOS registered the font but could not resolve its family name.");
+            throw new InvalidDataException("The font was registered but its family name could not be resolved.");
 
         FontSpecimenTiny.FontFamily = fontName;
         FontSpecimenSmall.FontFamily = fontName;

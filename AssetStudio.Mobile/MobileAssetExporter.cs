@@ -2934,6 +2934,14 @@ internal static class MobileAssetExporter
             return ogg;
         }
 
+        // Unity 5+ clips normally store ADPCM/VAG inside FSB5, but resource-
+        // backed clips can expose raw codec blocks. Decode those in managed
+        // code instead of falling back to the Windows-only FMOD path.
+        if (convertAudio && TryDecodeRawCompressedAudio(audio, data, cancellationToken, out var compressed))
+        {
+            return compressed;
+        }
+
         if (convertAudio
             && audio.version is { Length: > 0 }
             && audio.version[0] >= 5
@@ -3165,6 +3173,86 @@ internal static class MobileAssetExporter
             return false;
         }
         catch (OverflowException)
+        {
+            return false;
+        }
+    }
+
+    // Decode raw Unity 5+ compressed blocks with the same managed codecs used
+    // for FSB5 streams. Only layouts with unambiguous frame metadata are
+    // attempted; everything else stays exportable as its original data.
+    private static bool TryDecodeRawCompressedAudio(
+        AudioClip audio,
+        byte[] data,
+        CancellationToken cancellationToken,
+        out (byte[] Data, string Extension) result)
+    {
+        result = default;
+        if (audio.version is not { Length: > 0 } version || version[0] < 5)
+            return false;
+
+        var channels = audio.m_Channels;
+        var sampleRate = audio.m_Frequency;
+        if (channels is < 1 or > 2 || sampleRate <= 0 || sampleRate > 384000)
+            return false;
+
+        // Bound the work so a malformed size cannot allocate an oversized PCM buffer.
+        const int maxFrames = 250_000;
+        Fsb5Bank bank;
+        switch (audio.m_CompressionFormat)
+        {
+            case AudioCompressionFormat.ADPCM:
+            {
+                const int frameSize = 0x24;
+                var blockSize = frameSize * channels;
+                if (data.Length < blockSize || data.Length % blockSize != 0)
+                    return false;
+                var frames = data.Length / blockSize;
+                if (frames > maxFrames)
+                    return false;
+                bank = new Fsb5Bank
+                {
+                    Codec = 7,
+                    Channels = channels,
+                    SampleRate = sampleRate,
+                    SampleCount = (uint)(frames * 64),
+                    SampleData = data
+                };
+                break;
+            }
+            case AudioCompressionFormat.PSMVAG:
+            {
+                const int frameSize = 0x10;
+                var blockSize = frameSize * channels;
+                if (data.Length < blockSize || data.Length % blockSize != 0)
+                    return false;
+                var frames = data.Length / blockSize;
+                if (frames > maxFrames)
+                    return false;
+                bank = new Fsb5Bank
+                {
+                    Codec = 8,
+                    Channels = channels,
+                    SampleRate = sampleRate,
+                    SampleCount = (uint)(frames * 28),
+                    SampleData = data
+                };
+                break;
+            }
+            default:
+                return false;
+        }
+
+        try
+        {
+            var wave = bank.Codec == 7
+                ? DecodeImaAdpcmWave(bank, cancellationToken)
+                : DecodeVagWave(bank, cancellationToken);
+            result = (wave, ".wav");
+            return true;
+        }
+        catch (Exception exception) when (exception is InvalidDataException
+            or IndexOutOfRangeException or ArgumentException or OverflowException)
         {
             return false;
         }
