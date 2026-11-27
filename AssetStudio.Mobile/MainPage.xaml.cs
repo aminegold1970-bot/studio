@@ -132,6 +132,7 @@ public partial class MainPage : ContentPage
         _showAllAssets = Preferences.Get("AssetStudio.DisplayAllAssets", false);
         _previewEnabled = Preferences.Get("AssetStudio.EnablePreview", true);
         _displayAssetInformation = Preferences.Get("AssetStudio.DisplayAssetInformation", true);
+        _showErrorMessages = Preferences.Get("AssetStudio.ShowErrorMessages", true);
         PreviewDetails.IsVisible = _displayAssetInformation;
         // Desktop loads every export option from settings at startup, including
         // the default export kind and the type-name grouping default.
@@ -414,7 +415,7 @@ public partial class MainPage : ContentPage
 #endif
 
     // Native iOS UIDropInteraction sends temporary file paths here. They are
-    // immediately copied into the app's Documents library before the provider URL expires.
+    // immediately copied into the app cache before the provider URL expires.
     public static event Action<IReadOnlyList<string>>? DroppedFilesReceived;
     public static event Action<string>? DropFailed;
     public static event Action<bool>? DropTargetChanged;
@@ -460,31 +461,18 @@ public partial class MainPage : ContentPage
         catch (Exception ex)
         {
             StatusLabel.Text = $"Drop import failed: {ex.Message}";
-            if (_showErrorMessages) await DisplayAlert("Drop import failed", ex.Message, "OK");
+            await ShowErrorAsync("Drop import failed", ex.Message);
         }
     }
 
     private async void OnDropFailed(string message)
     {
         StatusLabel.Text = $"Drop failed: {message}";
-        if (_showErrorMessages)
-            await DisplayAlert("Could not import dropped file", message, "OK");
+        await ShowErrorAsync("Could not import dropped file", message);
     }
 
     private void OnDropTargetChanged(bool isTargeted) =>
         MainThread.BeginInvokeOnMainThread(() => DropTargetOverlay.IsVisible = isTargeted);
-
-    private async Task OpenLibraryAsync()
-    {
-        var entries = _documentLibrary.GetEntries();
-        if (entries.Count == 0)
-        {
-            await DisplayAlert("Asset Library", "No saved source files yet. Drop files here or use File → Load file; imported files are kept in Documents/AssetStudio/Library.", "OK");
-            return;
-        }
-        await Navigation.PushModalAsync(CreateModalNavigationPage(new AssetLibraryPage(_documentLibrary,
-            files => LoadPersistentFilesAsync(files, "Saved library"))));
-    }
 
     private async Task LoadPersistentFilesAsync(IReadOnlyList<FileResult> selected, string sourceLabel)
     {
@@ -519,7 +507,7 @@ public partial class MainPage : ContentPage
         catch (Exception ex)
         {
             SetBusy(false, $"Load failed: {ex.Message}");
-            await DisplayAlert("Asset loading failed", ex.Message, "OK");
+            await LogErrorAsync("Asset loading failed", ex.Message);
         }
         finally
         {
@@ -563,7 +551,7 @@ public partial class MainPage : ContentPage
         catch (Exception exception)
         {
             SetBusy(false, $"Folder load failed: {exception.Message}");
-            await DisplayAlert("Folder loading failed", exception.Message, "OK");
+            await LogErrorAsync("Folder loading failed", exception.Message);
         }
         finally
         {
@@ -1272,11 +1260,28 @@ public partial class MainPage : ContentPage
     private bool _displayAssetInformation = true;
     private bool _showErrorMessages = true;
 
+    // Always persist the error, even when popups are off. The Debug toggle only
+    // controls whether the user also sees the message immediately.
+    private async Task ShowErrorAsync(string title, string message)
+    {
+        AssetErrorLog.Write(title, message);
+        if (_showErrorMessages)
+            await DisplayAlert(title, message, "OK");
+    }
+
+    // Error popups that the desktop does not gate behind Show error message
+    // are still saved, while their display behavior stays unchanged.
+    private async Task LogErrorAsync(string title, string message)
+    {
+        AssetErrorLog.Write(title, message);
+        await DisplayAlert(title, message, "OK");
+    }
+
     private async void OnFileMenuClicked(object sender, EventArgs e)
     {
         _menuAnchor = sender as Button;
         var choice = await Choose("File", "Load file", "Load multiple files", "Load folder",
-            "Open Asset Library", "Extract file", "Extract folder");
+            "Extract file", "Extract folder");
         if (choice == null) return;
 
         switch (choice)
@@ -1289,9 +1294,6 @@ public partial class MainPage : ContentPage
                 break;
             case "Load folder":
                 await PickAssetFolderAsync();
-                break;
-            case "Open Asset Library":
-                await OpenLibraryAsync();
                 break;
             case "Extract file":
                 await ExtractFilesAsync();
@@ -1372,8 +1374,7 @@ public partial class MainPage : ContentPage
         catch (Exception exception)
         {
             SetBusy(false, $"File extraction failed: {exception.Message}");
-            if (_showErrorMessages)
-                await DisplayAlert("File extraction failed", exception.Message, "OK");
+            await ShowErrorAsync("File extraction failed", exception.Message);
         }
         finally
         {
@@ -1407,8 +1408,7 @@ public partial class MainPage : ContentPage
         catch (Exception exception)
         {
             SetBusy(false, $"Folder extraction failed: {exception.Message}");
-            if (_showErrorMessages)
-                await DisplayAlert("Folder extraction failed", exception.Message, "OK");
+            await ShowErrorAsync("Folder extraction failed", exception.Message);
         }
         finally
         {
@@ -1455,8 +1455,7 @@ public partial class MainPage : ContentPage
         {
             SetBusy(false, "Ready");
             StatusLabel.Text = $"Folder selection failed: {exception.Message}";
-            if (_showErrorMessages)
-                await DisplayAlert("Folder selection failed", exception.Message, "OK");
+            await ShowErrorAsync("Folder selection failed", exception.Message);
         }
         finally
         {
@@ -1533,7 +1532,7 @@ public partial class MainPage : ContentPage
         {
             SetBusy(false, $"File import failed: {ex.Message}");
             StatusLabel.Text = $"File import failed: {ex.Message}";
-            await DisplayAlert("File import failed", ex.Message, "OK");
+            await LogErrorAsync("File import failed", ex.Message);
         }
         finally
         {
@@ -1790,8 +1789,7 @@ public partial class MainPage : ContentPage
                 catch (Exception exception)
                 {
                     StatusLabel.Text = $"Could not open export options: {exception.Message}";
-                    if (_showErrorMessages)
-                        await DisplayAlert("Export options", exception.Message, "OK");
+                    await ShowErrorAsync("Export options", exception.Message);
                 }
                 break;
             default:
@@ -1848,10 +1846,10 @@ public partial class MainPage : ContentPage
             var persisted = new List<FileResult>(dllFiles.Count);
             foreach (var file in dllFiles)
             {
-                SetBusy(true, $"Copying {file.FileName} to Library…");
+                SetBusy(true, $"Copying {file.FileName}…");
                 var imported = await _documentLibrary.ImportAsync(file);
                 if (string.IsNullOrWhiteSpace(imported.FullPath) || !File.Exists(imported.FullPath))
-                    throw new IOException($"The selected assembly '{file.FileName}' was not saved to the AssetStudio library.");
+                    throw new IOException($"The selected assembly '{file.FileName}' was not saved to the AssetStudio source cache.");
                 persisted.Add(imported);
             }
 
@@ -1867,7 +1865,7 @@ public partial class MainPage : ContentPage
             if (warnings.Count > 0)
             {
                 var details = string.Join(Environment.NewLine, warnings.Take(8));
-                await DisplayAlert("Some assemblies were skipped", details, "OK");
+                await LogErrorAsync("Some assemblies were skipped", details);
             }
 
             if (_selectedAsset is { SourceAsset: AssetStudio.MonoBehaviour } selectedAsset)
@@ -1880,7 +1878,7 @@ public partial class MainPage : ContentPage
         catch (Exception exception)
         {
             SetBusy(false, $"Assembly load failed: {exception.Message}");
-            await DisplayAlert("Assembly load failed", exception.Message, "OK");
+            await LogErrorAsync("Assembly load failed", exception.Message);
         }
     }
 
@@ -2161,8 +2159,7 @@ public partial class MainPage : ContentPage
         catch (Exception ex)
         {
             StatusLabel.Text = $"Model export failed: {ex.Message}";
-            if (_showErrorMessages)
-                await DisplayAlert("Model export failed", ex.Message, "OK");
+            await ShowErrorAsync("Model export failed", ex.Message);
         }
         finally
         {
@@ -2202,8 +2199,7 @@ public partial class MainPage : ContentPage
         catch (Exception exception)
         {
             StatusLabel.Text = $"Scene preview failed: {exception.Message}";
-            if (_showErrorMessages)
-                await DisplayAlert("Scene preview failed", exception.Message, "OK");
+            await ShowErrorAsync("Scene preview failed", exception.Message);
         }
     }
 
@@ -2442,7 +2438,7 @@ public partial class MainPage : ContentPage
         catch (Exception ex)
         {
             StatusLabel.Text = $"XML export failed: {ex.Message}";
-            if (_showErrorMessages) await DisplayAlert("XML export error", ex.Message, "OK");
+            await ShowErrorAsync("XML export error", ex.Message);
         }
         finally
         {
@@ -2555,7 +2551,7 @@ public partial class MainPage : ContentPage
         catch (Exception ex)
         {
             StatusLabel.Text = $"Export failed: {ex.Message}";
-            if (_showErrorMessages) await DisplayAlert("Export error", ex.Message, "OK");
+            await ShowErrorAsync("Export error", ex.Message);
         }
         finally
         {
@@ -2685,6 +2681,7 @@ public partial class MainPage : ContentPage
         if (choice == "Show error message")
         {
             _showErrorMessages = !_showErrorMessages;
+            Preferences.Set("AssetStudio.ShowErrorMessages", _showErrorMessages);
             StatusLabel.Text = $"Show error message: {(_showErrorMessages ? "On" : "Off")}";
         }
         else if (choice == "Export class structures")
@@ -2715,8 +2712,7 @@ public partial class MainPage : ContentPage
         catch (Exception ex)
         {
             StatusLabel.Text = $"Class export failed: {ex.Message}";
-            if (_showErrorMessages)
-                await DisplayAlert("Class export failed", ex.Message, "OK");
+            await ShowErrorAsync("Class export failed", ex.Message);
         }
         finally
         {
@@ -2767,8 +2763,7 @@ public partial class MainPage : ContentPage
         catch (Exception ex)
         {
             StatusLabel.Text = $"Class export failed: {ex.Message}";
-            if (_showErrorMessages)
-                await DisplayAlert("Class export failed", ex.Message, "OK");
+            await ShowErrorAsync("Class export failed", ex.Message);
         }
         finally
         {
@@ -3530,7 +3525,7 @@ public partial class MainPage : ContentPage
         }
         catch (Exception ex)
         {
-            await DisplayAlert("Mesh preview failed", ex.Message, "OK");
+            await LogErrorAsync("Mesh preview failed", ex.Message);
         }
     }
 
@@ -3561,7 +3556,7 @@ public partial class MainPage : ContentPage
         catch (Exception exception)
         {
             StatusLabel.Text = $"Scene object preview failed: {exception.Message}";
-            await DisplayAlert("Scene object preview failed", exception.Message, "OK");
+            await LogErrorAsync("Scene object preview failed", exception.Message);
         }
     }
 
@@ -3575,8 +3570,7 @@ public partial class MainPage : ContentPage
         catch (Exception exception)
         {
             StatusLabel.Text = $"Could not open texture channels: {exception.Message}";
-            if (_showErrorMessages)
-                await DisplayAlert("Texture channels", exception.Message, "OK");
+            await ShowErrorAsync("Texture channels", exception.Message);
         }
     }
 
@@ -3610,7 +3604,7 @@ public partial class MainPage : ContentPage
         }
         catch (Exception exception)
         {
-            await DisplayAlert("Texture preview failed", exception.Message, "OK");
+            await LogErrorAsync("Texture preview failed", exception.Message);
         }
     }
 
@@ -3656,8 +3650,7 @@ public partial class MainPage : ContentPage
         {
             VideoPlaybackStatus.Text = $"Could not play video: {exception.Message}";
             StatusLabel.Text = VideoPlaybackStatus.Text;
-            if (_showErrorMessages)
-                await DisplayAlert("Video playback unavailable", exception.Message, "OK");
+            await ShowErrorAsync("Video playback unavailable", exception.Message);
         }
         finally
         {
@@ -3835,7 +3828,7 @@ public partial class MainPage : ContentPage
             if (!ReferenceEquals(_selectedAudioClip, clip))
                 return;
             StatusLabel.Text = $"Audio playback failed: {ex.Message}";
-            await DisplayAlert("Audio playback failed", ex.Message, "OK");
+            await LogErrorAsync("Audio playback failed", ex.Message);
         }
     }
 
@@ -3937,7 +3930,7 @@ public partial class MainPage : ContentPage
             if (!ReferenceEquals(_selectedAudioClip, clip))
                 return;
             StatusLabel.Text = $"Audio playback failed: {ex.Message}";
-            await DisplayAlert("Audio playback failed", ex.Message, "OK");
+            await LogErrorAsync("Audio playback failed", ex.Message);
         }
     }
 
@@ -4044,7 +4037,7 @@ public partial class MainPage : ContentPage
             if (!ReferenceEquals(_selectedAudioClip, clip))
                 return;
             StatusLabel.Text = $"Audio playback failed: {exception.Message}";
-            await DisplayAlert("Audio playback failed", exception.Message, "OK");
+            await LogErrorAsync("Audio playback failed", exception.Message);
         }
     }
 
@@ -4490,11 +4483,8 @@ public partial class MainPage : ContentPage
             if (string.IsNullOrWhiteSpace(message)) return;
             if (loggerEvent == AssetStudio.LoggerEvent.Error)
             {
-                if (_page._showErrorMessages)
-                {
-                    MainThread.BeginInvokeOnMainThread(async () =>
-                        await _page.DisplayAlert("AssetStudio", message, "OK"));
-                }
+                MainThread.BeginInvokeOnMainThread(async () =>
+                    await _page.ShowErrorAsync("AssetStudio", message));
                 return;
             }
 
