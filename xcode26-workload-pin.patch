@@ -4,7 +4,9 @@ Root cause: SDK 10.0.404 selected workload set 10.0.404, which installs
 Microsoft.iOS.Sdk.net10.027.2 (27.2.10000). That .NET for iOS release requires
 Xcode 27.2, but the macos-26 runner provides Xcode 26.6 (iOS SDK 26.5).
 Workload set 10.0.401 ships .NET for iOS 26.5.10318, the release that supports
-Xcode 26.6, so pin it in the workflow and in global.json (used by restore/publish).
+Xcode 26.6, so pin it in global.json (the CLI refuses --version when global.json
+already specifies a workload version). A verification step keeps the workflow
+and global.json in sync.
 
 --- a/global.json
 +++ b/global.json
@@ -20,25 +22,23 @@ Xcode 26.6, so pin it in the workflow and in global.json (used by restore/publis
 
 --- a/.github/workflows/build-ios.yml
 +++ b/.github/workflows/build-ios.yml
-@@ -11,6 +11,12 @@ permissions:
+@@ -11,6 +11,13 @@ permissions:
  jobs:
    build-ios:
      runs-on: macos-26
 +    env:
-+      # Workload set 10.0.401 ships .NET for iOS 26.5.10318, which supports the
-+      # Xcode 26.6 installed on macos-26. Newer sets (10.0.402+) require Xcode
-+      # 27.x and fail with "This version of .NET for iOS ... requires Xcode 27.x".
++      # Keep in sync with sdk.workloadVersion in global.json. That setting pins
++      # the CLI to workload set 10.0.401 (.NET for iOS 26.5.10318, which supports
++      # the Xcode 26.6 on macos-26); newer sets require Xcode 27.x. The CLI
++      # rejects --version when global.json already specifies a workload version,
++      # so the install step relies on global.json instead.
 +      IOS_WORKLOAD_SET: 10.0.401
  
      steps:
        - name: Check out source
-@@ -25,8 +31,19 @@ jobs:
-       - name: Verify .NET SDK
-         run: dotnet --version
- 
+@@ -28,5 +35,16 @@ jobs:
        - name: Install iOS workload
--        run: dotnet workload install maui-ios
-+        run: dotnet workload install maui-ios --version "$IOS_WORKLOAD_SET"
+         run: dotnet workload install maui-ios
 +
 +      - name: Verify workload set
 +        shell: bash
