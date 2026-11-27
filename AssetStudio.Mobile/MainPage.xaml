@@ -153,8 +153,12 @@
                         <Border x:Name="ImagePreviewFrame" IsVisible="False" BackgroundColor="#FFFFFF" Stroke="#C8C8C8" StrokeThickness="1" Padding="6">
                             <VerticalStackLayout Spacing="6">
                                 <Image x:Name="AssetImagePreview" Aspect="AspectFit" HeightRequest="230"/>
-                                <Button x:Name="OpenFullTexturePreviewButton" Text="Open full-screen" Clicked="OnFullTexturePreviewClicked"
-                                        IsVisible="False" Style="{StaticResource TabButton}"/>
+                                <HorizontalStackLayout x:Name="TextureActionsRow" Spacing="6" IsVisible="False">
+                                    <Button x:Name="TextureChannelsButton" Text="Channels: BGRA" Clicked="OnTextureChannelsClicked"
+                                            Style="{StaticResource TabButton}"/>
+                                    <Button x:Name="OpenFullTexturePreviewButton" Text="Open full-screen" Clicked="OnFullTexturePreviewClicked"
+                                            Style="{StaticResource TabButton}"/>
+                                </HorizontalStackLayout>
                             </VerticalStackLayout>
                         </Border>
                         <Border x:Name="TextPreviewFrame" IsVisible="False" BackgroundColor="#FFFFFF" Stroke="#C8C8C8" StrokeThickness="1" Padding="8">

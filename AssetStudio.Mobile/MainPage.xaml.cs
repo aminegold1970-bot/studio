@@ -1,5 +1,6 @@
 using Microsoft.Maui.ApplicationModel.DataTransfer;
 using Microsoft.Maui.Storage;
+using SixLabors.ImageSharp.PixelFormats;
 using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
@@ -66,6 +67,9 @@ public partial class MainPage : ContentPage
     private int _previewImageWidth;
     private int _previewImageHeight;
     private string _previewImageFormat = string.Empty;
+    private const string TextureChannelNames = "BGRA";
+    private readonly bool[] _textureChannels = { true, true, true, true };
+    private string? _previewTextureMaskedPath;
     private CommunityToolkit.Maui.Views.MediaElement? _videoPlayer;
     private readonly AssetDocumentLibrary _documentLibrary = new();
     private readonly AssetStudioMobileLoader _assetLoader = new();
@@ -707,7 +711,7 @@ public partial class MainPage : ContentPage
             settings?.m_Aniso ?? 0,
             settings?.m_MipBias ?? 0f,
             DescribeTextureWrapMode(settings?.m_WrapMode),
-            DescribeTextureChannels(texture.m_TextureFormat)));
+            DescribeEnabledTextureChannels()));
     }
 
     private static IReadOnlyList<MetadataRow> CreateTextureMetadataRows(int width, int height, string format,
@@ -741,42 +745,64 @@ public partial class MainPage : ContentPage
         _ => $"Unknown ({mode.Value})"
     };
 
-    private static string DescribeTextureChannels(AssetStudio.TextureFormat format) => format switch
+    private string DescribeEnabledTextureChannels()
     {
-        AssetStudio.TextureFormat.Alpha8 => "A",
-        AssetStudio.TextureFormat.R16 or AssetStudio.TextureFormat.RHalf or AssetStudio.TextureFormat.RFloat
-            or AssetStudio.TextureFormat.R8 or AssetStudio.TextureFormat.EAC_R
-            or AssetStudio.TextureFormat.EAC_R_SIGNED or AssetStudio.TextureFormat.BC4 => "R",
-        AssetStudio.TextureFormat.RGHalf or AssetStudio.TextureFormat.RGFloat or AssetStudio.TextureFormat.RG16
-            or AssetStudio.TextureFormat.RG32 or AssetStudio.TextureFormat.EAC_RG
-            or AssetStudio.TextureFormat.EAC_RG_SIGNED or AssetStudio.TextureFormat.BC5 => "RG",
-        AssetStudio.TextureFormat.RGB24 or AssetStudio.TextureFormat.RGB565 or AssetStudio.TextureFormat.BGR24
-            or AssetStudio.TextureFormat.RGBFloat or AssetStudio.TextureFormat.RGB48 or AssetStudio.TextureFormat.DXT1
-            or AssetStudio.TextureFormat.DXT1Crunched or AssetStudio.TextureFormat.PVRTC_RGB2
-            or AssetStudio.TextureFormat.PVRTC_RGB4 or AssetStudio.TextureFormat.ETC_RGB4
-            or AssetStudio.TextureFormat.ETC_RGB4_3DS or AssetStudio.TextureFormat.ETC_RGB4Crunched
-            or AssetStudio.TextureFormat.ATC_RGB4 or AssetStudio.TextureFormat.ETC2_RGB
-            or AssetStudio.TextureFormat.BC6H or AssetStudio.TextureFormat.ASTC_RGB_4x4
-            or AssetStudio.TextureFormat.ASTC_RGB_5x5 or AssetStudio.TextureFormat.ASTC_RGB_6x6
-            or AssetStudio.TextureFormat.ASTC_RGB_8x8 or AssetStudio.TextureFormat.ASTC_RGB_10x10
-            or AssetStudio.TextureFormat.ASTC_RGB_12x12 or AssetStudio.TextureFormat.ASTC_HDR_4x4
-            or AssetStudio.TextureFormat.ASTC_HDR_5x5 or AssetStudio.TextureFormat.ASTC_HDR_6x6
-            or AssetStudio.TextureFormat.ASTC_HDR_8x8 or AssetStudio.TextureFormat.ASTC_HDR_10x10
-            or AssetStudio.TextureFormat.ASTC_HDR_12x12 => "RGB",
-        AssetStudio.TextureFormat.ARGB4444 or AssetStudio.TextureFormat.RGBA32 or AssetStudio.TextureFormat.ARGB32
-            or AssetStudio.TextureFormat.ARGBFloat or AssetStudio.TextureFormat.DXT3 or AssetStudio.TextureFormat.DXT5
-            or AssetStudio.TextureFormat.RGBA4444 or AssetStudio.TextureFormat.BGRA32
-            or AssetStudio.TextureFormat.RGBAHalf or AssetStudio.TextureFormat.RGBAFloat
-            or AssetStudio.TextureFormat.DXT5Crunched or AssetStudio.TextureFormat.PVRTC_RGBA2
-            or AssetStudio.TextureFormat.PVRTC_RGBA4 or AssetStudio.TextureFormat.ETC_RGBA8_3DS
-            or AssetStudio.TextureFormat.ATC_RGBA8 or AssetStudio.TextureFormat.ETC2_RGBA1
-            or AssetStudio.TextureFormat.ETC2_RGBA8 or AssetStudio.TextureFormat.ETC2_RGBA8Crunched
-            or AssetStudio.TextureFormat.BC7 or AssetStudio.TextureFormat.ASTC_RGBA_4x4
-            or AssetStudio.TextureFormat.ASTC_RGBA_5x5 or AssetStudio.TextureFormat.ASTC_RGBA_6x6
-            or AssetStudio.TextureFormat.ASTC_RGBA_8x8 or AssetStudio.TextureFormat.ASTC_RGBA_10x10
-            or AssetStudio.TextureFormat.ASTC_RGBA_12x12 or AssetStudio.TextureFormat.RGBA64 => "RGBA",
-        _ => "Unknown"
-    };
+        var enabled = new string[TextureChannelNames.Length];
+        var count = 0;
+        for (var index = 0; index < _textureChannels.Length; index++)
+        {
+            if (_textureChannels[index])
+                enabled[count++] = TextureChannelNames[index].ToString();
+        }
+        return count == 0 ? "None" : string.Join(string.Empty, enabled, 0, count);
+    }
+
+    private (string Path, bool Temporary) ApplyTextureChannelMask(string imagePath)
+    {
+        if (_textureChannels.All(channel => channel) || string.IsNullOrWhiteSpace(imagePath) || !File.Exists(imagePath))
+            return (imagePath, false);
+
+        try
+        {
+            using var image = SixLabors.ImageSharp.Image.Load<Rgba32>(imagePath);
+            var validChannel = _textureChannels.Count(channel => channel);
+            var disabledColor = validChannel == 1 && _textureChannels[3] ? byte.MaxValue : byte.MinValue;
+            for (var y = 0; y < image.Height; y++)
+            {
+                var row = image.GetPixelRowSpan(y);
+                for (var x = 0; x < row.Length; x++)
+                {
+                    ref var pixel = ref row[x];
+                    if (!_textureChannels[0]) pixel.B = disabledColor;
+                    if (!_textureChannels[1]) pixel.G = disabledColor;
+                    if (!_textureChannels[2]) pixel.R = disabledColor;
+                    if (!_textureChannels[3]) pixel.A = byte.MaxValue;
+                }
+            }
+            var maskedPath = Path.Combine(Path.GetTempPath(), $"assetstudio-channels-{Guid.NewGuid():N}.png");
+            image.Save(maskedPath);
+            return (maskedPath, true);
+        }
+        catch
+        {
+            return (imagePath, false);
+        }
+    }
+
+    private static void TryDeletePreviewFile(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return;
+
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch
+        {
+        }
+    }
 
     public sealed class MetadataRow
     {
@@ -802,13 +828,15 @@ public partial class MainPage : ContentPage
     // Preview methods accept decoded data without depending on Windows Forms types.
     public void ShowTexturePreview(string title, ImageSource image, int width, int height,
         string format, string additionalInfo = "", string? imagePath = null,
-        IEnumerable<MetadataRow>? metadata = null)
+        IEnumerable<MetadataRow>? metadata = null, string? temporaryPreviewPath = null,
+        bool supportsChannelToggles = false)
     {
         MainThread.BeginInvokeOnMainThread(() =>
         {
             _showingEmptyPreview = false;
             ResetPreviewSurface();
             _previewImagePath = imagePath;
+            _previewTextureMaskedPath = temporaryPreviewPath;
             _previewImageWidth = width;
             _previewImageHeight = height;
             _previewImageFormat = format ?? string.Empty;
@@ -816,13 +844,15 @@ public partial class MainPage : ContentPage
             PreviewKind.Text = "Texture / Sprite";
             ImagePreviewFrame.IsVisible = image != null;
             AssetImagePreview.Source = image;
+            TextureActionsRow.IsVisible = supportsChannelToggles;
+            TextureChannelsButton.Text = $"Channels: {DescribeEnabledTextureChannels()}";
             OpenFullTexturePreviewButton.IsVisible = !string.IsNullOrWhiteSpace(imagePath);
             var metadataRows = metadata?.Where(row => row != null && !string.IsNullOrWhiteSpace(row.Key)).ToList();
             if (metadataRows is { Count: > 0 })
                 SetAssetMetadata(metadataRows);
             else
                 SetAssetMetadata(new[] { new MetadataRow("Width", width.ToString()),
-                    new MetadataRow("Height", height.ToString()), new MetadataRow("Format", format) });
+                    new MetadataRow("Height", height.ToString()), new MetadataRow("Format", format ?? string.Empty) });
             PreviewDetails.Text = additionalInfo ?? string.Empty;
             RefreshPreviewSurfaceVisibility();
         });
@@ -1034,6 +1064,8 @@ public partial class MainPage : ContentPage
         UnregisterEmbeddedPreviewFont();
 #endif
         ImagePreviewFrame.IsVisible = false;
+        TextureActionsRow.IsVisible = false;
+        TextureChannelsButton.IsVisible = false;
         OpenFullTexturePreviewButton.IsVisible = false;
         if (_videoPlayer?.Source != null)
             _videoPlayer.Stop();
@@ -1043,6 +1075,8 @@ public partial class MainPage : ContentPage
         VideoPreviewFrame.IsVisible = false;
         LoadVideoPlaybackButton.IsVisible = false;
         VideoPlaybackStatus.Text = string.Empty;
+        TryDeletePreviewFile(_previewTextureMaskedPath);
+        _previewTextureMaskedPath = null;
         _previewImagePath = null;
         _previewImageWidth = 0;
         _previewImageHeight = 0;
@@ -2866,10 +2900,18 @@ public partial class MainPage : ContentPage
                     break;
                 case AssetStudio.Texture2D texture:
                     PreviewDetails.Text = "Decoding texture…";
-                    var imagePath = await Task.Run(() => MobileAssetExporter.Export(texture));
+                    var exportedPath = await Task.Run(() => MobileAssetExporter.Export(texture));
                     if (!IsActivePreview(row)) return;
-                    ShowTexturePreview(row.Name, ImageSource.FromFile(imagePath), texture.m_Width,
-                        texture.m_Height, texture.m_TextureFormat.ToString(), imagePath: imagePath,
+                    var (previewPath, temporaryPreview) = ApplyTextureChannelMask(exportedPath);
+                    if (!IsActivePreview(row))
+                    {
+                        if (temporaryPreview) TryDeletePreviewFile(previewPath);
+                        return;
+                    }
+                    ShowTexturePreview(row.Name, ImageSource.FromFile(previewPath), texture.m_Width,
+                        texture.m_Height, texture.m_TextureFormat.ToString(), imagePath: previewPath,
+                        temporaryPreviewPath: temporaryPreview ? previewPath : null,
+                        supportsChannelToggles: true,
                         metadata: CreateTextureMetadataRows(
                             texture.m_Width,
                             texture.m_Height,
@@ -2878,7 +2920,7 @@ public partial class MainPage : ContentPage
                             texture.m_TextureSettings?.m_Aniso ?? 0,
                             texture.m_TextureSettings?.m_MipBias ?? 0f,
                             DescribeTextureWrapMode(texture.m_TextureSettings?.m_WrapMode),
-                            DescribeTextureChannels(texture.m_TextureFormat)));
+                            DescribeEnabledTextureChannels()));
                     break;
                 case AssetStudio.Mesh mesh:
                     ShowModelPreview(row.Name,
