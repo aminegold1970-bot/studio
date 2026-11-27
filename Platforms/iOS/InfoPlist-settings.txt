@@ -1,8 +1,0 @@
-Merge these keys into the existing MAUI iOS Info.plist (do not replace the entire plist):
-
-<key>UIFileSharingEnabled</key>
-<true/>
-<key>LSSupportsOpeningDocumentsInPlace</key>
-<true/>
-
-The supplied unsigned IPA already contains both keys.

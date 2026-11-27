@@ -22,9 +22,6 @@
 		<!-- The UI is English-only; keep neutral resources and drop every
 		     localized satellite assembly from the app bundle. -->
 		<SatelliteResourceLanguages>en</SatelliteResourceLanguages>
-		<!-- The nested app copy is not part of this project and duplicates its source/XAML items. -->
-		<DefaultItemExcludes>$(DefaultItemExcludes);AssetStudio.Mobile\**</DefaultItemExcludes>
-
 		<!-- Enable XAML source generation for faster build times and improved performance.
 		     This generates C# code from XAML at compile time instead of runtime inflation.
 		     To disable, remove this line.

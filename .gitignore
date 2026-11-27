@@ -1,0 +1,15 @@
+# Build outputs and generated files
+**/bin/
+**/obj/
+artifacts/
+
+# IDE / editor state
+.vs/
+.idea/
+*.user
+*.suo
+*.userprefs
+.DS_Store
+
+# Local build logs
+*.log
