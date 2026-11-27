@@ -12,6 +12,11 @@ namespace AssetStudio
     {
         public static string Convert(this Shader shader)
         {
+            if (shader.m_ParsedForm == null && shader.compressedBlob == null && shader.m_Script == null)
+            {
+                return header + $"// Shader \"{shader.m_Name}\" uses an unsupported serialized format (Unity {string.Join(".", shader.version)}) and was not converted.\n";
+            }
+
             if (shader.m_SubProgramBlob != null) //5.3 - 5.4
             {
                 var decompressedBytes = new byte[shader.decompressedSize];
