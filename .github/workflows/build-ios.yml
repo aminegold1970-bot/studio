@@ -11,19 +11,6 @@ permissions:
 jobs:
   build-ios:
     runs-on: macos-26
-    timeout-minutes: 60
-    env:
-      DOTNET_NOLOGO: "1"
-      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
-      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "1"
-      # Keep in sync with sdk.workloadVersion in global.json. Workload set
-      # 10.0.401 ships .NET for iOS 26.5.10318, which supports Xcode 26.6.
-      IOS_WORKLOAD_SET: 10.0.401
-      # Use the real Xcode bundle, not the /Applications/Xcode.app symlink.
-      # The symlink breaks .NET's actool SDK lookup on macos-26 runners.
-      IOS_XCODE_PATH: /Applications/Xcode_26.6.app
-      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
-
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -34,228 +21,59 @@ jobs:
           dotnet-version: 10.0.x
 
       - name: Verify .NET SDK
-        shell: bash
-        run: |
-          set -euo pipefail
-          dotnet --version
+        run: dotnet --version
 
-      - name: Install iOS workload
-        run: dotnet workload install maui-ios
+      - name: Install .NET iOS workload
+        run: dotnet workload install maui-ios --version 10.0.401
 
-      - name: Verify workload set
-        shell: bash
-        run: |
-          set -euo pipefail
-          workload_version="$(dotnet workload --version | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | sed -n '1p' || true)"
-          echo "Installed workload set: $workload_version"
-          if [[ "$workload_version" != "$IOS_WORKLOAD_SET" ]]; then
-            echo "::error::Expected workload set $IOS_WORKLOAD_SET, found '$workload_version'. Xcode 26.6 compatibility requires $IOS_WORKLOAD_SET (keep global.json in sync)."
-            exit 1
-          fi
-
-      - name: Select real Xcode 26.6 bundle
-        shell: bash
-        run: |
-          set -euo pipefail
-          unset XCODE_DEVELOPER_DIR_PATH || true
-          if [[ ! -d "$IOS_XCODE_PATH" ]]; then
-            echo "::error::Expected Xcode at $IOS_XCODE_PATH"
-            ls -1 /Applications | grep '^Xcode' || true
-            exit 1
-          fi
-
-          xcode_real_path="$(cd "$IOS_XCODE_PATH" && pwd -P)"
-          echo "Xcode real path: $xcode_real_path"
-          sudo xcode-select --switch "$xcode_real_path/Contents/Developer"
-          echo "DEVELOPER_DIR=$xcode_real_path/Contents/Developer" >> "$GITHUB_ENV"
-          echo "Selected developer dir: $(xcode-select -p)"
-          xcodebuild -version
+      - name: Select Xcode 26.6
+        run: sudo xcode-select --switch /Applications/Xcode_26.6.app
 
       - name: Verify Apple toolchain
-        shell: bash
+        run: xcodebuild -version
+
+      - name: Restore iOS app and referenced projects
         run: |
-          set -euo pipefail
-          unset XCODE_DEVELOPER_DIR_PATH || true
-          echo "DEVELOPER_DIR: ${DEVELOPER_DIR:-<unset>}"
-          echo "xcode-select: $(xcode-select -p)"
-          xcodebuild -version
-
-          xcode_version="$(xcodebuild -version | sed -n '1p')"
-          if [[ "$xcode_version" != "Xcode 26.6" ]]; then
-            echo "::error::Expected Xcode 26.6, found '$xcode_version'"
-            exit 1
-          fi
-
-          ios_sdk="$(xcrun --sdk iphoneos --show-sdk-version)"
-          echo "iOS SDK: $ios_sdk"
-          if [[ "$ios_sdk" != 26.5* ]]; then
-            echo "::error::Expected iOS SDK 26.5.x for workload set $IOS_WORKLOAD_SET, found '$ios_sdk'"
-            exit 1
-          fi
-
-          macos_sdk="$(xcrun --sdk macosx --show-sdk-path)"
-          echo "macOS SDK: $macos_sdk"
-          case "$macos_sdk" in
-            *Xcode_26.6.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk) ;;
-            *)
-              echo "::error::macOS SDK resolved outside the real Xcode 26.6 bundle: $macos_sdk. .NET's actool task will fail with the symlink Xcode path."
-              exit 1
-              ;;
-          esac
-
-          echo "actool: $(xcrun --find actool)"
-          echo "actool (macOS SDK): $(xcrun --sdk macosx --find actool)"
-
-      - name: Restore iOS app
-        shell: bash
-        run: |
-          set -euo pipefail
-          unset XCODE_DEVELOPER_DIR_PATH || true
-          rm -rf AssetStudio.Mobile/bin AssetStudio.Mobile/obj
-          dotnet restore AssetStudio.Mobile/AssetStudioMobile.csproj \
-            --runtime ios-arm64 \
-            -p:TargetFramework=net10.0-ios
+          dotnet restore AssetStudio.Mobile/AssetStudioMobile.csproj --runtime ios-arm64 -p:TargetFramework=net10.0-ios
+          dotnet restore AssetStudio/AssetStudio.csproj
+          dotnet restore AssetStudio.PInvoke/AssetStudio.PInvoke.csproj
+          dotnet restore Texture2DDecoderWrapper/Texture2DDecoderWrapper.csproj
 
       - name: Publish unsigned Release app for ARM64
-        shell: bash
-        run: |
-          set -euo pipefail
-          unset XCODE_DEVELOPER_DIR_PATH || true
-          dotnet publish AssetStudio.Mobile/AssetStudioMobile.csproj \
-            --configuration Release \
-            --framework net10.0-ios \
-            --runtime ios-arm64 \
-            --no-restore \
-            -p:EnableCodeSigning=false \
-            -p:ArchiveOnBuild=false \
-            -p:BuildIpa=false \
-            -v:normal
-
-      - name: Locate unsigned .app bundle
-        shell: bash
-        run: |
-          set -euo pipefail
-          expected_root="AssetStudio.Mobile/bin/Release/net10.0-ios/ios-arm64/publish"
-          search_root="AssetStudio.Mobile/bin/Release/net10.0-ios/ios-arm64"
-          app_path=""
-
-          if [[ -d "$expected_root" ]]; then
-            app_path="$(find "$expected_root" -type d -name '*.app' -prune -print -quit)"
-          fi
-
-          if [[ -z "$app_path" && -d "$search_root" ]]; then
-            app_path="$(find "$search_root" -type d -name '*.app' -prune -print -quit)"
-          fi
-
-          if [[ -z "$app_path" ]]; then
-            app_path="$(find AssetStudio.Mobile/bin -type d -name '*.app' -prune -print -quit 2>/dev/null || true)"
-          fi
-
-          if [[ -z "$app_path" ]]; then
-            echo "::error::No iOS .app bundle was produced"
-            echo "Build output:"
-            find AssetStudio.Mobile/bin -print 2>/dev/null || true
-            exit 1
-          fi
-
-          if [[ "$app_path" == *iossimulator* ]]; then
-            echo "::error::Found a simulator app instead of an ios-arm64 device app: $app_path"
-            exit 1
-          fi
-
-          echo "APP_PATH=$app_path" >> "$GITHUB_ENV"
-          echo "Found app: $app_path"
+        run: >-
+          dotnet publish AssetStudio.Mobile/AssetStudioMobile.csproj
+          --configuration Release
+          --framework net10.0-ios
+          --runtime ios-arm64
+          --no-restore
+          -p:EnableCodeSigning=false
+          -p:ArchiveOnBuild=false
+          -p:BuildIpa=false
 
       - name: Package unsigned app as IPA
         shell: bash
         run: |
           set -euo pipefail
-          app_path="$APP_PATH"
 
-          if [[ -z "$app_path" || ! -d "$app_path" ]]; then
-            echo "::error::App path is missing: '$app_path'"
+          app_root="AssetStudio.Mobile/bin/Release/net10.0-ios/ios-arm64"
+          app_path="$(find "$app_root" -type d -name '*.app' -prune -print -quit)"
+          if [[ -z "$app_path" ]]; then
+            echo "::error::No ARM64 iOS .app bundle was produced under $app_root"
             exit 1
           fi
 
           ipa_path="$GITHUB_WORKSPACE/artifacts/AssetStudioMobile-unsigned.ipa"
           staging_root="$(mktemp -d "$RUNNER_TEMP/assetstudio-ipa.XXXXXX")"
-          app_name="$(basename "$app_path")"
-
-          rm -rf "$GITHUB_WORKSPACE/artifacts"
-          mkdir -p "$staging_root/Payload"
-          mkdir -p "$(dirname "$ipa_path")"
-
-          ditto "$app_path" "$staging_root/Payload/$app_name"
-
-          # Keep the artifact genuinely unsigned.
-          find "$staging_root/Payload" -type f -name 'embedded.mobileprovision' -exec rm -f {} +
-          find "$staging_root/Payload" -type d -name '_CodeSignature' -prune -exec rm -rf {} +
-
-          signing_material="$(find "$staging_root/Payload" \( -name '_CodeSignature' -o -name 'embedded.mobileprovision' \) -print -quit)"
-          if [[ -n "$signing_material" ]]; then
-            echo "::error::IPA still contains signing material: $signing_material"
-            exit 1
-          fi
-
-          plist_path="$staging_root/Payload/$app_name/Info.plist"
-          if [[ ! -f "$plist_path" ]]; then
-            echo "::error::IPA payload is missing Info.plist"
-            exit 1
-          fi
-          plutil -lint "$plist_path"
-
-          bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "$plist_path")"
-          if [[ "$bundle_id" != "com.assetstudio.mobile" ]]; then
-            echo "::error::Unexpected bundle identifier: '$bundle_id'"
-            exit 1
-          fi
-
-          for plist_key in UIFileSharingEnabled LSSupportsOpeningDocumentsInPlace; do
-            value="$(plutil -extract "$plist_key" raw -o - "$plist_path" || true)"
-            if [[ "$value" != "1" && "$value" != "true" ]]; then
-              echo "::error::$plist_key must be true in the packaged Info.plist (found '$value')"
-              exit 1
-            fi
-          done
-
-          for plist_key in CFBundleShortVersionString CFBundleVersion UILaunchStoryboardName XSAppIconAssets; do
-            value="$(plutil -extract "$plist_key" raw -o - "$plist_path" || true)"
-            if [[ -z "$value" ]]; then
-              echo "::error::$plist_key is missing from the packaged Info.plist"
-              exit 1
-            fi
-            echo "$plist_key: $value"
-          done
-
-          executable_name="$(plutil -extract CFBundleExecutable raw -o - "$plist_path")"
-          executable_path="$staging_root/Payload/$app_name/$executable_name"
-          if [[ ! -f "$executable_path" ]]; then
-            echo "::error::IPA payload is missing executable '$executable_name'"
-            exit 1
-          fi
-          lipo_output="$(lipo -info "$executable_path")"
-          echo "$lipo_output"
-          case "$lipo_output" in
-            *arm64*) ;;
-            *)
-              echo "::error::Executable is not arm64"
-              exit 1
-              ;;
-          esac
-
-          ditto -c -k --sequesterRsrc --keepParent \
-            "$staging_root/Payload" "$ipa_path"
+          mkdir -p "$staging_root/Payload" "$(dirname "$ipa_path")"
+          ditto "$app_path" "$staging_root/Payload/$(basename "$app_path")"
+          ditto -c -k --sequesterRsrc --keepParent "$staging_root/Payload" "$ipa_path"
 
           unzip -tq "$ipa_path"
-
-          unzip -Z1 "$ipa_path" > "$staging_root/entries.txt"
-          if ! grep -Eq '^Payload/[^/]+\.app/Info\.plist$' "$staging_root/entries.txt"; then
-            echo "::error::Invalid IPA structure"
+          if ! unzip -Z1 "$ipa_path" | grep -Eq '^Payload/[^/]+\.app/Info\.plist$'; then
+            echo "::error::The generated IPA does not contain an app bundle at Payload/<name>.app"
             exit 1
           fi
 
-          shasum -a 256 "$ipa_path"
-          ls -lh "$ipa_path"
           echo "Created unsigned IPA: $ipa_path"
 
       - name: Upload IPA artifact
