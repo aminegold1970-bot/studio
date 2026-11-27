@@ -1,5 +1,6 @@
 using Microsoft.Maui.ApplicationModel.DataTransfer;
 using Microsoft.Maui.Storage;
+using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 using System.Collections.ObjectModel;
 using System.Globalization;
@@ -767,20 +768,23 @@ public partial class MainPage : ContentPage
             using var image = SixLabors.ImageSharp.Image.Load<Rgba32>(imagePath);
             var validChannel = _textureChannels.Count(channel => channel);
             var disabledColor = validChannel == 1 && _textureChannels[3] ? byte.MaxValue : byte.MinValue;
-            for (var y = 0; y < image.Height; y++)
+            image.ProcessPixelRows(accessor =>
             {
-                var row = image.GetPixelRowSpan(y);
-                for (var x = 0; x < row.Length; x++)
+                for (var y = 0; y < accessor.Height; y++)
                 {
-                    ref var pixel = ref row[x];
-                    if (!_textureChannels[0]) pixel.B = disabledColor;
-                    if (!_textureChannels[1]) pixel.G = disabledColor;
-                    if (!_textureChannels[2]) pixel.R = disabledColor;
-                    if (!_textureChannels[3]) pixel.A = byte.MaxValue;
+                    var row = accessor.GetRowSpan(y);
+                    for (var x = 0; x < row.Length; x++)
+                    {
+                        ref var pixel = ref row[x];
+                        if (!_textureChannels[0]) pixel.B = disabledColor;
+                        if (!_textureChannels[1]) pixel.G = disabledColor;
+                        if (!_textureChannels[2]) pixel.R = disabledColor;
+                        if (!_textureChannels[3]) pixel.A = byte.MaxValue;
+                    }
                 }
-            }
+            });
             var maskedPath = Path.Combine(Path.GetTempPath(), $"assetstudio-channels-{Guid.NewGuid():N}.png");
-            image.Save(maskedPath);
+            image.SaveAsPng(maskedPath);
             return (maskedPath, true);
         }
         catch
@@ -3042,6 +3046,26 @@ public partial class MainPage : ContentPage
             StatusLabel.Text = $"Scene object preview failed: {exception.Message}";
             await DisplayAlert("Scene object preview failed", exception.Message, "OK");
         }
+    }
+
+    private async void OnTextureChannelsClicked(object sender, EventArgs e)
+    {
+        var enabledChannel = Array.FindIndex(_textureChannels, channel => channel);
+        if (enabledChannel < 0 || enabledChannel == _textureChannels.Length - 1 ||
+            _textureChannels.All(channel => channel))
+        {
+            Array.Clear(_textureChannels, 0, _textureChannels.Length);
+            _textureChannels[0] = true;
+        }
+        else
+        {
+            Array.Clear(_textureChannels, 0, _textureChannels.Length);
+            _textureChannels[enabledChannel + 1] = true;
+        }
+
+        TextureChannelsButton.Text = $"Channels: {DescribeEnabledTextureChannels()}";
+        if (_selectedAsset?.SourceAsset is AssetStudio.Texture2D)
+            await PresentAssetPreviewAsync(_selectedAsset);
     }
 
     private async void OnFullTexturePreviewClicked(object sender, EventArgs e)
