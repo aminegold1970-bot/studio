@@ -686,7 +686,33 @@ public partial class MainPage : ContentPage
     public void SetTextureMetadata(int width, int height, string format, string filterMode,
         int anisotropicLevel, float mipMapBias, string wrapMode, string channels)
     {
-        SetAssetMetadata(new[]
+        SetAssetMetadata(CreateTextureMetadataRows(width, height, format, filterMode,
+            anisotropicLevel, mipMapBias, wrapMode, channels));
+    }
+
+    public void SetTextureMetadata(AssetStudio.Texture2D texture)
+    {
+        if (texture == null)
+        {
+            SetAssetMetadata(Array.Empty<MetadataRow>());
+            return;
+        }
+
+        var settings = texture.m_TextureSettings;
+        SetAssetMetadata(CreateTextureMetadataRows(
+            texture.m_Width,
+            texture.m_Height,
+            texture.m_TextureFormat.ToString(),
+            DescribeTextureFilterMode(settings?.m_FilterMode),
+            settings?.m_Aniso ?? 0,
+            settings?.m_MipBias ?? 0f,
+            DescribeTextureWrapMode(settings?.m_WrapMode),
+            DescribeTextureChannels(texture.m_TextureFormat)));
+    }
+
+    private static IReadOnlyList<MetadataRow> CreateTextureMetadataRows(int width, int height, string format,
+        string filterMode, int anisotropicLevel, float mipMapBias, string wrapMode, string channels) =>
+        new[]
         {
             new MetadataRow("Width", width.ToString()),
             new MetadataRow("Height", height.ToString()),
@@ -696,8 +722,61 @@ public partial class MainPage : ContentPage
             new MetadataRow("Mip map bias", mipMapBias.ToString(System.Globalization.CultureInfo.InvariantCulture)),
             new MetadataRow("Wrap mode", wrapMode),
             new MetadataRow("Channels", channels)
-        });
-    }
+        };
+
+    private static string DescribeTextureFilterMode(int? mode) => mode switch
+    {
+        0 => "Point",
+        1 => "Bilinear",
+        2 => "Trilinear",
+        null => "Unknown",
+        _ => $"Unknown ({mode.Value})"
+    };
+
+    private static string DescribeTextureWrapMode(int? mode) => mode switch
+    {
+        0 => "Repeat",
+        1 => "Clamp",
+        null => "Unknown",
+        _ => $"Unknown ({mode.Value})"
+    };
+
+    private static string DescribeTextureChannels(AssetStudio.TextureFormat format) => format switch
+    {
+        AssetStudio.TextureFormat.Alpha8 => "A",
+        AssetStudio.TextureFormat.R16 or AssetStudio.TextureFormat.RHalf or AssetStudio.TextureFormat.RFloat
+            or AssetStudio.TextureFormat.R8 or AssetStudio.TextureFormat.EAC_R
+            or AssetStudio.TextureFormat.EAC_R_SIGNED or AssetStudio.TextureFormat.BC4 => "R",
+        AssetStudio.TextureFormat.RGHalf or AssetStudio.TextureFormat.RGFloat or AssetStudio.TextureFormat.RG16
+            or AssetStudio.TextureFormat.RG32 or AssetStudio.TextureFormat.EAC_RG
+            or AssetStudio.TextureFormat.EAC_RG_SIGNED or AssetStudio.TextureFormat.BC5 => "RG",
+        AssetStudio.TextureFormat.RGB24 or AssetStudio.TextureFormat.RGB565 or AssetStudio.TextureFormat.BGR24
+            or AssetStudio.TextureFormat.RGBFloat or AssetStudio.TextureFormat.RGB48 or AssetStudio.TextureFormat.DXT1
+            or AssetStudio.TextureFormat.DXT1Crunched or AssetStudio.TextureFormat.PVRTC_RGB2
+            or AssetStudio.TextureFormat.PVRTC_RGB4 or AssetStudio.TextureFormat.ETC_RGB4
+            or AssetStudio.TextureFormat.ETC_RGB4_3DS or AssetStudio.TextureFormat.ETC_RGB4Crunched
+            or AssetStudio.TextureFormat.ATC_RGB4 or AssetStudio.TextureFormat.ETC2_RGB
+            or AssetStudio.TextureFormat.BC6H or AssetStudio.TextureFormat.ASTC_RGB_4x4
+            or AssetStudio.TextureFormat.ASTC_RGB_5x5 or AssetStudio.TextureFormat.ASTC_RGB_6x6
+            or AssetStudio.TextureFormat.ASTC_RGB_8x8 or AssetStudio.TextureFormat.ASTC_RGB_10x10
+            or AssetStudio.TextureFormat.ASTC_RGB_12x12 or AssetStudio.TextureFormat.ASTC_HDR_4x4
+            or AssetStudio.TextureFormat.ASTC_HDR_5x5 or AssetStudio.TextureFormat.ASTC_HDR_6x6
+            or AssetStudio.TextureFormat.ASTC_HDR_8x8 or AssetStudio.TextureFormat.ASTC_HDR_10x10
+            or AssetStudio.TextureFormat.ASTC_HDR_12x12 => "RGB",
+        AssetStudio.TextureFormat.ARGB4444 or AssetStudio.TextureFormat.RGBA32 or AssetStudio.TextureFormat.ARGB32
+            or AssetStudio.TextureFormat.ARGBFloat or AssetStudio.TextureFormat.DXT3 or AssetStudio.TextureFormat.DXT5
+            or AssetStudio.TextureFormat.RGBA4444 or AssetStudio.TextureFormat.BGRA32
+            or AssetStudio.TextureFormat.RGBAHalf or AssetStudio.TextureFormat.RGBAFloat
+            or AssetStudio.TextureFormat.DXT5Crunched or AssetStudio.TextureFormat.PVRTC_RGBA2
+            or AssetStudio.TextureFormat.PVRTC_RGBA4 or AssetStudio.TextureFormat.ETC_RGBA8_3DS
+            or AssetStudio.TextureFormat.ATC_RGBA8 or AssetStudio.TextureFormat.ETC2_RGBA1
+            or AssetStudio.TextureFormat.ETC2_RGBA8 or AssetStudio.TextureFormat.ETC2_RGBA8Crunched
+            or AssetStudio.TextureFormat.BC7 or AssetStudio.TextureFormat.ASTC_RGBA_4x4
+            or AssetStudio.TextureFormat.ASTC_RGBA_5x5 or AssetStudio.TextureFormat.ASTC_RGBA_6x6
+            or AssetStudio.TextureFormat.ASTC_RGBA_8x8 or AssetStudio.TextureFormat.ASTC_RGBA_10x10
+            or AssetStudio.TextureFormat.ASTC_RGBA_12x12 or AssetStudio.TextureFormat.RGBA64 => "RGBA",
+        _ => "Unknown"
+    };
 
     public sealed class MetadataRow
     {
@@ -722,7 +801,8 @@ public partial class MainPage : ContentPage
 
     // Preview methods accept decoded data without depending on Windows Forms types.
     public void ShowTexturePreview(string title, ImageSource image, int width, int height,
-        string format, string additionalInfo = "", string? imagePath = null)
+        string format, string additionalInfo = "", string? imagePath = null,
+        IEnumerable<MetadataRow>? metadata = null)
     {
         MainThread.BeginInvokeOnMainThread(() =>
         {
@@ -737,8 +817,12 @@ public partial class MainPage : ContentPage
             ImagePreviewFrame.IsVisible = image != null;
             AssetImagePreview.Source = image;
             OpenFullTexturePreviewButton.IsVisible = !string.IsNullOrWhiteSpace(imagePath);
-            SetAssetMetadata(new[] { new MetadataRow("Width", width.ToString()),
-                new MetadataRow("Height", height.ToString()), new MetadataRow("Format", format) });
+            var metadataRows = metadata?.Where(row => row != null && !string.IsNullOrWhiteSpace(row.Key)).ToList();
+            if (metadataRows is { Count: > 0 })
+                SetAssetMetadata(metadataRows);
+            else
+                SetAssetMetadata(new[] { new MetadataRow("Width", width.ToString()),
+                    new MetadataRow("Height", height.ToString()), new MetadataRow("Format", format) });
             PreviewDetails.Text = additionalInfo ?? string.Empty;
             RefreshPreviewSurfaceVisibility();
         });
@@ -771,6 +855,47 @@ public partial class MainPage : ContentPage
             PreviewDetails.Text = details;
             RefreshPreviewSurfaceVisibility();
         });
+    }
+
+    private static string DescribeAudioCompressionFormat(AssetStudio.AudioClip audio)
+    {
+        if (audio == null)
+            return "Unknown";
+
+        if (audio.version is { Length: > 0 } version && version[0] < 5)
+        {
+            return audio.m_Type switch
+            {
+                AssetStudio.FMODSoundType.ACC => "Acc",
+                AssetStudio.FMODSoundType.AIFF => "AIFF",
+                AssetStudio.FMODSoundType.IT => "Impulse tracker",
+                AssetStudio.FMODSoundType.MOD => "Protracker / Fasttracker MOD",
+                AssetStudio.FMODSoundType.MPEG => "MP2/MP3 MPEG",
+                AssetStudio.FMODSoundType.OGGVORBIS => "Ogg vorbis",
+                AssetStudio.FMODSoundType.S3M => "ScreamTracker 3",
+                AssetStudio.FMODSoundType.WAV => "Microsoft WAV",
+                AssetStudio.FMODSoundType.XM => "FastTracker 2 XM",
+                AssetStudio.FMODSoundType.XMA => "Xbox360 XMA",
+                AssetStudio.FMODSoundType.VAG => "PlayStation Portable ADPCM",
+                AssetStudio.FMODSoundType.AUDIOQUEUE => "iPhone",
+                _ => "Unknown"
+            };
+        }
+
+        return audio.m_CompressionFormat switch
+        {
+            AssetStudio.AudioCompressionFormat.PCM => "PCM",
+            AssetStudio.AudioCompressionFormat.Vorbis => "Vorbis",
+            AssetStudio.AudioCompressionFormat.ADPCM => "ADPCM",
+            AssetStudio.AudioCompressionFormat.MP3 => "MP3",
+            AssetStudio.AudioCompressionFormat.PSMVAG => "PlayStation Portable ADPCM",
+            AssetStudio.AudioCompressionFormat.HEVAG => "PSVita ADPCM",
+            AssetStudio.AudioCompressionFormat.XMA => "Xbox360 XMA",
+            AssetStudio.AudioCompressionFormat.AAC => "AAC",
+            AssetStudio.AudioCompressionFormat.GCADPCM => "Nintendo 3DS/Wii DSP",
+            AssetStudio.AudioCompressionFormat.ATRAC9 => "PSVita ATRAC9",
+            _ => "Unknown"
+        };
     }
 
     public void ShowAudioPreview(string title, string codec, string details = "")
@@ -2599,6 +2724,8 @@ public partial class MainPage : ContentPage
             actions.Add("Go to Scene Hierarchy");
         }
         actions.Add("Export selected assets");
+        if (targets.Any(row => row.SourceAsset is AssetStudio.Animator or AssetStudio.AnimationClip))
+            actions.Add("Animator + selected AnimationClips");
 
         _menuAnchor = null;
         var action = await Choose(row.Name, actions.ToArray());
@@ -2638,6 +2765,25 @@ public partial class MainPage : ContentPage
             {
                 StatusLabel.Text = $"Original source file is unavailable: {row.SourceFile}";
             }
+            return;
+        }
+
+        if (action == "Animator + selected AnimationClips")
+        {
+            var animatorAndClips = targets
+                .Where(row => row.SourceAsset is AssetStudio.Animator or AssetStudio.AnimationClip)
+                .ToList();
+            var selectedAnimators = animatorAndClips
+                .Where(row => row.SourceAsset is AssetStudio.Animator)
+                .Select(row => (AssetStudio.Animator)row.SourceAsset!)
+                .ToArray();
+            if (selectedAnimators.Length != 1)
+            {
+                StatusLabel.Text = "Select exactly one Animator and any AnimationClips to export them";
+                return;
+            }
+            await RunAssetExportAsync(
+                "Convert", "Selected assets", animatorAndClips, selectedAnimators[0]);
             return;
         }
 
@@ -2723,7 +2869,16 @@ public partial class MainPage : ContentPage
                     var imagePath = await Task.Run(() => MobileAssetExporter.Export(texture));
                     if (!IsActivePreview(row)) return;
                     ShowTexturePreview(row.Name, ImageSource.FromFile(imagePath), texture.m_Width,
-                        texture.m_Height, texture.m_TextureFormat.ToString(), imagePath: imagePath);
+                        texture.m_Height, texture.m_TextureFormat.ToString(), imagePath: imagePath,
+                        metadata: CreateTextureMetadataRows(
+                            texture.m_Width,
+                            texture.m_Height,
+                            texture.m_TextureFormat.ToString(),
+                            DescribeTextureFilterMode(texture.m_TextureSettings?.m_FilterMode),
+                            texture.m_TextureSettings?.m_Aniso ?? 0,
+                            texture.m_TextureSettings?.m_MipBias ?? 0f,
+                            DescribeTextureWrapMode(texture.m_TextureSettings?.m_WrapMode),
+                            DescribeTextureChannels(texture.m_TextureFormat)));
                     break;
                 case AssetStudio.Mesh mesh:
                     ShowModelPreview(row.Name,
@@ -2754,7 +2909,7 @@ public partial class MainPage : ContentPage
 #if IOS || MACCATALYST || ANDROID || WINDOWS
                     _selectedAudioClip = audio;
 #endif
-                    ShowAudioPreview(row.Name, audio.m_CompressionFormat.ToString(),
+                    ShowAudioPreview(row.Name, DescribeAudioCompressionFormat(audio),
                         $"Length: {audio.m_Length:N2} seconds · {audio.m_Channels} channel(s)\nPCM and Vorbis convert to WAV; MP3 and AAC use native playback. Other codecs remain exportable as original data.");
                     break;
                 case AssetStudio.Font font:
