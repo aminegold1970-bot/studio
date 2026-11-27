@@ -18,6 +18,10 @@ using Foundation;
 using CoreText;
 using UIKit;
 #endif
+#if IOS
+using CoreGraphics;
+using CoreMedia;
+#endif
 
 namespace AssetStudioMobile;
 
@@ -99,6 +103,8 @@ public partial class MainPage : ContentPage
     private const string TextureChannelNames = "BGRA";
     private readonly bool[] _textureChannels = { true, true, true, true };
     private string? _previewTextureMaskedPath;
+    private string? _videoThumbnailPath;
+    private int _videoThumbnailRequestId;
     private CommunityToolkit.Maui.Views.MediaElement? _videoPlayer;
     private MeshPreviewDrawable? _inlineMeshDrawable;
     private readonly AssetDocumentLibrary _documentLibrary = new();
@@ -1036,6 +1042,9 @@ public partial class MainPage : ContentPage
         var dataSize = storedDataSize >= 0
             ? $"{storedDataSize:N0} bytes"
             : "Unknown";
+        var fallbackDurationSeconds = hasFrameRate && video.m_FrameCount > 0
+            ? video.m_FrameCount / video.m_FrameRate
+            : 0;
         var pixelAspect = video.m_PixelAspectRatioNum > 0 && video.m_PixelAspectRatioDen > 0
             ? $"{video.m_PixelAspectRatioNum}:{video.m_PixelAspectRatioDen}"
             : "Not specified";
@@ -1079,6 +1088,15 @@ public partial class MainPage : ContentPage
                 VideoPreviewFrame.IsVisible
                     ? "Playback uses the device's supported codecs. You can still export the stored stream unchanged."
                     : "This video has no readable stored stream to play or export.";
+#if IOS
+            if (VideoPreviewFrame.IsVisible)
+            {
+                VideoPlaybackStatus.Text = "Generating thumbnail…";
+                var selectedId = _selectedAsset?.Id;
+                var requestId = ++_videoThumbnailRequestId;
+                _ = ApplyVideoThumbnailAsync(video, selectedId, requestId, fallbackDurationSeconds);
+            }
+#endif
             RefreshPreviewSurfaceVisibility();
         });
     }
@@ -1165,8 +1183,13 @@ public partial class MainPage : ContentPage
         VideoPlayerHost.Content = null;
         VideoPlayerHost.IsVisible = false;
         VideoPreviewFrame.IsVisible = false;
+        VideoThumbnailImage.IsVisible = false;
+        VideoThumbnailImage.Source = null;
         LoadVideoPlaybackButton.IsVisible = false;
         VideoPlaybackStatus.Text = string.Empty;
+        _videoThumbnailRequestId++;
+        TryDeletePreviewFile(_videoThumbnailPath);
+        _videoThumbnailPath = null;
         TryDeletePreviewFile(_previewTextureMaskedPath);
         _previewTextureMaskedPath = null;
         _previewImagePath = null;
@@ -3595,6 +3618,98 @@ public partial class MainPage : ContentPage
         VideoPlayerHost.Content = _videoPlayer;
         return true;
     }
+
+#if IOS
+    private async Task ApplyVideoThumbnailAsync(
+        AssetStudio.VideoClip video,
+        string? selectedAssetId,
+        int requestId,
+        double fallbackDurationSeconds)
+    {
+        string? exportedVideoPath = null;
+        string? thumbnailPath = null;
+        var applied = false;
+        try
+        {
+            var result = await Task.Run(() => MobileAssetExporter.ExportForShare(
+                video,
+                MobileExportKind.Converted,
+                cancellationToken: CancellationToken.None));
+            exportedVideoPath = result.FilePath;
+            thumbnailPath = await Task.Run(
+                () => CreateVideoThumbnail(exportedVideoPath, fallbackDurationSeconds));
+
+            if (requestId != _videoThumbnailRequestId ||
+                _selectedAsset?.Id != selectedAssetId ||
+                !VideoPreviewFrame.IsVisible)
+            {
+                return;
+            }
+
+            TryDeletePreviewFile(_videoThumbnailPath);
+            _videoThumbnailPath = thumbnailPath;
+            VideoThumbnailImage.Source = ImageSource.FromFile(thumbnailPath);
+            VideoThumbnailImage.IsVisible = true;
+            if (!VideoPlayerHost.IsVisible)
+                VideoPlaybackStatus.Text = "Thumbnail ready. Load video for playback.";
+            applied = true;
+        }
+        catch (Exception exception)
+        {
+            AssetStudio.Logger.Verbose($"Video thumbnail unavailable: {exception.Message}");
+            if (requestId == _videoThumbnailRequestId &&
+                _selectedAsset?.Id == selectedAssetId &&
+                !VideoPlayerHost.IsVisible)
+            {
+                VideoPlaybackStatus.Text = "Thumbnail unavailable; video can still be played.";
+            }
+        }
+        finally
+        {
+            TryDeletePreviewFile(exportedVideoPath);
+            if (!applied)
+                TryDeletePreviewFile(thumbnailPath);
+        }
+    }
+
+    private static string CreateVideoThumbnail(string videoPath, double fallbackDurationSeconds)
+    {
+        using var url = NSUrl.FromFilename(videoPath);
+        using var asset = AVAsset.FromUrl(url);
+        var durationSeconds = asset.Duration.Seconds;
+        if (!double.IsFinite(durationSeconds) || durationSeconds <= 0)
+            durationSeconds = fallbackDurationSeconds;
+        var requestedSeconds = durationSeconds > 0
+            ? Math.Min(durationSeconds * 0.1, 10)
+            : 0;
+
+        using var generator = new AVAssetImageGenerator(asset)
+        {
+            AppliesPreferredTrackTransform = true,
+            MaximumSize = new CGSize(640, 640)
+        };
+        var frame = generator.CopyCGImageAtTime(
+            CMTime.FromSeconds(requestedSeconds, 600), out _, out var error);
+        if (frame == null)
+            throw new InvalidDataException(
+                error?.LocalizedDescription ?? "AVFoundation could not decode a video frame.");
+
+        using (frame)
+        {
+            using var image = UIImage.FromImage(frame);
+            using var png = image.AsPNG();
+            if (png == null)
+                throw new InvalidDataException("The decoded video frame could not be encoded as PNG.");
+
+            var thumbnailPath = Path.Combine(
+                FileSystem.CacheDirectory, $"AssetStudio_VideoThumb_{Guid.NewGuid():N}.png");
+            if (!png.Save(thumbnailPath, true, out var saveError))
+                throw new IOException(
+                    saveError?.LocalizedDescription ?? "The video thumbnail could not be saved.");
+            return thumbnailPath;
+        }
+    }
+#endif
 
     private async Task ShowAssetDumpOrSummaryAsync(AssetRow row, string details)
     {
