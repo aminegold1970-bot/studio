@@ -34,8 +34,9 @@ public partial class MainPage : ContentPage
     private static readonly IReadOnlyDictionary<string, int[]> MenuSeparatorIndices =
         new Dictionary<string, int[]>(StringComparer.Ordinal)
         {
+            ["File"] = new[] { 2 },
             ["Export"] = new[] { 2, 3, 5 },
-            ["Model"] = new[] { 2, 4, 5 }
+            ["Model"] = new[] { 2, 4 }
         };
 
     private static readonly IReadOnlyDictionary<string, string> OptionMenuHints =
@@ -924,6 +925,7 @@ public partial class MainPage : ContentPage
             PreviewKind.Text = kind;
             TextPreviewFrame.IsVisible = true;
             AssetTextPreview.Text = content ?? string.Empty;
+            ScriptAssemblyActionsRow.IsVisible = _selectedAsset?.SourceAsset is AssetStudio.MonoBehaviour;
             PreviewDetails.Text = details;
             RefreshPreviewSurfaceVisibility();
         });
@@ -1174,6 +1176,7 @@ public partial class MainPage : ContentPage
         MetadataFrame.IsVisible = false;
         _metadataRows.Clear();
         TextPreviewFrame.IsVisible = false;
+        ScriptAssemblyActionsRow.IsVisible = false;
         FontPreviewFrame.IsVisible = false;
         AudioPreviewFrame.IsVisible = false;
         ModelPreviewFrame.IsVisible = false;
@@ -1280,17 +1283,15 @@ public partial class MainPage : ContentPage
     private async void OnFileMenuClicked(object sender, EventArgs e)
     {
         _menuAnchor = sender as Button;
-        var choice = await Choose("File", "Load file", "Load multiple files", "Load folder",
+        // The desktop Load file command uses a multi-select OpenFileDialog.
+        var choice = await Choose("File", "Load file", "Load folder",
             "Extract file", "Extract folder");
         if (choice == null) return;
 
         switch (choice)
         {
             case "Load file":
-                await PickAssetFilesAsync(allowMultiple: false);
-                break;
-            case "Load multiple files":
-                await PickAssetFilesAsync(allowMultiple: true);
+                await PickAssetFilesAsync();
                 break;
             case "Load folder":
                 await PickAssetFolderAsync();
@@ -1464,7 +1465,7 @@ public partial class MainPage : ContentPage
         }
     }
 
-    private async Task PickAssetFilesAsync(bool allowMultiple = false)
+    private async Task PickAssetFilesAsync()
     {
         if (_isPickingAssetFiles)
             return;
@@ -1484,7 +1485,7 @@ public partial class MainPage : ContentPage
             _loadCancellation = pickerCts;
             await WaitForActionSheetDismissalAsync(pickerCts.Token);
 #endif
-            SetBusy(true, allowMultiple ? "Choose Unity files…" : "Choose a Unity file…");
+            SetBusy(true, "Choose Unity files…");
             List<FileResult> selected;
 #if IOS
             // Use Apple's document picker directly. This avoids the MAUI FilePicker
@@ -1495,23 +1496,14 @@ public partial class MainPage : ContentPage
                     SetLoadingProgress(Math.Clamp(update.Percent, 0, 100), update.Message);
             });
             selected = await AssetStudioNativeFilePicker.PickAsync(
-                allowMultiple, pickerProgress, pickerCts.Token);
+                allowMultiple: true, pickerProgress, pickerCts.Token);
             pickerCts.Token.ThrowIfCancellationRequested();
             if (ReferenceEquals(_loadCancellation, pickerCancellation))
                 _loadCancellation = null;
 #else
-            if (allowMultiple)
-            {
-                var files = await FilePicker.Default.PickMultipleAsync(
-                    new PickOptions { PickerTitle = "Select Unity asset files" });
-                selected = files?.ToList() ?? new List<FileResult>();
-            }
-            else
-            {
-                var file = await FilePicker.Default.PickAsync(
-                    new PickOptions { PickerTitle = "Select a Unity asset file" });
-                selected = file == null ? new List<FileResult>() : new List<FileResult> { file };
-            }
+            var files = await FilePicker.Default.PickMultipleAsync(
+                new PickOptions { PickerTitle = "Select Unity asset files" });
+            selected = files?.ToList() ?? new List<FileResult>();
 #endif
 
             if (selected.Count == 0)
@@ -1733,8 +1725,6 @@ public partial class MainPage : ContentPage
             "Enable preview",
             "Display asset infromation",
             "Specify Unity version",
-            "Load script assemblies",
-            "Clear script assemblies",
             "Export options");
         if (choice == null) return;
         switch (choice)
@@ -1771,15 +1761,6 @@ public partial class MainPage : ContentPage
             case "Specify Unity version":
                 await SpecifyUnityVersionAsync();
                 break;
-            case "Load script assemblies":
-                await LoadMonoBehaviourAssembliesAsync();
-                break;
-            case "Clear script assemblies":
-                _monoBehaviourAssemblyService.Clear();
-                StatusLabel.Text = "Script assemblies cleared.";
-                if (_selectedAsset?.SourceAsset is AssetStudio.MonoBehaviour)
-                    await PresentAssetPreviewAsync(_selectedAsset);
-                break;
             case "Export options":
                 try
                 {
@@ -1798,15 +1779,22 @@ public partial class MainPage : ContentPage
         }
     }
 
+    // Script assemblies are a MonoBehaviour preview aid, so they live with the
+    // preview instead of adding commands to the desktop Options menu.
+    private async void OnLoadScriptAssembliesClicked(object? sender, EventArgs e) =>
+        await LoadMonoBehaviourAssembliesAsync();
+
+    private async void OnClearScriptAssembliesClicked(object? sender, EventArgs e)
+    {
+        _monoBehaviourAssemblyService.Clear();
+        StatusLabel.Text = "Script assemblies cleared.";
+        if (_selectedAsset is { SourceAsset: AssetStudio.MonoBehaviour })
+            await PresentAssetPreviewAsync(_selectedAsset);
+    }
+
     private void ApplyExportSettings(MobileExportSettings settings, bool announce = true)
     {
         ArgumentNullException.ThrowIfNull(settings);
-        _defaultExportKind = settings.DefaultExportKind switch
-        {
-            MobileExportKind.Raw => "Raw",
-            MobileExportKind.Dump => "Dump",
-            _ => "Convert"
-        };
         _textureExportFormat = settings.TextureFormat;
         _convertTextures = settings.ConvertTextures;
         _convertAudio = settings.ConvertAudio;
@@ -1895,118 +1883,12 @@ public partial class MainPage : ContentPage
         if (version == null)
             return;
 
+        // The desktop menu textbox only changes the loader setting; it does not
+        // reload the current workspace. Apply the override on the next load.
         _assetLoader.SpecifyUnityVersion = version.Trim();
-        if (!string.IsNullOrEmpty(_lastLoadedFolderPath))
-        {
-            await LoadPersistentFolderAsync(_lastLoadedFolderPath, _lastLoadSourceLabel);
-            return;
-        }
-
-        if (_lastLoadedFiles.Count == 0)
-        {
-            StatusLabel.Text = string.IsNullOrEmpty(_assetLoader.SpecifyUnityVersion)
-                ? "Unity version override cleared"
-                : $"Unity version override set to {_assetLoader.SpecifyUnityVersion}; it will be used for the next load";
-            return;
-        }
-
-        await LoadPersistentFilesAsync(_lastLoadedFiles, _lastLoadSourceLabel);
-    }
-
-    private async Task ChooseDefaultExportKindAsync()
-    {
-        var choice = await Choose("Export options",
-            "Default: Converted", "Default: Raw", "Default: Dump",
-            $"Texture image: {_textureExportFormat}",
-            $"Texture2D data: {(_convertTextures ? "Converted" : "Original .tex")}",
-            $"ZIP grouping: {GetArchiveGroupingLabel(_archiveGrouping)}",
-            $"Audio export: {(_convertAudio ? "PCM/Vorbis/Ogg/ADPCM/VAG to WAV" : "Original data")}",
-            $"TextAsset extension: {(_restoreTextAssetExtension ? "Restore source" : ".txt")}");
-        if (choice == null)
-            return;
-
-        if (choice.StartsWith("Texture image:", StringComparison.Ordinal))
-        {
-            var imageFormat = await Choose("Texture export format", "JPEG", "PNG", "BMP", "TGA");
-            if (imageFormat == null)
-                return;
-            _textureExportFormat = imageFormat switch
-            {
-                "JPEG" => MobileImageFormat.Jpeg,
-                "BMP" => MobileImageFormat.Bmp,
-                "TGA" => MobileImageFormat.Tga,
-                _ => MobileImageFormat.Png
-            };
-            Preferences.Set("AssetStudio.TextureExportFormat", _textureExportFormat.ToString());
-            StatusLabel.Text = $"Texture export format: {_textureExportFormat}";
-            return;
-        }
-
-        if (choice.StartsWith("Texture2D data:", StringComparison.Ordinal))
-        {
-            var textureMode = await Choose("Texture2D export data", "Decoded image", "Original .tex data");
-            if (textureMode == null)
-                return;
-            _convertTextures = textureMode == "Decoded image";
-            Preferences.Set("AssetStudio.ConvertTextures", _convertTextures);
-            StatusLabel.Text = $"Texture2D export data: {(_convertTextures ? "decoded image" : "original .tex data")}";
-            return;
-        }
-
-        if (choice.StartsWith("ZIP grouping:", StringComparison.Ordinal))
-        {
-            var groupingChoice = await Choose(
-                "ZIP asset grouping",
-                "By type name", "By container path", "By source file name", "Do not group");
-            if (groupingChoice == null)
-                return;
-            _archiveGrouping = groupingChoice switch
-            {
-                "By type name" => MobileArchiveGrouping.TypeName,
-                "By container path" => MobileArchiveGrouping.ContainerPath,
-                "By source file name" => MobileArchiveGrouping.SourceFileName,
-                _ => MobileArchiveGrouping.None
-            };
-            Preferences.Set("AssetStudio.ArchiveGrouping", _archiveGrouping.ToString());
-            StatusLabel.Text = $"ZIP grouping: {GetArchiveGroupingLabel(_archiveGrouping)}";
-            return;
-        }
-
-        if (choice.StartsWith("Audio export:", StringComparison.Ordinal))
-        {
-            var audioMode = await Choose(
-                "Audio export",
-                "Convert AudioClip to WAV(PCM)",
-                "Preserve original audio data");
-            if (audioMode == null)
-                return;
-            _convertAudio = audioMode == "Convert AudioClip to WAV(PCM)";
-            Preferences.Set("AssetStudio.ConvertAudio", _convertAudio);
-            StatusLabel.Text = $"Audio export: {(_convertAudio ? "PCM/Vorbis/Ogg/ADPCM/VAG to WAV; other codecs raw" : "original embedded data")}";
-            return;
-        }
-
-        if (choice.StartsWith("TextAsset extension:", StringComparison.Ordinal))
-        {
-            var extensionMode = await Choose(
-                "TextAsset export extension",
-                "Restore container extension",
-                "Use .txt");
-            if (extensionMode == null)
-                return;
-            _restoreTextAssetExtension = extensionMode == "Restore container extension";
-            Preferences.Set("AssetStudio.RestoreTextAssetExtension", _restoreTextAssetExtension);
-            StatusLabel.Text = $"TextAsset extension: {(_restoreTextAssetExtension ? "restored from container" : ".txt")}";
-            return;
-        }
-
-        _defaultExportKind = choice switch
-        {
-            "Default: Raw" => "Raw",
-            "Default: Dump" => "Dump",
-            _ => "Convert"
-        };
-        StatusLabel.Text = $"Default export format: {_defaultExportKind}";
+        StatusLabel.Text = string.IsNullOrEmpty(_assetLoader.SpecifyUnityVersion)
+            ? "Unity version override cleared"
+            : $"Unity version override set to {_assetLoader.SpecifyUnityVersion}; it will be used for the next load";
     }
 
     private async void OnModelMenuClicked(object sender, EventArgs e)
@@ -2366,7 +2248,9 @@ public partial class MainPage : ContentPage
             "Animator + selected AnimationClips", "Raw", "Dump", "Asset list to XML");
         if (choice == null) return;
 
-        var exportKind = _defaultExportKind;
+        // Desktop top-level Export commands always mean Convert. Raw and Dump
+        // are separate submenus and do not inherit an export-options default.
+        var exportKind = "Convert";
         var scope = choice;
         if (choice == "Animator + selected AnimationClips")
         {
@@ -2676,8 +2560,7 @@ public partial class MainPage : ContentPage
             "Debug",
             _showErrorMessages ? new[] { "Show error message" } : Array.Empty<string>(),
             "Show error message",
-            "Export class structures",
-            "Export class structures (text files)");
+            "Export class structures");
         if (choice == "Show error message")
         {
             _showErrorMessages = !_showErrorMessages;
@@ -2686,43 +2569,13 @@ public partial class MainPage : ContentPage
         }
         else if (choice == "Export class structures")
             await ExportClassStructuresAsync();
-        else if (choice == "Export class structures (text files)")
-            await ExportClassStructureTextFilesAsync();
         else if (choice != null)
             StatusLabel.Text = $"Unsupported debug action: {choice}";
     }
 
-    private async Task ExportClassStructuresAsync()
-    {
-        if (_classes.Count == 0)
-        {
-            StatusLabel.Text = "No class structures are loaded";
-            return;
-        }
-
-        try
-        {
-            SetBusy(true, $"Exporting {_classes.Count} class structures…");
-            var outputPath = await Task.Run(() => MobileAssetExporter.ExportClassStructuresXml(_classes));
-            await PresentExportResultAsync(
-                "AssetStudio class structures",
-                outputPath,
-                $"Exported {_classes.Count} class structures as XML");
-        }
-        catch (Exception ex)
-        {
-            StatusLabel.Text = $"Class export failed: {ex.Message}";
-            await ShowErrorAsync("Class export failed", ex.Message);
-        }
-        finally
-        {
-            SetBusy(false, StatusLabel.Text);
-        }
-    }
-
     // Desktop writes one .txt per class into a folder per Unity version.
     // On mobile the same layout is exported as a shareable ZIP archive.
-    private async Task ExportClassStructureTextFilesAsync()
+    private async Task ExportClassStructuresAsync()
     {
         if (_classes.Count == 0)
         {
@@ -2970,7 +2823,6 @@ public partial class MainPage : ContentPage
     private IReadOnlyList<FileResult> _lastLoadedFiles = Array.Empty<FileResult>();
     private string? _lastLoadedFolderPath;
     private string _lastLoadSourceLabel = "Loaded files";
-    private string _defaultExportKind = "Convert";
 
     private void OnBrowserTabClicked(object sender, EventArgs e)
     {
@@ -3057,7 +2909,7 @@ public partial class MainPage : ContentPage
             ClearSelectedAsset();
         }
         AssetEmptyLabel.Text = _allAssets.Count == 0
-            ? "No assets loaded. Use File → Load file, Load multiple files, or Load folder."
+            ? "No assets loaded. Use File → Load file or Load folder."
             : "No assets match the current search and filters.";
         if (StatusLabel != null && _browserTab == "Asset List")
             StatusLabel.Text = $"{_visibleAssets.Count} / {_allAssets.Count} assets";

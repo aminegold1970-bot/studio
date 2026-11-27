@@ -11,7 +11,6 @@ namespace AssetStudioMobile;
 /// </summary>
 internal sealed class ExportOptionsPage : ContentPage
 {
-    private static readonly string[] ExportKindLabels = { "Converted", "Raw", "Dump" };
     // Desktop ExportOptions uses these exact combobox item strings.
     private static readonly string[] ImageFormatLabels = { "Bmp", "Png", "Jpeg", "Tga" };
     private static readonly string[] GroupingLabels =
@@ -21,7 +20,6 @@ internal sealed class ExportOptionsPage : ContentPage
 
     private readonly MobileExportSettings _source;
     private readonly Action<MobileExportSettings> _apply;
-    private readonly Picker _defaultKind = new();
     private readonly Picker _imageFormat = new();
     private readonly Picker _grouping = new();
     private readonly Switch _restoreExtension = new();
@@ -50,13 +48,14 @@ internal sealed class ExportOptionsPage : ContentPage
         Title = "Export options";
         BackgroundColor = Color.FromArgb("#FFFFFF");
 
-        ConfigurePicker(_defaultKind, ExportKindLabels, (int)_source.DefaultExportKind);
         ConfigurePicker(_imageFormat, ImageFormatLabels, ImageIndex(_source.TextureFormat));
         ConfigurePicker(_grouping, GroupingLabels, (int)_source.ArchiveGrouping);
         ConfigurePicker(_fbxVersion, FbxVersionLabels, _source.Fbx.FbxVersionIndex);
         ConfigurePicker(_fbxFormat, FbxFormatLabels, (int)_source.Fbx.Format);
         _restoreExtension.IsToggled = _source.RestoreTextAssetExtension;
         _convertTextures.IsToggled = _source.ConvertTextures;
+        _convertTextures.Toggled += OnConvertTexturesToggled;
+        _imageFormat.IsEnabled = _source.ConvertTextures;
         _convertAudio.IsToggled = _source.ConvertAudio;
         _shareAfterExport.IsToggled = _source.ShareAfterExport;
         _eulerFilter.IsToggled = _source.Fbx.EulerFilter;
@@ -74,11 +73,10 @@ internal sealed class ExportOptionsPage : ContentPage
 
         var layout = new VerticalStackLayout { Padding = 14, Spacing = 3 };
         layout.Children.Add(Heading("Export"));
-        AddPicker(layout, "Default export format", _defaultKind);
         AddPicker(layout, "Group exported assets by", _grouping);
         AddSwitch(layout, "Restore TextAsset extension name", _restoreExtension);
         AddSwitch(layout, "Convert Texture2D", _convertTextures);
-        AddPicker(layout, "Texture image format", _imageFormat);
+        AddPicker(layout, "    Texture image format", _imageFormat);
         AddSwitch(layout, "Convert AudioClip to WAV(PCM)", _convertAudio);
         layout.Children.Add(new Label
         {
@@ -87,10 +85,11 @@ internal sealed class ExportOptionsPage : ContentPage
             FontSize = 11,
             Margin = new Thickness(0, 4, 0, 8)
         });
-        AddSwitch(layout, "Show share sheet after export", _shareAfterExport);
+        AddSwitch(layout, "Open folder after export", _shareAfterExport,
+            "On mobile this opens the share sheet. When off, files are saved to Files → AssetStudio → Exports.");
         layout.Children.Add(new Label
         {
-            Text = "iOS equivalent of Open folder after export. When off, files are saved to Files → AssetStudio → Exports.",
+            Text = "On mobile this opens the share sheet. When off, files are saved to Files → AssetStudio → Exports.",
             TextColor = Color.FromArgb("#666666"),
             FontSize = 11,
             Margin = new Thickness(0, 4, 0, 6)
@@ -124,12 +123,12 @@ internal sealed class ExportOptionsPage : ContentPage
         });
 
         var buttons = new HorizontalStackLayout { Spacing = 8, HorizontalOptions = LayoutOptions.End };
-        var cancel = new Button { Text = "Cancel", FontSize = 12, MinimumHeightRequest = 38 };
-        cancel.Clicked += OnCancelClicked;
         var save = new Button { Text = "OK", FontSize = 12, MinimumHeightRequest = 38 };
         save.Clicked += OnSaveClicked;
-        buttons.Children.Add(cancel);
+        var cancel = new Button { Text = "Cancel", FontSize = 12, MinimumHeightRequest = 38 };
+        cancel.Clicked += OnCancelClicked;
         buttons.Children.Add(save);
+        buttons.Children.Add(cancel);
         layout.Children.Add(buttons);
 
         Content = new ScrollView { Content = layout };
@@ -235,6 +234,9 @@ internal sealed class ExportOptionsPage : ContentPage
         _ => MobileImageFormat.Png
     };
 
+    private void OnConvertTexturesToggled(object? sender, ToggledEventArgs e) =>
+        _imageFormat.IsEnabled = e.Value;
+
     private async void OnCancelClicked(object? sender, EventArgs e) =>
         await Navigation.PopModalAsync();
 
@@ -257,7 +259,7 @@ internal sealed class ExportOptionsPage : ContentPage
 
         var updated = new MobileExportSettings
         {
-            DefaultExportKind = (MobileExportKind)Math.Clamp(_defaultKind.SelectedIndex, 0, ExportKindLabels.Length - 1),
+            DefaultExportKind = _source.DefaultExportKind,
             TextureFormat = ImageFromIndex(_imageFormat.SelectedIndex),
             ConvertTextures = _convertTextures.IsToggled,
             ConvertAudio = _convertAudio.IsToggled,

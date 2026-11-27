@@ -160,9 +160,17 @@
                             </VerticalStackLayout>
                         </Border>
                         <Border x:Name="TextPreviewFrame" IsVisible="False" BackgroundColor="#FFFFFF" Stroke="#C8C8C8" StrokeThickness="1" Padding="8">
-                            <ScrollView Orientation="Both" HeightRequest="210">
-                                <Label x:Name="AssetTextPreview" TextColor="#202020" FontFamily="monospace" FontSize="11" LineBreakMode="NoWrap"/>
-                            </ScrollView>
+                            <VerticalStackLayout Spacing="6">
+                                <ScrollView Orientation="Both" HeightRequest="210">
+                                    <Label x:Name="AssetTextPreview" TextColor="#202020" FontFamily="monospace" FontSize="11" LineBreakMode="NoWrap"/>
+                                </ScrollView>
+                                <HorizontalStackLayout x:Name="ScriptAssemblyActionsRow" Spacing="6" IsVisible="False">
+                                    <Button Text="Load script assemblies" Clicked="OnLoadScriptAssembliesClicked"
+                                            Style="{StaticResource TabButton}"/>
+                                    <Button Text="Clear script assemblies" Clicked="OnClearScriptAssembliesClicked"
+                                            Style="{StaticResource TabButton}"/>
+                                </HorizontalStackLayout>
+                            </VerticalStackLayout>
                         </Border>
                         <Border x:Name="VideoPreviewFrame" IsVisible="False" BackgroundColor="#111111" Stroke="#C8C8C8" StrokeThickness="1" Padding="6">
                             <VerticalStackLayout Spacing="8">
