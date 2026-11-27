@@ -240,7 +240,7 @@ internal sealed class MeshPreviewDrawable : IDrawable
     public string HelpText =>
         $"Mesh · {VertexCount:N0} vertices · {TriangleCount:N0} triangles · {SubmeshCount:N0} submeshes\n" +
         $"Drag={InteractionLanguage} | Pan mode=Move | Pinch=Zoom\n" +
-        "W=Wireframe | S=Shade | N=ReNormal";
+        "Use the on-screen Render, Shade and Normals buttons.";
 
     public void ToggleRenderMode() =>
         _renderMode = (MeshRenderMode)(((int)_renderMode + 1) % 3);

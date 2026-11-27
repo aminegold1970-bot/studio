@@ -38,7 +38,7 @@ public partial class MainPage : ContentPage
     private static readonly IReadOnlyDictionary<string, int[]> MenuSeparatorIndices =
         new Dictionary<string, int[]>(StringComparer.Ordinal)
         {
-            ["File"] = new[] { 2 },
+            ["File"] = new[] { 1 },
             ["Export"] = new[] { 2, 3, 5 },
             ["Model"] = new[] { 2, 4 }
         };
@@ -138,6 +138,7 @@ public partial class MainPage : ContentPage
         _suppressFilterTextChanged = true;
         HierarchySearch.Text = HierarchySearchPlaceholder;
         _suppressFilterTextChanged = false;
+        ShowBaseTitle();
         // Desktop installs GUILogger at startup so parser errors honor the
         // Debug -> Show error message toggle and other events reach the status strip.
         AssetStudio.Logger.Default = new MobileLogger(this);
@@ -740,9 +741,18 @@ public partial class MainPage : ContentPage
         else MainThread.BeginInvokeOnMainThread(Apply);
     }
 
-    // Mirrors the desktop window title after a load: product name, Unity
-    // version, and target platform. The nav bar is hidden on mobile, so the
-    // desktop-equivalent title is shown as a compact line above the status.
+    // Mirrors the desktop window title: application version, then product name,
+    // Unity version, and target platform after a load. The nav bar is hidden on
+    // mobile, so the desktop-equivalent title is a compact line above the status.
+    private static string AppVersion =>
+        typeof(MainPage).Assembly.GetName().Version?.ToString() ?? "0.0.0.0";
+
+    private void ShowBaseTitle()
+    {
+        LoadInfoLabel.IsVisible = true;
+        LoadInfoLabel.Text = $"AssetStudioGUI v{AppVersion}";
+    }
+
     public void SetLoadMetadata(LoadMetadata metadata)
     {
         _loadMetadata = metadata;
@@ -752,7 +762,8 @@ public partial class MainPage : ContentPage
             var productName = string.IsNullOrWhiteSpace(metadata.ProductName)
                 ? "no productName"
                 : metadata.ProductName;
-            LoadInfoLabel.Text = $"AssetStudioGUI · {productName} · {metadata.UnityVersion} · {metadata.TargetPlatform}";
+            LoadInfoLabel.Text =
+                $"AssetStudioGUI v{AppVersion} · {productName} · {metadata.UnityVersion} · {metadata.TargetPlatform}";
         }
 
         if (MainThread.IsMainThread) Apply();
@@ -1667,8 +1678,7 @@ public partial class MainPage : ContentPage
         _assetFilterTimer?.Stop();
         _suppressFilterTextChanged = true;
         _loadMetadata = null;
-        LoadInfoLabel.IsVisible = false;
-        LoadInfoLabel.Text = string.Empty;
+        ShowBaseTitle();
         _allAssets.Clear();
         _visibleAssets.Clear();
         _selectedAssets.Clear();
@@ -1789,9 +1799,10 @@ public partial class MainPage : ContentPage
         switch (choice)
         {
             case "Display all assets":
+                // Desktop only persists this option; the asset list is rebuilt
+                // with the new setting when a file or folder is loaded next.
                 _showAllAssets = !_showAllAssets;
                 Preferences.Set("AssetStudio.DisplayAllAssets", _showAllAssets);
-                ApplyAssetFilter();
                 break;
             case "Enable preview":
                 _previewEnabled = !_previewEnabled;
@@ -2306,20 +2317,7 @@ public partial class MainPage : ContentPage
         var scope = separatorIndex < 0 ? choice : choice[(separatorIndex + 1)..];
         if (choice == "Animator + selected AnimationClips")
         {
-            var animatorAndClips = _selectedAssets
-                .Where(row => row.SourceAsset is AssetStudio.Animator or AssetStudio.AnimationClip)
-                .ToList();
-            var selectedAnimators = animatorAndClips
-                .Where(row => row.SourceAsset is AssetStudio.Animator)
-                .Select(row => (AssetStudio.Animator)row.SourceAsset!)
-                .ToArray();
-            if (selectedAnimators.Length != 1)
-            {
-                StatusLabel.Text = "Select exactly one Animator and any AnimationClips to export them";
-                return;
-            }
-            await RunAssetExportAsync(
-                "Convert", "Selected assets", animatorAndClips, selectedAnimators[0]);
+            await ExportAnimatorWithSelectedClipsAsync(_selectedAssets);
             return;
         }
         if (exportKind == "Asset list to XML")
@@ -2328,6 +2326,25 @@ public partial class MainPage : ContentPage
             return;
         }
         await RunAssetExportAsync(exportKind, scope);
+    }
+
+    // Desktop uses the last selected Animator with the selected AnimationClips.
+    private async Task ExportAnimatorWithSelectedClipsAsync(IEnumerable<AssetRow> source)
+    {
+        var animatorRows = source
+            .Where(row => row.SourceAsset is AssetStudio.Animator)
+            .ToList();
+        if (animatorRows.Count == 0)
+        {
+            StatusLabel.Text = "Select an Animator and any AnimationClips to export them";
+            return;
+        }
+
+        var animatorRow = animatorRows[^1];
+        var targets = new List<AssetRow> { animatorRow };
+        targets.AddRange(source.Where(row => row.SourceAsset is AssetStudio.AnimationClip));
+        await RunAssetExportAsync(
+            "Convert", "Selected assets", targets, (AssetStudio.Animator)animatorRow.SourceAsset!);
     }
 
     private async Task RunAssetListXmlExportAsync(string scope)
@@ -2359,7 +2376,7 @@ public partial class MainPage : ContentPage
             await PresentExportResultAsync(
                 "AssetStudio asset list",
                 outputPath,
-                $"Exported XML asset list · {snapshot.Count} item(s) · {scope}");
+                $"Finished exporting asset list with {snapshot.Count} items.");
         }
         catch (OperationCanceledException)
         {
@@ -2467,11 +2484,11 @@ public partial class MainPage : ContentPage
             }
 
             cancellation.Token.ThrowIfCancellationRequested();
-            var status = rawFallbackCount == 0
-                ? $"Exported {count} item(s) · {exportKind} · {scope}"
-                : rawFallbackCount == 1 && fallbackWarning != null
-                    ? $"Exported {count} item(s) · raw fallback: {fallbackWarning}"
-                    : $"Exported {count} item(s) · {rawFallbackCount} raw fallback(s); see ZIP report";
+            var status = $"Finished exporting {count} assets.";
+            if (rawFallbackCount == 1 && fallbackWarning != null)
+                status += $" Raw fallback: {fallbackWarning}";
+            else if (rawFallbackCount > 0)
+                status += $" {rawFallbackCount} raw fallback(s); see ZIP report";
             await PresentExportResultAsync($"AssetStudio {exportKind} export", outputPath, status);
         }
         catch (OperationCanceledException)
@@ -2533,9 +2550,29 @@ public partial class MainPage : ContentPage
 
     private void AddFilterMenuItem(string option)
     {
+        // WinForms keeps the check in a fixed column so labels do not move.
+        var content = new Grid
+        {
+            ColumnDefinitions =
+            {
+                new ColumnDefinition(new GridLength(14)),
+                new ColumnDefinition(GridLength.Star),
+                new ColumnDefinition(GridLength.Auto)
+            },
+            HeightRequest = 24
+        };
+        var check = new Label
+        {
+            Text = IsFilterTypeChecked(option) ? "✓" : string.Empty,
+            TextColor = Color.FromArgb("#202020"),
+            FontSize = 12,
+            FontAutoScalingEnabled = false,
+            VerticalTextAlignment = TextAlignment.Center,
+            HorizontalTextAlignment = TextAlignment.Center
+        };
         var label = new Label
         {
-            Text = IsFilterTypeChecked(option) ? $"✓ {option}" : option,
+            Text = option,
             TextColor = Color.FromArgb("#202020"),
             FontSize = 12,
             FontAutoScalingEnabled = false,
@@ -2543,11 +2580,13 @@ public partial class MainPage : ContentPage
             HorizontalTextAlignment = TextAlignment.Start,
             LineBreakMode = LineBreakMode.NoWrap
         };
-        _filterMenuLabels[option] = label;
+        _filterMenuLabels[option] = check;
+        content.Add(check, 0);
+        content.Add(label, 1);
         var item = new Border
         {
             Style = (Style)Resources["PopupMenuItem"],
-            Content = label
+            Content = content
         };
         var tap = new TapGestureRecognizer();
         tap.Tapped += (_, _) => OnFilterTypeTapped(option);
@@ -2582,7 +2621,7 @@ public partial class MainPage : ContentPage
         }
 
         foreach (var pair in _filterMenuLabels)
-            pair.Value.Text = IsFilterTypeChecked(pair.Key) ? $"✓ {pair.Key}" : pair.Key;
+            pair.Value.Text = IsFilterTypeChecked(pair.Key) ? "✓" : string.Empty;
 
         _browserTab = "Asset List";
         RefreshBrowserTab();
@@ -3284,8 +3323,20 @@ public partial class MainPage : ContentPage
 
         if (action == "Copy text")
         {
-            await Clipboard.Default.SetTextAsync(row.Name);
-            StatusLabel.Text = "Copied text";
+            // The desktop copies the column that was right-clicked. The mobile
+            // row button has no column hit test, so offer the visible columns.
+            var field = await Choose(row.Name, "Name", "Container", "Type", "PathID", "Size");
+            if (field == null) return;
+            var text = field switch
+            {
+                "Container" => row.Container,
+                "Type" => row.Type,
+                "PathID" => row.PathId,
+                "Size" => row.Size,
+                _ => row.Name
+            };
+            await Clipboard.Default.SetTextAsync(text ?? string.Empty);
+            StatusLabel.Text = $"Copied {field}";
             return;
         }
 
@@ -3311,20 +3362,7 @@ public partial class MainPage : ContentPage
 
         if (action == "Export Animator + selected AnimationClips")
         {
-            var animatorAndClips = targets
-                .Where(row => row.SourceAsset is AssetStudio.Animator or AssetStudio.AnimationClip)
-                .ToList();
-            var selectedAnimators = animatorAndClips
-                .Where(row => row.SourceAsset is AssetStudio.Animator)
-                .Select(row => (AssetStudio.Animator)row.SourceAsset!)
-                .ToArray();
-            if (selectedAnimators.Length != 1)
-            {
-                StatusLabel.Text = "Select exactly one Animator and any AnimationClips to export them";
-                return;
-            }
-            await RunAssetExportAsync(
-                "Convert", "Selected assets", animatorAndClips, selectedAnimators[0]);
+            await ExportAnimatorWithSelectedClipsAsync(targets);
             return;
         }
 
@@ -3443,7 +3481,7 @@ public partial class MainPage : ContentPage
                             texture.m_TextureSettings?.m_MipBias ?? 0f,
                             DescribeTextureWrapMode(texture.m_TextureSettings?.m_WrapMode),
                             DescribeEnabledTextureChannels()));
-                    StatusLabel.Text = "'Ctrl'+'R'/'G'/'B'/'A' for Channel Toggle";
+                    StatusLabel.Text = "Use Channels: BGRA to toggle R/G/B/A";
                     break;
                 case AssetStudio.Mesh mesh:
                     ShowModelPreview(row.Name,
@@ -3636,7 +3674,7 @@ public partial class MainPage : ContentPage
         for (var index = 0; index < _textureChannels.Length; index++)
             _textureChannels[index] = channels[index];
         TextureChannelsButton.Text = $"Channels: {DescribeEnabledTextureChannels()}";
-        StatusLabel.Text = "'Ctrl'+'R'/'G'/'B'/'A' for Channel Toggle";
+        StatusLabel.Text = "Use Channels: BGRA to toggle R/G/B/A";
         if (_selectedAsset?.SourceAsset is AssetStudio.Texture2D)
             await PresentAssetPreviewAsync(_selectedAsset);
     }
@@ -4363,15 +4401,18 @@ public partial class MainPage : ContentPage
         if (e.CurrentSelection.FirstOrDefault() is not ClassRow item) return;
         _showingEmptyPreview = false;
         PreviewTitle.Text = $"{item.Name} ({item.Id})";
-        PreviewDetails.Text = string.IsNullOrWhiteSpace(item.Summary)
-            ? $"Class ID: {item.Id}\nVersion: {item.Version}\nSelect Dump to inspect the serialized type tree."
-            : item.Summary;
+        PreviewKind.Text = $"Class ID: {item.Id} · {item.Version}";
+        // Desktop shows the serialized type tree in the Preview tab, not Dump.
+        PreviewDetails.Text = string.IsNullOrWhiteSpace(item.StructureText)
+            ? string.IsNullOrWhiteSpace(item.Summary)
+                ? $"No type-tree structure was supplied for {item.Name}.\n\nClass ID: {item.Id}\nVersion: {item.Version}"
+                : item.Summary
+            : item.StructureText;
         DumpText.Text = string.IsNullOrWhiteSpace(item.StructureText)
             ? $"No type-tree structure was supplied for {item.Name}.\n\nClass ID: {item.Id}\nVersion: {item.Version}"
             : item.StructureText;
-        RefreshPreviewSurfaceVisibility();
+        OnPreviewTabClicked(this, EventArgs.Empty);
         StatusLabel.Text = $"Selected class: {item.Name} ({item.Id})";
-        OnDumpTabClicked(this, EventArgs.Empty);
     }
 
     private void OnPreviewTabClicked(object sender, EventArgs e)

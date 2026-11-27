@@ -105,7 +105,7 @@ internal sealed class ExportOptionsPage : ContentPage
         layout.Children.Add(exportFolderRow);
         layout.Children.Add(new Label
         {
-            Text = "Choose a folder in Files, or drag one onto this page when drag and drop is available.",
+            Text = "Choose a folder in Files to set the export destination. Cross-app drag and drop is iPad-only; iPhone uses this picker.",
             TextColor = Color.FromArgb("#666666"),
             FontSize = 11,
             Margin = new Thickness(0, 2, 0, 4)
@@ -342,10 +342,11 @@ internal sealed class ExportOptionsPage : ContentPage
             return;
         }
         if (!IsDesktopNumericRange(filterPrecision)
-            || !IsDesktopNumericRange(boneSize)
+            || !IsDesktopIntegerRange(boneSize)
             || !IsDesktopNumericRange(scaleFactor))
         {
-            await DisplayAlert("Export options", "FilterPrecision, BoneSize and ScaleFactor must be between 0 and 100 with at most 2 decimal places.", "OK");
+            await DisplayAlert("Export options",
+                "FilterPrecision and ScaleFactor must be between 0 and 100 with at most 2 decimal places; BoneSize must be a whole number from 0 to 100.", "OK");
             return;
         }
 
@@ -388,4 +389,8 @@ internal sealed class ExportOptionsPage : ContentPage
     // Desktop NumericUpDown controls use the default 0-100 range and 2 decimals.
     private static bool IsDesktopNumericRange(decimal value) =>
         value >= 0m && value <= 100m && decimal.Round(value, 2) == value;
+
+    // BoneSize uses a NumericUpDown with DecimalPlaces = 0 in the desktop dialog.
+    private static bool IsDesktopIntegerRange(decimal value) =>
+        value >= 0m && value <= 100m && decimal.Truncate(value) == value;
 }
