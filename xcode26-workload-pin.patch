@@ -1,69 +1,69 @@
-Fix build-ios: workload pin + Info.plist XML versions (Xcode 26.6 compatible)
+Fix build-ios: select real Xcode 26.6 bundle path (avoid actool symlink failure)
 
-Root cause: SDK 10.0.404 selected workload set 10.0.404, which installs
-Microsoft.iOS.Sdk.net10.027.2 (27.2.10000). That .NET for iOS release requires
-Xcode 27.2, but the macos-26 runner provides Xcode 26.6 (iOS SDK 26.5).
-Workload set 10.0.401 ships .NET for iOS 26.5.10318, the release that supports
-Xcode 26.6, so pin it in global.json (the CLI refuses --version when global.json
-already specifies a workload version). A verification step keeps the workflow
-and global.json in sync.
+The CI job now gets through SDK/workload selection, restore, and the referenced
+project builds. It fails in CoreCompileImageAssets because the workflow selected
+/Applications/Xcode.app, which is a symlink to /Applications/Xcode_26.6.app.
+When Xcode is selected through that symlink, .NET for iOS asks xcodebuild to find
+actool using a MacOSX.sdk path under the symlink, and that path does not exist:
 
-Separately, CompileAppManifest failed because AssetStudio.Mobile/Platforms/iOS/Info.plist
-used non-numeric version strings in the XML declaration and plist root element
-("v0.16.45" / "v0.16.46"). Both must be valid numeric versions ("1.0").
+  xcodebuild: error: SDK "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk" cannot be located.
+  xcrun: error: unable to find utility "actool", not a developer tool or in PATH
+  error : actool exited with code 72
 
---- a/global.json
-+++ b/global.json
-@@ -2,6 +2,7 @@
-   "sdk": {
-     "version": "10.0.400",
-     "rollForward": "latestPatch",
--    "allowPrerelease": false
-+    "allowPrerelease": false,
-+    "workloadVersion": "10.0.401"
-   }
- }
+This is a known .NET for iOS / hosted-runner issue: select the real Xcode app
+bundle instead of a symlink. The workflow now pins IOS_XCODE_PATH to the real
+/Applications/Xcode_26.6.app bundle, rejects a symlink, and verifies that actool
+resolves before the publish step.
+
+The earlier fixes are already present in the current commit and in the delivered
+files: global.json pins workload set 10.0.401, and Info.plist uses numeric XML
+and plist versions. This patch contains only the remaining workflow change.
 
 --- a/.github/workflows/build-ios.yml
 +++ b/.github/workflows/build-ios.yml
-@@ -11,6 +11,13 @@ permissions:
- jobs:
-   build-ios:
-     runs-on: macos-26
-+    env:
-+      # Keep in sync with sdk.workloadVersion in global.json. That setting pins
-+      # the CLI to workload set 10.0.401 (.NET for iOS 26.5.10318, which supports
-+      # the Xcode 26.6 on macos-26); newer sets require Xcode 27.x. The CLI
-+      # rejects --version when global.json already specifies a workload version,
-+      # so the install step relies on global.json instead.
-+      IOS_WORKLOAD_SET: 10.0.401
+@@ -18,6 +18,10 @@ jobs:
+       # rejects --version when global.json already specifies a workload version,
+       # so the install step relies on global.json instead.
+       IOS_WORKLOAD_SET: 10.0.401
++      # Use the real Xcode 26.6 bundle path. The /Applications/Xcode.app symlink
++      # makes .NET's actool task look for a MacOSX SDK inside the symlink path,
++      # which does not exist on the macos-26 runner.
++      IOS_XCODE_PATH: /Applications/Xcode_26.6.app
  
      steps:
        - name: Check out source
-@@ -28,5 +35,16 @@ jobs:
-       - name: Install iOS workload
-         run: dotnet workload install maui-ios
-+
-+      - name: Verify workload set
-+        shell: bash
-+        run: |
-+          set -euo pipefail
-+          workload_version="$(dotnet workload --version | tr -d '[:space:]')"
-+          echo "Installed workload set: $workload_version"
-+          if [[ "$workload_version" != "$IOS_WORKLOAD_SET" ]]; then
-+            echo "::error::Expected workload set $IOS_WORKLOAD_SET, found '$workload_version'. Xcode 26.6 compatibility requires $IOS_WORKLOAD_SET (keep global.json in sync)."
-+            exit 1
-+          fi
+@@ -46,19 +50,30 @@ jobs:
+           fi
  
        - name: Select Xcode
++        shell: bash
          run: |
-
---- a/AssetStudio.Mobile/Platforms/iOS/Info.plist
-+++ b/AssetStudio.Mobile/Platforms/iOS/Info.plist
-@@ -1,4 +1,4 @@
--<?xml version="v0.16.45" encoding="UTF-8"?>
-+<?xml version="1.0" encoding="UTF-8"?>
- <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
--<plist version="v0.16.46">
-+<plist version="1.0">
- <dict>
+-          XCODE_PATH=$(find /Applications -maxdepth 1 -name 'Xcode*.app' | sort | tail -n 1)
+-          if [ -z "$XCODE_PATH" ]; then
+-            echo "::error::No Xcode installation found"
++          set -euo pipefail
++          if [[ ! -d "$IOS_XCODE_PATH" ]]; then
++            echo "::error::Expected Xcode at $IOS_XCODE_PATH"
++            ls -1 /Applications | grep '^Xcode' || true
++            exit 1
++          fi
++          if [[ -L "$IOS_XCODE_PATH" ]]; then
++            echo "::error::$IOS_XCODE_PATH is a symlink; select the real Xcode app bundle"
+             exit 1
+           fi
+-          sudo xcode-select --switch "$XCODE_PATH"
++          sudo xcode-select --switch "$IOS_XCODE_PATH/Contents/Developer"
++          echo "Selected Xcode path: $(xcode-select -p)"
+           xcodebuild -version
+ 
+       - name: Verify Apple toolchain
++        shell: bash
+         run: |
++          set -euo pipefail
+           xcodebuild -version
+           xcrun --sdk iphoneos --show-sdk-version
++          echo "actool: $(xcrun --find actool)"
++          echo "macOS SDK actool: $(xcrun --sdk macosx --find actool)"
+ 
+       - name: Restore iOS app
+         run: |
