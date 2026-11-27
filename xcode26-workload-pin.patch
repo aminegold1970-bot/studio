@@ -1,19 +1,22 @@
-Fix build-ios end-to-end for unsigned IPA on macos-26/Xcode 26.6
+Fix build-ios: replace brittle action with end-to-end unsigned IPA build
 
-This patch applies to commit 12b95f26548c973d5b58eb2d1cd8fca8084f3e42 (run #168).
-global.json and Info.plist are already correct at that commit; this patch updates:
+This patch applies to commit 7f948cc5088a80fb38c262df16aec3cfce8aa717 (run #171).
 
-- .github/workflows/build-ios.yml: complete checkout-to-IPA workflow using the
-  real Xcode 26.6 bundle, workload set 10.0.401, clean build outputs, unsigned
-  publish, manual Payload/*.app IPA packaging, and artifact validation.
-- AssetStudio.Mobile/MainPage.xaml.cs: add the missing OnTextureChannelsClicked
-  handler and update ImageSharp 3.x APIs (ProcessPixelRows / SaveAsPng) so the
-  iOS compile finishes.
+global.json, Info.plist, and the MainPage.xaml.cs source fix are already present
+at that commit. The only remaining failure was a too-strict macOS SDK check
+(MacOSX.sdk vs MacOSX26.5.sdk). This patch replaces the workflow with a cleaner
+version that:
+
+- verifies the selected Xcode by developer-dir prefix instead of SDK symlink name;
+- keeps workload set 10.0.401 and the physical Xcode 26.6 bundle;
+- cleans outputs, restores/publishes only ios-arm64, and disables signing;
+- manually packages Payload/*.app as an unsigned IPA, validates it, and uploads
+  AssetStudioMobile-unsigned.ipa.
 diff --git a/.github/workflows/build-ios.yml b/.github/workflows/build-ios.yml
-index 71f2851..fa3d810 100644
+index 0535918..9cfb27f 100644
 --- a/.github/workflows/build-ios.yml
 +++ b/.github/workflows/build-ios.yml
-@@ -1,152 +1,267 @@
+@@ -1,85 +1,258 @@
 -name: Build unsigned iOS IPA
 -
 -on:
@@ -27,18 +30,6 @@ index 71f2851..fa3d810 100644
 -jobs:
 -  build-ios:
 -    runs-on: macos-26
--    env:
--      # Keep in sync with sdk.workloadVersion in global.json. That setting pins
--      # the CLI to workload set 10.0.401 (.NET for iOS 26.5.10318, which supports
--      # the Xcode 26.6 on macos-26); newer sets require Xcode 27.x. The CLI
--      # rejects --version when global.json already specifies a workload version,
--      # so the install step relies on global.json instead.
--      IOS_WORKLOAD_SET: 10.0.401
--      # Use the real Xcode 26.6 bundle path. The /Applications/Xcode.app symlink
--      # makes .NET's actool task look for a MacOSX SDK inside the symlink path,
--      # which does not exist on the macos-26 runner.
--      IOS_XCODE_PATH: /Applications/Xcode_26.6.app
--
 -    steps:
 -      - name: Check out source
 -        uses: actions/checkout@v4
@@ -51,109 +42,54 @@ index 71f2851..fa3d810 100644
 -      - name: Verify .NET SDK
 -        run: dotnet --version
 -
--      - name: Install iOS workload
--        run: dotnet workload install maui-ios
+-      - name: Install .NET iOS workload
+-        run: dotnet workload install maui-ios --version 10.0.401
 -
--      - name: Verify workload set
--        shell: bash
--        run: |
--          set -euo pipefail
--          workload_version="$(dotnet workload --version | tr -d '[:space:]')"
--          echo "Installed workload set: $workload_version"
--          if [[ "$workload_version" != "$IOS_WORKLOAD_SET" ]]; then
--            echo "::error::Expected workload set $IOS_WORKLOAD_SET, found '$workload_version'. Xcode 26.6 compatibility requires $IOS_WORKLOAD_SET (keep global.json in sync)."
--            exit 1
--          fi
--
--      - name: Select Xcode
--        shell: bash
--        run: |
--          set -euo pipefail
--          if [[ ! -d "$IOS_XCODE_PATH" ]]; then
--            echo "::error::Expected Xcode at $IOS_XCODE_PATH"
--            ls -1 /Applications | grep '^Xcode' || true
--            exit 1
--          fi
--          if [[ -L "$IOS_XCODE_PATH" ]]; then
--            echo "::error::$IOS_XCODE_PATH is a symlink; select the real Xcode app bundle"
--            exit 1
--          fi
--          sudo xcode-select --switch "$IOS_XCODE_PATH/Contents/Developer"
--          echo "Selected Xcode path: $(xcode-select -p)"
--          xcodebuild -version
+-      - name: Select Xcode 26.6
+-        run: sudo xcode-select --switch /Applications/Xcode_26.6.app
 -
 -      - name: Verify Apple toolchain
--        shell: bash
--        run: |
--          set -euo pipefail
--          xcodebuild -version
--          xcrun --sdk iphoneos --show-sdk-version
--          echo "actool: $(xcrun --find actool)"
--          echo "macOS SDK actool: $(xcrun --sdk macosx --find actool)"
+-        run: xcodebuild -version
 -
--      - name: Restore iOS app
+-      - name: Restore iOS app and referenced projects
 -        run: |
--          dotnet restore AssetStudio.Mobile/AssetStudioMobile.csproj \
--            --runtime ios-arm64 \
--            -p:TargetFramework=net10.0-ios
--
--      - name: Restore referenced projects
--        run: |
+-          dotnet restore AssetStudio.Mobile/AssetStudioMobile.csproj --runtime ios-arm64 -p:TargetFramework=net10.0-ios
 -          dotnet restore AssetStudio/AssetStudio.csproj
 -          dotnet restore AssetStudio.PInvoke/AssetStudio.PInvoke.csproj
 -          dotnet restore Texture2DDecoderWrapper/Texture2DDecoderWrapper.csproj
 -
--      - name: List build files before publishing
--        run: |
--          find AssetStudio.Mobile -maxdepth 3 -type f | head -200
--
 -      - name: Publish unsigned Release app for ARM64
--        run: |
--          dotnet publish AssetStudio.Mobile/AssetStudioMobile.csproj \
--            --configuration Release \
--            --framework net10.0-ios \
--            --runtime ios-arm64 \
--            --no-restore \
--            -p:EnableCodeSigning=false \
--            -p:ArchiveOnBuild=false \
--            -p:BuildIpa=false \
--            -v:normal
--
--      - name: Find generated app
--        run: |
--          find AssetStudio.Mobile/bin -type d -name '*.app' -print
+-        run: >-
+-          dotnet publish AssetStudio.Mobile/AssetStudioMobile.csproj
+-          --configuration Release
+-          --framework net10.0-ios
+-          --runtime ios-arm64
+-          --no-restore
+-          -p:EnableCodeSigning=false
+-          -p:ArchiveOnBuild=false
+-          -p:BuildIpa=false
 -
 -      - name: Package unsigned app as IPA
 -        shell: bash
 -        run: |
 -          set -euo pipefail
 -
--          app_path="$(find AssetStudio.Mobile/bin -type d -name '*.app' -prune -print -quit)"
--
+-          app_root="AssetStudio.Mobile/bin/Release/net10.0-ios/ios-arm64"
+-          app_path="$(find "$app_root" -type d -name '*.app' -prune -print -quit)"
 -          if [[ -z "$app_path" ]]; then
--            echo "::error::No iOS .app bundle was produced"
--            echo "Build output:"
--            find AssetStudio.Mobile/bin -maxdepth 8 -print || true
+-            echo "::error::No ARM64 iOS .app bundle was produced under $app_root"
 -            exit 1
 -          fi
 -
--          echo "Found app: $app_path"
--
 -          ipa_path="$GITHUB_WORKSPACE/artifacts/AssetStudioMobile-unsigned.ipa"
 -          staging_root="$(mktemp -d "$RUNNER_TEMP/assetstudio-ipa.XXXXXX")"
--
--          mkdir -p "$staging_root/Payload"
--          mkdir -p "$(dirname "$ipa_path")"
--
+-          mkdir -p "$staging_root/Payload" "$(dirname "$ipa_path")"
 -          ditto "$app_path" "$staging_root/Payload/$(basename "$app_path")"
--
--          ditto -c -k --sequesterRsrc --keepParent \
--            "$staging_root/Payload" "$ipa_path"
+-          ditto -c -k --sequesterRsrc --keepParent "$staging_root/Payload" "$ipa_path"
 -
 -          unzip -tq "$ipa_path"
--
 -          if ! unzip -Z1 "$ipa_path" | grep -Eq '^Payload/[^/]+\.app/Info\.plist$'; then
--            echo "::error::Invalid IPA structure"
+-            echo "::error::The generated IPA does not contain an app bundle at Payload/<name>.app"
 -            exit 1
 -          fi
 -
@@ -176,6 +112,10 @@ index 71f2851..fa3d810 100644
 +permissions:
 +  contents: read
 +
++concurrency:
++  group: build-ios-${{ github.ref }}
++  cancel-in-progress: true
++
 +jobs:
 +  build-ios:
 +    runs-on: macos-26
@@ -184,13 +124,16 @@ index 71f2851..fa3d810 100644
 +      DOTNET_NOLOGO: "1"
 +      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
 +      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "1"
-+      # Keep in sync with sdk.workloadVersion in global.json. Workload set
-+      # 10.0.401 ships .NET for iOS 26.5.10318, which supports Xcode 26.6.
++      NUGET_XMLDOC_MODE: skip
++      # Keep in sync with sdk.workloadVersion in global.json.
 +      IOS_WORKLOAD_SET: 10.0.401
-+      # Use the real Xcode bundle, not the /Applications/Xcode.app symlink.
-+      # The symlink breaks .NET's actool SDK lookup on macos-26 runners.
++      # The symlink /Applications/Xcode.app breaks .NET's actool SDK lookup on
++      # macos-26 runners, so always switch to the physical Xcode 26.6 bundle.
 +      IOS_XCODE_PATH: /Applications/Xcode_26.6.app
-+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
++      APP_PROJECT: AssetStudio.Mobile/AssetStudioMobile.csproj
++      TARGET_FRAMEWORK: net10.0-ios
++      RUNTIME_IDENTIFIER: ios-arm64
++      PUBLISH_DIR: AssetStudio.Mobile/bin/Release/net10.0-ios/ios-arm64/publish
 +
 +    steps:
 +      - name: Check out source
@@ -201,42 +144,46 @@ index 71f2851..fa3d810 100644
 +        with:
 +          dotnet-version: 10.0.x
 +
-+      - name: Verify .NET SDK
++      - name: Show .NET environment
 +        shell: bash
 +        run: |
 +          set -euo pipefail
 +          dotnet --version
++          dotnet --info
 +
-+      - name: Install iOS workload
-+        run: dotnet workload install maui-ios
-+
-+      - name: Verify workload set
++      - name: Install pinned iOS workload
 +        shell: bash
 +        run: |
 +          set -euo pipefail
-+          workload_version="$(dotnet workload --version | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | sed -n '1p' || true)"
-+          echo "Installed workload set: $workload_version"
-+          if [[ "$workload_version" != "$IOS_WORKLOAD_SET" ]]; then
-+            echo "::error::Expected workload set $IOS_WORKLOAD_SET, found '$workload_version'. Xcode 26.6 compatibility requires $IOS_WORKLOAD_SET (keep global.json in sync)."
++          dotnet workload install maui-ios
++          workload_output="$(dotnet workload --version)"
++          installed=""
++          if [[ "$workload_output" =~ ([0-9]+\.[0-9]+\.[0-9]+) ]]; then
++            installed="${BASH_REMATCH[1]}"
++          fi
++          echo "Installed workload set: $installed"
++          if [[ "$installed" != "$IOS_WORKLOAD_SET" ]]; then
++            echo "::error::Expected workload set $IOS_WORKLOAD_SET, found '$installed'"
 +            exit 1
 +          fi
 +
-+      - name: Select real Xcode 26.6 bundle
++      - name: Select physical Xcode 26.6
 +        shell: bash
 +        run: |
 +          set -euo pipefail
 +          unset XCODE_DEVELOPER_DIR_PATH || true
-+          if [[ ! -d "$IOS_XCODE_PATH" ]]; then
-+            echo "::error::Expected Xcode at $IOS_XCODE_PATH"
++          if [[ ! -d "$IOS_XCODE_PATH/Contents/Developer" ]]; then
++            echo "::error::Xcode not found at $IOS_XCODE_PATH"
 +            ls -1 /Applications | grep '^Xcode' || true
 +            exit 1
 +          fi
-+
-+          xcode_real_path="$(cd "$IOS_XCODE_PATH" && pwd -P)"
-+          echo "Xcode real path: $xcode_real_path"
-+          sudo xcode-select --switch "$xcode_real_path/Contents/Developer"
-+          echo "DEVELOPER_DIR=$xcode_real_path/Contents/Developer" >> "$GITHUB_ENV"
-+          echo "Selected developer dir: $(xcode-select -p)"
++          xcode_path="$(cd "$IOS_XCODE_PATH" && pwd -P)"
++          developer_dir="$xcode_path/Contents/Developer"
++          sudo xcode-select --switch "$developer_dir"
++          echo "DEVELOPER_DIR=$developer_dir" >> "$GITHUB_ENV"
++          echo "IOS_DEVELOPER_DIR=$developer_dir" >> "$GITHUB_ENV"
++          echo "Using Xcode: $xcode_path"
++          echo "xcode-select: $(xcode-select -p)"
 +          xcodebuild -version
 +
 +      - name: Verify Apple toolchain
@@ -244,11 +191,10 @@ index 71f2851..fa3d810 100644
 +        run: |
 +          set -euo pipefail
 +          unset XCODE_DEVELOPER_DIR_PATH || true
-+          echo "DEVELOPER_DIR: ${DEVELOPER_DIR:-<unset>}"
-+          echo "xcode-select: $(xcode-select -p)"
-+          xcodebuild -version
 +
-+          xcode_version="$(xcodebuild -version | sed -n '1p')"
++          xcode_output="$(xcodebuild -version)"
++          xcode_version="${xcode_output%%$'\n'*}"
++          echo "Xcode: $xcode_version"
 +          if [[ "$xcode_version" != "Xcode 26.6" ]]; then
 +            echo "::error::Expected Xcode 26.6, found '$xcode_version'"
 +            exit 1
@@ -257,251 +203,160 @@ index 71f2851..fa3d810 100644
 +          ios_sdk="$(xcrun --sdk iphoneos --show-sdk-version)"
 +          echo "iOS SDK: $ios_sdk"
 +          if [[ "$ios_sdk" != 26.5* ]]; then
-+            echo "::error::Expected iOS SDK 26.5.x for workload set $IOS_WORKLOAD_SET, found '$ios_sdk'"
++            echo "::error::Expected iOS SDK 26.5.x, found '$ios_sdk'"
 +            exit 1
 +          fi
 +
++          # Do not hard-code the SDK directory name. Xcode 26.6 ships
++          # MacOSX.sdk as a symlink to MacOSX26.5.sdk; both must pass.
 +          macos_sdk="$(xcrun --sdk macosx --show-sdk-path)"
 +          echo "macOS SDK: $macos_sdk"
 +          case "$macos_sdk" in
-+            *Xcode_26.6.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk) ;;
++            "$IOS_DEVELOPER_DIR"/Platforms/MacOSX.platform/Developer/SDKs/*) ;;
 +            *)
-+              echo "::error::macOS SDK resolved outside the real Xcode 26.6 bundle: $macos_sdk. .NET's actool task will fail with the symlink Xcode path."
++              echo "::error::macOS SDK is outside the selected Xcode: $macos_sdk"
 +              exit 1
 +              ;;
 +          esac
 +
-+          echo "actool: $(xcrun --find actool)"
-+          echo "actool (macOS SDK): $(xcrun --sdk macosx --find actool)"
++          actool_path="$(xcrun --find actool)"
++          echo "actool: $actool_path"
++          case "$actool_path" in
++            "$IOS_DEVELOPER_DIR"/*) ;;
++            *)
++              echo "::error::actool is outside the selected Xcode: $actool_path"
++              exit 1
++              ;;
++          esac
++
++      - name: Clean build outputs
++        shell: bash
++        run: |
++          set -euo pipefail
++          rm -rf AssetStudio.Mobile/bin AssetStudio.Mobile/obj artifacts
 +
 +      - name: Restore iOS app
 +        shell: bash
 +        run: |
 +          set -euo pipefail
-+          unset XCODE_DEVELOPER_DIR_PATH || true
-+          rm -rf AssetStudio.Mobile/bin AssetStudio.Mobile/obj
-+          dotnet restore AssetStudio.Mobile/AssetStudioMobile.csproj \
-+            --runtime ios-arm64 \
-+            -p:TargetFramework=net10.0-ios
++          dotnet restore "$APP_PROJECT" \
++            --runtime "$RUNTIME_IDENTIFIER" \
++            -p:TargetFramework="$TARGET_FRAMEWORK" \
++            -v:minimal
 +
-+      - name: Publish unsigned Release app for ARM64
++      - name: Publish unsigned device app
 +        shell: bash
 +        run: |
 +          set -euo pipefail
-+          unset XCODE_DEVELOPER_DIR_PATH || true
-+          dotnet publish AssetStudio.Mobile/AssetStudioMobile.csproj \
++          dotnet publish "$APP_PROJECT" \
 +            --configuration Release \
-+            --framework net10.0-ios \
-+            --runtime ios-arm64 \
++            --framework "$TARGET_FRAMEWORK" \
++            --runtime "$RUNTIME_IDENTIFIER" \
 +            --no-restore \
 +            -p:EnableCodeSigning=false \
 +            -p:ArchiveOnBuild=false \
 +            -p:BuildIpa=false \
 +            -v:normal
 +
-+      - name: Locate unsigned .app bundle
++      - name: Locate unsigned .app
 +        shell: bash
 +        run: |
 +          set -euo pipefail
-+          expected_root="AssetStudio.Mobile/bin/Release/net10.0-ios/ios-arm64/publish"
-+          search_root="AssetStudio.Mobile/bin/Release/net10.0-ios/ios-arm64"
 +          app_path=""
-+
-+          if [[ -d "$expected_root" ]]; then
-+            app_path="$(find "$expected_root" -type d -name '*.app' -prune -print -quit)"
-+          fi
-+
-+          if [[ -z "$app_path" && -d "$search_root" ]]; then
-+            app_path="$(find "$search_root" -type d -name '*.app' -prune -print -quit)"
-+          fi
-+
++          for root in \
++            "$PUBLISH_DIR" \
++            "AssetStudio.Mobile/bin/Release/$TARGET_FRAMEWORK/$RUNTIME_IDENTIFIER" \
++            "AssetStudio.Mobile/bin"; do
++            if [[ -d "$root" ]]; then
++              app_path="$(find "$root" -type d -name '*.app' -prune -print -quit 2>/dev/null || true)"
++              if [[ -n "$app_path" ]]; then
++                break
++              fi
++            fi
++          done
 +          if [[ -z "$app_path" ]]; then
-+            app_path="$(find AssetStudio.Mobile/bin -type d -name '*.app' -prune -print -quit 2>/dev/null || true)"
-+          fi
-+
-+          if [[ -z "$app_path" ]]; then
-+            echo "::error::No iOS .app bundle was produced"
-+            echo "Build output:"
-+            find AssetStudio.Mobile/bin -print 2>/dev/null || true
++            echo "::error::No .app bundle was produced"
++            find AssetStudio.Mobile/bin -maxdepth 6 -print 2>/dev/null || true
 +            exit 1
 +          fi
-+
 +          if [[ "$app_path" == *iossimulator* ]]; then
-+            echo "::error::Found a simulator app instead of an ios-arm64 device app: $app_path"
++            echo "::error::Simulator app found instead of device app: $app_path"
 +            exit 1
 +          fi
-+
 +          echo "APP_PATH=$app_path" >> "$GITHUB_ENV"
 +          echo "Found app: $app_path"
 +
-+      - name: Package unsigned app as IPA
++      - name: Package and validate unsigned IPA
 +        shell: bash
 +        run: |
 +          set -euo pipefail
 +          app_path="$APP_PATH"
-+
-+          if [[ -z "$app_path" || ! -d "$app_path" ]]; then
-+            echo "::error::App path is missing: '$app_path'"
-+            exit 1
-+          fi
-+
 +          ipa_path="$GITHUB_WORKSPACE/artifacts/AssetStudioMobile-unsigned.ipa"
-+          staging_root="$(mktemp -d "$RUNNER_TEMP/assetstudio-ipa.XXXXXX")"
++          stage="$(mktemp -d "$RUNNER_TEMP/unsigned-ipa.XXXXXX")"
 +          app_name="$(basename "$app_path")"
 +
-+          rm -rf "$GITHUB_WORKSPACE/artifacts"
-+          mkdir -p "$staging_root/Payload"
-+          mkdir -p "$(dirname "$ipa_path")"
++          mkdir -p "$stage/Payload" "$(dirname "$ipa_path")"
++          ditto "$app_path" "$stage/Payload/$app_name"
 +
-+          ditto "$app_path" "$staging_root/Payload/$app_name"
++          find "$stage/Payload" -type f -name 'embedded.mobileprovision' -exec rm -f {} +
++          find "$stage/Payload" -type d -name '_CodeSignature' -prune -exec rm -rf {} +
 +
-+          # Keep the artifact genuinely unsigned.
-+          find "$staging_root/Payload" -type f -name 'embedded.mobileprovision' -exec rm -f {} +
-+          find "$staging_root/Payload" -type d -name '_CodeSignature' -prune -exec rm -rf {} +
-+
-+          signing_material="$(find "$staging_root/Payload" \( -name '_CodeSignature' -o -name 'embedded.mobileprovision' \) -print -quit)"
-+          if [[ -n "$signing_material" ]]; then
-+            echo "::error::IPA still contains signing material: $signing_material"
++          if find "$stage/Payload" \( -name '_CodeSignature' -o -name 'embedded.mobileprovision' \) -print -quit | grep -q .; then
++            echo "::error::Signing material remains in the IPA payload"
 +            exit 1
 +          fi
 +
-+          plist_path="$staging_root/Payload/$app_name/Info.plist"
-+          if [[ ! -f "$plist_path" ]]; then
-+            echo "::error::IPA payload is missing Info.plist"
-+            exit 1
-+          fi
-+          plutil -lint "$plist_path"
++          info="$stage/Payload/$app_name/Info.plist"
++          plutil -lint "$info"
 +
-+          bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "$plist_path")"
++          bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "$info")"
++          echo "CFBundleIdentifier: $bundle_id"
 +          if [[ "$bundle_id" != "com.assetstudio.mobile" ]]; then
 +            echo "::error::Unexpected bundle identifier: '$bundle_id'"
 +            exit 1
 +          fi
 +
-+          for plist_key in UIFileSharingEnabled LSSupportsOpeningDocumentsInPlace; do
-+            value="$(plutil -extract "$plist_key" raw -o - "$plist_path" || true)"
++          for key in UIFileSharingEnabled LSSupportsOpeningDocumentsInPlace; do
++            value="$(plutil -extract "$key" raw -o - "$info")"
++            echo "$key: $value"
 +            if [[ "$value" != "1" && "$value" != "true" ]]; then
-+              echo "::error::$plist_key must be true in the packaged Info.plist (found '$value')"
++              echo "::error::$key must be true"
 +              exit 1
 +            fi
 +          done
 +
-+          for plist_key in CFBundleShortVersionString CFBundleVersion UILaunchStoryboardName XSAppIconAssets; do
-+            value="$(plutil -extract "$plist_key" raw -o - "$plist_path" || true)"
++          for key in CFBundleShortVersionString CFBundleVersion UILaunchStoryboardName XSAppIconAssets; do
++            value="$(plutil -extract "$key" raw -o - "$info" || true)"
 +            if [[ -z "$value" ]]; then
-+              echo "::error::$plist_key is missing from the packaged Info.plist"
++              echo "::error::Missing Info.plist key: $key"
 +              exit 1
 +            fi
-+            echo "$plist_key: $value"
++            echo "$key: $value"
 +          done
 +
-+          executable_name="$(plutil -extract CFBundleExecutable raw -o - "$plist_path")"
-+          executable_path="$staging_root/Payload/$app_name/$executable_name"
-+          if [[ ! -f "$executable_path" ]]; then
-+            echo "::error::IPA payload is missing executable '$executable_name'"
++          exe_name="$(plutil -extract CFBundleExecutable raw -o - "$info")"
++          exe="$stage/Payload/$app_name/$exe_name"
++          if [[ ! -f "$exe" ]]; then
++            echo "::error::Missing executable: $exe"
 +            exit 1
 +          fi
-+          lipo_output="$(lipo -info "$executable_path")"
-+          echo "$lipo_output"
-+          case "$lipo_output" in
-+            *arm64*) ;;
-+            *)
-+              echo "::error::Executable is not arm64"
-+              exit 1
-+              ;;
-+          esac
++          lipo -info "$exe"
 +
-+          ditto -c -k --sequesterRsrc --keepParent \
-+            "$staging_root/Payload" "$ipa_path"
-+
++          ditto -c -k --sequesterRsrc --keepParent "$stage/Payload" "$ipa_path"
 +          unzip -tq "$ipa_path"
-+
-+          unzip -Z1 "$ipa_path" > "$staging_root/entries.txt"
-+          if ! grep -Eq '^Payload/[^/]+\.app/Info\.plist$' "$staging_root/entries.txt"; then
++          unzip -Z1 "$ipa_path" > "$stage/entries.txt"
++          if ! grep -Eq '^Payload/[^/]+\.app/Info\.plist$' "$stage/entries.txt"; then
 +            echo "::error::Invalid IPA structure"
 +            exit 1
 +          fi
-+
 +          shasum -a 256 "$ipa_path"
 +          ls -lh "$ipa_path"
-+          echo "Created unsigned IPA: $ipa_path"
++          echo "Created: $ipa_path"
 +
-+      - name: Upload IPA artifact
++      - name: Upload unsigned IPA
 +        uses: actions/upload-artifact@v4
 +        with:
-+          name: AssetStudioMobile-unsigned-ipa
++          name: AssetStudioMobile-unsigned.ipa
 +          path: artifacts/AssetStudioMobile-unsigned.ipa
 +          if-no-files-found: error
 +          retention-days: 30
-diff --git a/AssetStudio.Mobile/MainPage.xaml.cs b/AssetStudio.Mobile/MainPage.xaml.cs
-index bd841ba..e1a32af 100644
---- a/AssetStudio.Mobile/MainPage.xaml.cs
-+++ b/AssetStudio.Mobile/MainPage.xaml.cs
-@@ -1,5 +1,6 @@
- using Microsoft.Maui.ApplicationModel.DataTransfer;
- using Microsoft.Maui.Storage;
-+using SixLabors.ImageSharp;
- using SixLabors.ImageSharp.PixelFormats;
- using System.Collections.ObjectModel;
- using System.Globalization;
-@@ -767,20 +768,23 @@ public partial class MainPage : ContentPage
-             using var image = SixLabors.ImageSharp.Image.Load<Rgba32>(imagePath);
-             var validChannel = _textureChannels.Count(channel => channel);
-             var disabledColor = validChannel == 1 && _textureChannels[3] ? byte.MaxValue : byte.MinValue;
--            for (var y = 0; y < image.Height; y++)
-+            image.ProcessPixelRows(accessor =>
-             {
--                var row = image.GetPixelRowSpan(y);
--                for (var x = 0; x < row.Length; x++)
-+                for (var y = 0; y < accessor.Height; y++)
-                 {
--                    ref var pixel = ref row[x];
--                    if (!_textureChannels[0]) pixel.B = disabledColor;
--                    if (!_textureChannels[1]) pixel.G = disabledColor;
--                    if (!_textureChannels[2]) pixel.R = disabledColor;
--                    if (!_textureChannels[3]) pixel.A = byte.MaxValue;
-+                    var row = accessor.GetRowSpan(y);
-+                    for (var x = 0; x < row.Length; x++)
-+                    {
-+                        ref var pixel = ref row[x];
-+                        if (!_textureChannels[0]) pixel.B = disabledColor;
-+                        if (!_textureChannels[1]) pixel.G = disabledColor;
-+                        if (!_textureChannels[2]) pixel.R = disabledColor;
-+                        if (!_textureChannels[3]) pixel.A = byte.MaxValue;
-+                    }
-                 }
--            }
-+            });
-             var maskedPath = Path.Combine(Path.GetTempPath(), $"assetstudio-channels-{Guid.NewGuid():N}.png");
--            image.Save(maskedPath);
-+            image.SaveAsPng(maskedPath);
-             return (maskedPath, true);
-         }
-         catch
-@@ -3044,6 +3048,26 @@ public partial class MainPage : ContentPage
-         }
-     }
- 
-+    private async void OnTextureChannelsClicked(object sender, EventArgs e)
-+    {
-+        var enabledChannel = Array.FindIndex(_textureChannels, channel => channel);
-+        if (enabledChannel < 0 || enabledChannel == _textureChannels.Length - 1 ||
-+            _textureChannels.All(channel => channel))
-+        {
-+            Array.Clear(_textureChannels, 0, _textureChannels.Length);
-+            _textureChannels[0] = true;
-+        }
-+        else
-+        {
-+            Array.Clear(_textureChannels, 0, _textureChannels.Length);
-+            _textureChannels[enabledChannel + 1] = true;
-+        }
-+
-+        TextureChannelsButton.Text = $"Channels: {DescribeEnabledTextureChannels()}";
-+        if (_selectedAsset?.SourceAsset is AssetStudio.Texture2D)
-+            await PresentAssetPreviewAsync(_selectedAsset);
-+    }
-+
-     private async void OnFullTexturePreviewClicked(object sender, EventArgs e)
-     {
-         var imagePath = _previewImagePath;
