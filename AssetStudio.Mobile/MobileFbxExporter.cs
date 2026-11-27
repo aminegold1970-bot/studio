@@ -11,7 +11,10 @@ namespace AssetStudioMobile;
 
 internal static class MobileFbxExporter
 {
-    public static string ExportMeshes(IEnumerable<Mesh> sourceMeshes, CancellationToken cancellationToken = default)
+    public static string ExportMeshes(
+        IEnumerable<Mesh> sourceMeshes,
+        CancellationToken cancellationToken = default,
+        MobileFbxExportOptions? options = null)
     {
         var meshes = sourceMeshes?.Distinct().ToList()
             ?? throw new ArgumentNullException(nameof(sourceMeshes));
@@ -28,24 +31,27 @@ internal static class MobileFbxExporter
                 null,
                 null,
                 null)),
-            cancellationToken);
+            cancellationToken,
+            options ?? MobileFbxExportOptions.Load());
     }
 
     public static string ExportSceneMeshes(
         IEnumerable<MobileAssetExporter.SceneMeshGeometry> sourceMeshes,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        MobileFbxExportOptions? options = null)
     {
         var meshes = sourceMeshes?.ToList()
             ?? throw new ArgumentNullException(nameof(sourceMeshes));
         if (meshes.Count == 0)
             throw new InvalidOperationException("The selected scene objects contain no exportable meshes.");
 
-        return ExportGeometry(meshes, cancellationToken);
+        return ExportGeometry(meshes, cancellationToken, options ?? MobileFbxExportOptions.Load());
     }
 
     private static string ExportGeometry(
         IEnumerable<MobileAssetExporter.SceneMeshGeometry> sourceMeshes,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        MobileFbxExportOptions options)
     {
         var meshes = sourceMeshes.ToList();
         if (meshes.Count == 0)
@@ -69,17 +75,21 @@ internal static class MobileFbxExporter
                     geometry.Name,
                     geometry.Materials,
                     materialCache,
-                    geometry.SkinTransforms,
-                    geometry.SkinNormalTransforms,
-                    geometry.BlendShapePositionDeltas,
-                    geometry.BlendShapeNormalDeltas,
+                    options.BakeSkinPose ? geometry.SkinTransforms : null,
+                    options.BakeSkinPose ? geometry.SkinNormalTransforms : null,
+                    options.BakeBlendShapePose ? geometry.BlendShapePositionDeltas : null,
+                    options.BakeBlendShapePose ? geometry.BlendShapeNormalDeltas : null,
                     allocator,
                     cancellationToken));
             }
 
             cancellationToken.ThrowIfCancellationRequested();
             using var scene = new FbxScene(asset);
-            scene.Save(outputPath, -1, 0, 0);
+            scene.Save(
+                outputPath,
+                -1,
+                0,
+                options.Format == MobileFbxFormat.Ascii ? 1 : 0);
             cancellationToken.ThrowIfCancellationRequested();
             if (!File.Exists(outputPath) || new FileInfo(outputPath).Length == 0)
                 throw new InvalidDataException("The FBX SDK did not produce an output file.");
@@ -422,12 +432,16 @@ namespace AssetStudioMobile;
 
 internal static class MobileFbxExporter
 {
-    public static string ExportMeshes(IEnumerable<Mesh> sourceMeshes, CancellationToken cancellationToken = default) =>
+    public static string ExportMeshes(
+        IEnumerable<Mesh> sourceMeshes,
+        CancellationToken cancellationToken = default,
+        MobileFbxExportOptions? options = null) =>
         throw new PlatformNotSupportedException("FBX export is available only in the iOS app.");
 
     public static string ExportSceneMeshes(
         IEnumerable<MobileAssetExporter.SceneMeshGeometry> sourceMeshes,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default,
+        MobileFbxExportOptions? options = null) =>
         throw new PlatformNotSupportedException("FBX export is available only in the iOS app.");
 }
 #endif

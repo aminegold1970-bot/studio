@@ -1,362 +1,1433 @@
-Fix build-ios: replace brittle action with end-to-end unsigned IPA build
+Cumulative iOS build + mobile UI/GUI parity patch
 
-This patch applies to commit 7f948cc5088a80fb38c262df16aec3cfce8aa717 (run #171).
+Applies to commit f3d8131985b6866354e8545e0c75b626d66e0048.
+It produces the final files currently in C:\Users\RDP\Documents\add and on main.
 
-global.json, Info.plist, and the MainPage.xaml.cs source fix are already present
-at that commit. The only remaining failure was a too-strict macOS SDK check
-(MacOSX.sdk vs MacOSX26.5.sdk). This patch replaces the workflow with a cleaner
-version that:
-
-- verifies the selected Xcode by developer-dir prefix instead of SDK symlink name;
-- keeps workload set 10.0.401 and the physical Xcode 26.6 bundle;
-- cleans outputs, restores/publishes only ios-arm64, and disables signing;
-- manually packages Payload/*.app as an unsigned IPA, validates it, and uploads
-  AssetStudioMobile-unsigned.ipa.
+Fixes:
+- run #173: referenced net6.0 project restore assets were overwritten
+- run #175: MAUI Color vs ImageSharp Color ambiguity in MainPage.xaml.cs
+- run #176: invalid XSAppIconAssets requirement in the unsigned-IPA validator
+- desktop parity: export options page/settings, texture channels, mesh preview,
+  font specimens, class sorting/status, Model menu animation actions,
+  archive/model export extensions, and static iOS FBX options
 diff --git a/.github/workflows/build-ios.yml b/.github/workflows/build-ios.yml
-index 0535918..9cfb27f 100644
+index e202b64..baddecc 100644
 --- a/.github/workflows/build-ios.yml
 +++ b/.github/workflows/build-ios.yml
-@@ -1,85 +1,258 @@
--name: Build unsigned iOS IPA
--
--on:
--  push:
--  pull_request:
--  workflow_dispatch:
--
--permissions:
--  contents: read
--
--jobs:
--  build-ios:
--    runs-on: macos-26
--    steps:
--      - name: Check out source
--        uses: actions/checkout@v4
--
--      - name: Set up .NET 10
--        uses: actions/setup-dotnet@v4
--        with:
--          dotnet-version: 10.0.x
--
--      - name: Verify .NET SDK
--        run: dotnet --version
--
--      - name: Install .NET iOS workload
--        run: dotnet workload install maui-ios --version 10.0.401
--
--      - name: Select Xcode 26.6
--        run: sudo xcode-select --switch /Applications/Xcode_26.6.app
--
--      - name: Verify Apple toolchain
--        run: xcodebuild -version
--
--      - name: Restore iOS app and referenced projects
--        run: |
--          dotnet restore AssetStudio.Mobile/AssetStudioMobile.csproj --runtime ios-arm64 -p:TargetFramework=net10.0-ios
--          dotnet restore AssetStudio/AssetStudio.csproj
--          dotnet restore AssetStudio.PInvoke/AssetStudio.PInvoke.csproj
--          dotnet restore Texture2DDecoderWrapper/Texture2DDecoderWrapper.csproj
--
--      - name: Publish unsigned Release app for ARM64
--        run: >-
--          dotnet publish AssetStudio.Mobile/AssetStudioMobile.csproj
--          --configuration Release
--          --framework net10.0-ios
--          --runtime ios-arm64
--          --no-restore
--          -p:EnableCodeSigning=false
--          -p:ArchiveOnBuild=false
--          -p:BuildIpa=false
--
--      - name: Package unsigned app as IPA
--        shell: bash
--        run: |
--          set -euo pipefail
--
--          app_root="AssetStudio.Mobile/bin/Release/net10.0-ios/ios-arm64"
--          app_path="$(find "$app_root" -type d -name '*.app' -prune -print -quit)"
--          if [[ -z "$app_path" ]]; then
--            echo "::error::No ARM64 iOS .app bundle was produced under $app_root"
--            exit 1
--          fi
--
--          ipa_path="$GITHUB_WORKSPACE/artifacts/AssetStudioMobile-unsigned.ipa"
--          staging_root="$(mktemp -d "$RUNNER_TEMP/assetstudio-ipa.XXXXXX")"
--          mkdir -p "$staging_root/Payload" "$(dirname "$ipa_path")"
--          ditto "$app_path" "$staging_root/Payload/$(basename "$app_path")"
--          ditto -c -k --sequesterRsrc --keepParent "$staging_root/Payload" "$ipa_path"
--
--          unzip -tq "$ipa_path"
--          if ! unzip -Z1 "$ipa_path" | grep -Eq '^Payload/[^/]+\.app/Info\.plist$'; then
--            echo "::error::The generated IPA does not contain an app bundle at Payload/<name>.app"
--            exit 1
--          fi
--
--          echo "Created unsigned IPA: $ipa_path"
--
--      - name: Upload IPA artifact
--        uses: actions/upload-artifact@v4
--        with:
--          name: AssetStudioMobile-unsigned-ipa
--          path: artifacts/AssetStudioMobile-unsigned.ipa
--          if-no-files-found: error
--          retention-days: 30
-+name: Build unsigned iOS IPA
-+
-+on:
-+  push:
-+  pull_request:
-+  workflow_dispatch:
-+
-+permissions:
-+  contents: read
-+
-+concurrency:
-+  group: build-ios-${{ github.ref }}
-+  cancel-in-progress: true
-+
-+jobs:
-+  build-ios:
-+    runs-on: macos-26
-+    timeout-minutes: 60
-+    env:
-+      DOTNET_NOLOGO: "1"
-+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
-+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "1"
-+      NUGET_XMLDOC_MODE: skip
-+      # Keep in sync with sdk.workloadVersion in global.json.
-+      IOS_WORKLOAD_SET: 10.0.401
-+      # The symlink /Applications/Xcode.app breaks .NET's actool SDK lookup on
-+      # macos-26 runners, so always switch to the physical Xcode 26.6 bundle.
-+      IOS_XCODE_PATH: /Applications/Xcode_26.6.app
-+      APP_PROJECT: AssetStudio.Mobile/AssetStudioMobile.csproj
-+      TARGET_FRAMEWORK: net10.0-ios
-+      RUNTIME_IDENTIFIER: ios-arm64
-+      PUBLISH_DIR: AssetStudio.Mobile/bin/Release/net10.0-ios/ios-arm64/publish
-+
-+    steps:
-+      - name: Check out source
-+        uses: actions/checkout@v4
-+
-+      - name: Set up .NET 10
-+        uses: actions/setup-dotnet@v4
-+        with:
-+          dotnet-version: 10.0.x
-+
-+      - name: Show .NET environment
-+        shell: bash
-+        run: |
-+          set -euo pipefail
-+          dotnet --version
-+          dotnet --info
-+
-+      - name: Install pinned iOS workload
-+        shell: bash
-+        run: |
-+          set -euo pipefail
-+          dotnet workload install maui-ios
-+          workload_output="$(dotnet workload --version)"
-+          installed=""
-+          if [[ "$workload_output" =~ ([0-9]+\.[0-9]+\.[0-9]+) ]]; then
-+            installed="${BASH_REMATCH[1]}"
-+          fi
-+          echo "Installed workload set: $installed"
-+          if [[ "$installed" != "$IOS_WORKLOAD_SET" ]]; then
-+            echo "::error::Expected workload set $IOS_WORKLOAD_SET, found '$installed'"
-+            exit 1
-+          fi
-+
-+      - name: Select physical Xcode 26.6
-+        shell: bash
-+        run: |
-+          set -euo pipefail
-+          unset XCODE_DEVELOPER_DIR_PATH || true
-+          if [[ ! -d "$IOS_XCODE_PATH/Contents/Developer" ]]; then
-+            echo "::error::Xcode not found at $IOS_XCODE_PATH"
-+            ls -1 /Applications | grep '^Xcode' || true
-+            exit 1
-+          fi
-+          xcode_path="$(cd "$IOS_XCODE_PATH" && pwd -P)"
-+          developer_dir="$xcode_path/Contents/Developer"
-+          sudo xcode-select --switch "$developer_dir"
-+          echo "DEVELOPER_DIR=$developer_dir" >> "$GITHUB_ENV"
-+          echo "IOS_DEVELOPER_DIR=$developer_dir" >> "$GITHUB_ENV"
-+          echo "Using Xcode: $xcode_path"
-+          echo "xcode-select: $(xcode-select -p)"
-+          xcodebuild -version
-+
-+      - name: Verify Apple toolchain
-+        shell: bash
-+        run: |
-+          set -euo pipefail
-+          unset XCODE_DEVELOPER_DIR_PATH || true
-+
-+          xcode_output="$(xcodebuild -version)"
-+          xcode_version="${xcode_output%%$'\n'*}"
-+          echo "Xcode: $xcode_version"
-+          if [[ "$xcode_version" != "Xcode 26.6" ]]; then
-+            echo "::error::Expected Xcode 26.6, found '$xcode_version'"
-+            exit 1
-+          fi
-+
-+          ios_sdk="$(xcrun --sdk iphoneos --show-sdk-version)"
-+          echo "iOS SDK: $ios_sdk"
-+          if [[ "$ios_sdk" != 26.5* ]]; then
-+            echo "::error::Expected iOS SDK 26.5.x, found '$ios_sdk'"
-+            exit 1
-+          fi
-+
-+          # Do not hard-code the SDK directory name. Xcode 26.6 ships
-+          # MacOSX.sdk as a symlink to MacOSX26.5.sdk; both must pass.
-+          macos_sdk="$(xcrun --sdk macosx --show-sdk-path)"
-+          echo "macOS SDK: $macos_sdk"
-+          case "$macos_sdk" in
-+            "$IOS_DEVELOPER_DIR"/Platforms/MacOSX.platform/Developer/SDKs/*) ;;
-+            *)
-+              echo "::error::macOS SDK is outside the selected Xcode: $macos_sdk"
-+              exit 1
-+              ;;
-+          esac
-+
-+          actool_path="$(xcrun --find actool)"
-+          echo "actool: $actool_path"
-+          case "$actool_path" in
-+            "$IOS_DEVELOPER_DIR"/*) ;;
-+            *)
-+              echo "::error::actool is outside the selected Xcode: $actool_path"
-+              exit 1
-+              ;;
-+          esac
-+
-+      - name: Clean build outputs
-+        shell: bash
-+        run: |
-+          set -euo pipefail
-+          rm -rf AssetStudio.Mobile/bin AssetStudio.Mobile/obj artifacts
-+
-+      - name: Restore iOS app
-+        shell: bash
-+        run: |
-+          set -euo pipefail
-+          dotnet restore "$APP_PROJECT" \
-+            --runtime "$RUNTIME_IDENTIFIER" \
-+            -p:TargetFramework="$TARGET_FRAMEWORK" \
-+            -v:minimal
-+
-+      - name: Publish unsigned device app
-+        shell: bash
-+        run: |
-+          set -euo pipefail
-+          dotnet publish "$APP_PROJECT" \
-+            --configuration Release \
-+            --framework "$TARGET_FRAMEWORK" \
-+            --runtime "$RUNTIME_IDENTIFIER" \
-+            --no-restore \
-+            -p:EnableCodeSigning=false \
-+            -p:ArchiveOnBuild=false \
-+            -p:BuildIpa=false \
-+            -v:normal
-+
-+      - name: Locate unsigned .app
-+        shell: bash
-+        run: |
-+          set -euo pipefail
-+          app_path=""
-+          for root in \
-+            "$PUBLISH_DIR" \
-+            "AssetStudio.Mobile/bin/Release/$TARGET_FRAMEWORK/$RUNTIME_IDENTIFIER" \
-+            "AssetStudio.Mobile/bin"; do
-+            if [[ -d "$root" ]]; then
-+              app_path="$(find "$root" -type d -name '*.app' -prune -print -quit 2>/dev/null || true)"
-+              if [[ -n "$app_path" ]]; then
-+                break
-+              fi
-+            fi
+@@ -131,14 +131,23 @@ jobs:
+           set -euo pipefail
+           rm -rf AssetStudio.Mobile/bin AssetStudio.Mobile/obj artifacts
+ 
+-      - name: Restore iOS app
++      - name: Restore iOS app and referenced projects
+         shell: bash
+         run: |
+           set -euo pipefail
++          # Restore only the app here. Passing -p:TargetFramework to the whole
++          # graph would overwrite the net6.0 assets of the library projects.
+           dotnet restore "$APP_PROJECT" \
+             --runtime "$RUNTIME_IDENTIFIER" \
+             -p:TargetFramework="$TARGET_FRAMEWORK" \
++            --no-dependencies \
+             -v:minimal
++          for project in \
++            AssetStudio/AssetStudio.csproj \
++            AssetStudio.PInvoke/AssetStudio.PInvoke.csproj \
++            Texture2DDecoderWrapper/Texture2DDecoderWrapper.csproj; do
++            dotnet restore "$project" -v:minimal
 +          done
-+          if [[ -z "$app_path" ]]; then
-+            echo "::error::No .app bundle was produced"
-+            find AssetStudio.Mobile/bin -maxdepth 6 -print 2>/dev/null || true
-+            exit 1
-+          fi
-+          if [[ "$app_path" == *iossimulator* ]]; then
-+            echo "::error::Simulator app found instead of device app: $app_path"
-+            exit 1
-+          fi
-+          echo "APP_PATH=$app_path" >> "$GITHUB_ENV"
-+          echo "Found app: $app_path"
+ 
+       - name: Publish unsigned device app
+         shell: bash
+@@ -221,7 +230,7 @@ jobs:
+             fi
+           done
+ 
+-          for key in CFBundleShortVersionString CFBundleVersion UILaunchStoryboardName XSAppIconAssets; do
++          for key in CFBundleShortVersionString CFBundleVersion UILaunchStoryboardName; do
+             value="$(plutil -extract "$key" raw -o - "$info" || true)"
+             if [[ -z "$value" ]]; then
+               echo "::error::Missing Info.plist key: $key"
+diff --git a/AssetStudio.Mobile/ExportOptionsPage.cs b/AssetStudio.Mobile/ExportOptionsPage.cs
+new file mode 100644
+index 0000000..94c641d
+--- /dev/null
++++ b/AssetStudio.Mobile/ExportOptionsPage.cs
+@@ -0,0 +1,259 @@
++using System.Globalization;
++using Microsoft.Maui.Controls;
++using Color = Microsoft.Maui.Graphics.Color;
 +
-+      - name: Package and validate unsigned IPA
-+        shell: bash
-+        run: |
-+          set -euo pipefail
-+          app_path="$APP_PATH"
-+          ipa_path="$GITHUB_WORKSPACE/artifacts/AssetStudioMobile-unsigned.ipa"
-+          stage="$(mktemp -d "$RUNNER_TEMP/unsigned-ipa.XXXXXX")"
-+          app_name="$(basename "$app_path")"
++namespace AssetStudioMobile;
 +
-+          mkdir -p "$stage/Payload" "$(dirname "$ipa_path")"
-+          ditto "$app_path" "$stage/Payload/$app_name"
++/// <summary>
++/// Desktop ExportOptions-equivalent page. The general options are applied by the
++/// mobile exporter; FBX values are persisted with desktop-equivalent keys, while
++/// the static iOS FBX path applies format, skin-pose and blend-shape-pose settings.
++/// </summary>
++internal sealed class ExportOptionsPage : ContentPage
++{
++    private static readonly string[] ExportKindLabels = { "Converted", "Raw", "Dump" };
++    private static readonly string[] ImageFormatLabels = { "BMP", "PNG", "JPEG", "TGA" };
++    private static readonly string[] GroupingLabels =
++        { "Type name", "Container path", "Source file name", "Do not group" };
++    private static readonly string[] FbxVersionLabels = { "6.1", "7.1", "7.2", "7.3", "7.4", "7.5" };
++    private static readonly string[] FbxFormatLabels = { "Binary", "Ascii" };
 +
-+          find "$stage/Payload" -type f -name 'embedded.mobileprovision' -exec rm -f {} +
-+          find "$stage/Payload" -type d -name '_CodeSignature' -prune -exec rm -rf {} +
++    private readonly MobileExportSettings _source;
++    private readonly Action<MobileExportSettings> _apply;
++    private readonly Picker _defaultKind = new();
++    private readonly Picker _imageFormat = new();
++    private readonly Picker _grouping = new();
++    private readonly Switch _restoreExtension = new();
++    private readonly Switch _convertTextures = new();
++    private readonly Switch _convertAudio = new();
++    private readonly Switch _eulerFilter = new();
++    private readonly Entry _filterPrecision = CreateNumberEntry();
++    private readonly Switch _exportAllNodes = new();
++    private readonly Switch _exportSkins = new();
++    private readonly Switch _exportAnimations = new();
++    private readonly Switch _exportBlendShape = new();
++    private readonly Switch _castToBone = new();
++    private readonly Entry _boneSize = CreateNumberEntry();
++    private readonly Switch _allUvsAsDiffuse = new();
++    private readonly Entry _scaleFactor = CreateNumberEntry();
++    private readonly Picker _fbxVersion = new();
++    private readonly Picker _fbxFormat = new();
++    private readonly Switch _bakeSkinPose = new();
++    private readonly Switch _bakeBlendShapePose = new();
 +
-+          if find "$stage/Payload" \( -name '_CodeSignature' -o -name 'embedded.mobileprovision' \) -print -quit | grep -q .; then
-+            echo "::error::Signing material remains in the IPA payload"
-+            exit 1
-+          fi
++    public ExportOptionsPage(MobileExportSettings settings, Action<MobileExportSettings> apply)
++    {
++        _source = settings ?? throw new ArgumentNullException(nameof(settings));
++        _apply = apply ?? throw new ArgumentNullException(nameof(apply));
++        Title = "Export Options";
++        BackgroundColor = Color.FromArgb("#FFFFFF");
 +
-+          info="$stage/Payload/$app_name/Info.plist"
-+          plutil -lint "$info"
++        ConfigurePicker(_defaultKind, ExportKindLabels, (int)_source.DefaultExportKind);
++        ConfigurePicker(_imageFormat, ImageFormatLabels, ImageIndex(_source.TextureFormat));
++        ConfigurePicker(_grouping, GroupingLabels, (int)_source.ArchiveGrouping);
++        ConfigurePicker(_fbxVersion, FbxVersionLabels, _source.Fbx.FbxVersionIndex);
++        ConfigurePicker(_fbxFormat, FbxFormatLabels, (int)_source.Fbx.Format);
++        _restoreExtension.IsToggled = _source.RestoreTextAssetExtension;
++        _convertTextures.IsToggled = _source.ConvertTextures;
++        _convertAudio.IsToggled = _source.ConvertAudio;
++        _eulerFilter.IsToggled = _source.Fbx.EulerFilter;
++        _filterPrecision.Text = Format(_source.Fbx.FilterPrecision);
++        _exportAllNodes.IsToggled = _source.Fbx.ExportAllNodes;
++        _exportSkins.IsToggled = _source.Fbx.ExportSkins;
++        _exportAnimations.IsToggled = _source.Fbx.ExportAnimations;
++        _exportBlendShape.IsToggled = _source.Fbx.ExportBlendShape;
++        _castToBone.IsToggled = _source.Fbx.CastToBone;
++        _boneSize.Text = Format(_source.Fbx.BoneSize);
++        _allUvsAsDiffuse.IsToggled = _source.Fbx.ExportAllUvsAsDiffuseMaps;
++        _scaleFactor.Text = Format(_source.Fbx.ScaleFactor);
++        _bakeSkinPose.IsToggled = _source.Fbx.BakeSkinPose;
++        _bakeBlendShapePose.IsToggled = _source.Fbx.BakeBlendShapePose;
 +
-+          bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "$info")"
-+          echo "CFBundleIdentifier: $bundle_id"
-+          if [[ "$bundle_id" != "com.assetstudio.mobile" ]]; then
-+            echo "::error::Unexpected bundle identifier: '$bundle_id'"
-+            exit 1
-+          fi
++        var layout = new VerticalStackLayout { Padding = 14, Spacing = 3 };
++        layout.Children.Add(Heading("Export"));
++        AddPicker(layout, "Default export format", _defaultKind);
++        AddPicker(layout, "Group exported assets by", _grouping);
++        AddSwitch(layout, "Restore TextAsset extension name", _restoreExtension);
++        AddSwitch(layout, "Convert Texture2D", _convertTextures);
++        AddPicker(layout, "Texture image format", _imageFormat);
++        AddSwitch(layout, "Convert AudioClip to WAV (PCM)", _convertAudio);
++        layout.Children.Add(new Label
++        {
++            Text = "Mobile presents the share sheet after export instead of opening a desktop folder.",
++            TextColor = Color.FromArgb("#666666"),
++            FontSize = 11,
++            Margin = new Thickness(0, 4, 0, 6)
++        });
 +
-+          for key in UIFileSharingEnabled LSSupportsOpeningDocumentsInPlace; do
-+            value="$(plutil -extract "$key" raw -o - "$info")"
-+            echo "$key: $value"
-+            if [[ "$value" != "1" && "$value" != "true" ]]; then
-+              echo "::error::$key must be true"
-+              exit 1
-+            fi
-+          done
++        layout.Children.Add(Heading("Fbx"));
++        AddSwitch(layout, "EulerFilter", _eulerFilter);
++        AddNumber(layout, "FilterPrecision", _filterPrecision);
++        AddSwitch(layout, "Export all nodes", _exportAllNodes);
++        AddSwitch(layout, "Export skins", _exportSkins);
++        AddSwitch(layout, "Export animations", _exportAnimations);
++        AddSwitch(layout, "Export blendshape", _exportBlendShape);
++        AddSwitch(layout, "All nodes cast to bone", _castToBone);
++        AddNumber(layout, "BoneSize", _boneSize);
++        AddSwitch(layout, "Export all UVs as diffuse maps", _allUvsAsDiffuse);
++        AddNumber(layout, "ScaleFactor", _scaleFactor);
++        AddPicker(layout, "FBXVersion", _fbxVersion);
++        AddPicker(layout, "FBXFormat", _fbxFormat);
++        AddSwitch(layout, "Bake skin pose (static FBX)", _bakeSkinPose);
++        AddSwitch(layout, "Bake blendshape pose (static FBX)", _bakeBlendShapePose);
++        layout.Children.Add(new Label
++        {
++            Text = "The iOS static FBX exporter applies format and baked-pose options. Animation, Euler and skeleton values are stored for desktop-equivalent settings parity.",
++            TextColor = Color.FromArgb("#666666"),
++            FontSize = 11,
++            Margin = new Thickness(0, 4, 0, 8)
++        });
 +
-+          for key in CFBundleShortVersionString CFBundleVersion UILaunchStoryboardName XSAppIconAssets; do
-+            value="$(plutil -extract "$key" raw -o - "$info" || true)"
-+            if [[ -z "$value" ]]; then
-+              echo "::error::Missing Info.plist key: $key"
-+              exit 1
-+            fi
-+            echo "$key: $value"
-+          done
++        var buttons = new HorizontalStackLayout { Spacing = 8, HorizontalOptions = LayoutOptions.End };
++        var cancel = new Button { Text = "Cancel", FontSize = 12, MinimumHeightRequest = 38 };
++        cancel.Clicked += OnCancelClicked;
++        var save = new Button { Text = "OK", FontSize = 12, MinimumHeightRequest = 38 };
++        save.Clicked += OnSaveClicked;
++        buttons.Children.Add(cancel);
++        buttons.Children.Add(save);
++        layout.Children.Add(buttons);
 +
-+          exe_name="$(plutil -extract CFBundleExecutable raw -o - "$info")"
-+          exe="$stage/Payload/$app_name/$exe_name"
-+          if [[ ! -f "$exe" ]]; then
-+            echo "::error::Missing executable: $exe"
-+            exit 1
-+          fi
-+          lipo -info "$exe"
++        Content = new ScrollView { Content = layout };
++    }
 +
-+          ditto -c -k --sequesterRsrc --keepParent "$stage/Payload" "$ipa_path"
-+          unzip -tq "$ipa_path"
-+          unzip -Z1 "$ipa_path" > "$stage/entries.txt"
-+          if ! grep -Eq '^Payload/[^/]+\.app/Info\.plist$' "$stage/entries.txt"; then
-+            echo "::error::Invalid IPA structure"
-+            exit 1
-+          fi
-+          shasum -a 256 "$ipa_path"
-+          ls -lh "$ipa_path"
-+          echo "Created: $ipa_path"
++    private static Label Heading(string text) => new()
++    {
++        Text = text,
++        TextColor = Color.FromArgb("#202020"),
++        FontAttributes = FontAttributes.Bold,
++        FontSize = 14,
++        Margin = new Thickness(0, 10, 0, 4)
++    };
 +
-+      - name: Upload unsigned IPA
-+        uses: actions/upload-artifact@v4
-+        with:
-+          name: AssetStudioMobile-unsigned.ipa
-+          path: artifacts/AssetStudioMobile-unsigned.ipa
-+          if-no-files-found: error
-+          retention-days: 30
++    private static Entry CreateNumberEntry() => new()
++    {
++        Keyboard = Keyboard.Numeric,
++        FontSize = 12,
++        WidthRequest = 110,
++        HorizontalTextAlignment = TextAlignment.End,
++        MinimumHeightRequest = 34
++    };
++
++    private static void ConfigurePicker(Picker picker, string[] labels, int selectedIndex)
++    {
++        foreach (var label in labels)
++            picker.Items.Add(label);
++        picker.SelectedIndex = Math.Clamp(selectedIndex, 0, labels.Length - 1);
++        picker.FontSize = 12;
++        picker.MinimumHeightRequest = 34;
++    }
++
++    private static void AddPicker(VerticalStackLayout layout, string label, Picker picker)
++    {
++        var row = CreateRow(new GridLength(130, GridUnitType.Absolute));
++        row.Add(CreateRowLabel(label));
++        row.Add(picker, 1);
++        layout.Children.Add(row);
++    }
++
++    private static void AddSwitch(VerticalStackLayout layout, string label, Switch toggle)
++    {
++        var row = CreateRow(GridLength.Auto);
++        row.Add(CreateRowLabel(label));
++        row.Add(toggle, 1);
++        layout.Children.Add(row);
++    }
++
++    private static void AddNumber(VerticalStackLayout layout, string label, Entry entry)
++    {
++        var row = CreateRow(new GridLength(110, GridUnitType.Absolute));
++        row.Add(CreateRowLabel(label));
++        row.Add(entry, 1);
++        layout.Children.Add(row);
++    }
++
++    private static Grid CreateRow(GridLength secondColumn) => new()
++    {
++        ColumnDefinitions =
++        {
++            new ColumnDefinition(GridLength.Star),
++            new ColumnDefinition(secondColumn)
++        },
++        ColumnSpacing = 8,
++        Padding = new Thickness(0, 3)
++    };
++
++    private static Label CreateRowLabel(string text) => new()
++    {
++        Text = text,
++        TextColor = Color.FromArgb("#202020"),
++        FontSize = 12,
++        VerticalTextAlignment = TextAlignment.Center
++    };
++
++    private static string Format(decimal value) => value.ToString(CultureInfo.InvariantCulture);
++
++    private static int ImageIndex(MobileImageFormat format) => format switch
++    {
++        MobileImageFormat.Bmp => 0,
++        MobileImageFormat.Png => 1,
++        MobileImageFormat.Jpeg => 2,
++        MobileImageFormat.Tga => 3,
++        _ => 1
++    };
++
++    private static MobileImageFormat ImageFromIndex(int index) => index switch
++    {
++        0 => MobileImageFormat.Bmp,
++        2 => MobileImageFormat.Jpeg,
++        3 => MobileImageFormat.Tga,
++        _ => MobileImageFormat.Png
++    };
++
++    private async void OnCancelClicked(object? sender, EventArgs e) =>
++        await Navigation.PopModalAsync();
++
++    private async void OnSaveClicked(object? sender, EventArgs e)
++    {
++        if (!TryParse(_filterPrecision.Text, out var filterPrecision)
++            || !TryParse(_boneSize.Text, out var boneSize)
++            || !TryParse(_scaleFactor.Text, out var scaleFactor))
++        {
++            await DisplayAlert("Export Options", "FilterPrecision, BoneSize and ScaleFactor must be numbers.", "OK");
++            return;
++        }
++
++        var updated = new MobileExportSettings
++        {
++            DefaultExportKind = (MobileExportKind)Math.Clamp(_defaultKind.SelectedIndex, 0, ExportKindLabels.Length - 1),
++            TextureFormat = ImageFromIndex(_imageFormat.SelectedIndex),
++            ConvertTextures = _convertTextures.IsToggled,
++            ConvertAudio = _convertAudio.IsToggled,
++            RestoreTextAssetExtension = _restoreExtension.IsToggled,
++            ArchiveGrouping = (MobileArchiveGrouping)Math.Clamp(_grouping.SelectedIndex, 0, GroupingLabels.Length - 1),
++            Fbx = new MobileFbxExportOptions
++            {
++                Format = (MobileFbxFormat)Math.Clamp(_fbxFormat.SelectedIndex, 0, FbxFormatLabels.Length - 1),
++                BakeSkinPose = _bakeSkinPose.IsToggled,
++                BakeBlendShapePose = _bakeBlendShapePose.IsToggled,
++                EulerFilter = _eulerFilter.IsToggled,
++                FilterPrecision = filterPrecision,
++                ExportAllNodes = _exportAllNodes.IsToggled,
++                ExportSkins = _exportSkins.IsToggled,
++                ExportAnimations = _exportAnimations.IsToggled,
++                ExportBlendShape = _exportBlendShape.IsToggled,
++                CastToBone = _castToBone.IsToggled,
++                BoneSize = boneSize,
++                ExportAllUvsAsDiffuseMaps = _allUvsAsDiffuse.IsToggled,
++                ScaleFactor = scaleFactor,
++                FbxVersionIndex = Math.Clamp(_fbxVersion.SelectedIndex, 0, FbxVersionLabels.Length - 1)
++            }
++        };
++
++        MobileExportSettings.Save(updated);
++        _apply(updated);
++        await Navigation.PopModalAsync();
++    }
++
++    private static bool TryParse(string? text, out decimal value) =>
++        decimal.TryParse(text, NumberStyles.Number, CultureInfo.InvariantCulture, out value);
++}
+diff --git a/AssetStudio.Mobile/MainPage.xaml b/AssetStudio.Mobile/MainPage.xaml
+index 736cf03..9ffce1f 100644
+--- a/AssetStudio.Mobile/MainPage.xaml
++++ b/AssetStudio.Mobile/MainPage.xaml
+@@ -178,10 +178,13 @@
+                         <Border x:Name="FontPreviewFrame" IsVisible="False" BackgroundColor="#F4F4F4" Stroke="#C8C8C8" StrokeThickness="1" Padding="10">
+                             <VerticalStackLayout Spacing="7">
+                                 <Label Text="Font specimen" TextColor="#333333" FontSize="11"/>
++                                <Label x:Name="FontSpecimenTiny" Text="The quick brown fox jumps over the lazy dog." TextColor="#111111" FontSize="8"/>
+                                 <Label x:Name="FontSpecimenSmall" Text="The quick brown fox jumps over the lazy dog." TextColor="#111111" FontSize="12"/>
+                                 <Label x:Name="FontSpecimenMedium" Text="The quick brown fox jumps over the lazy dog." TextColor="#111111" FontSize="18"/>
+                                 <Label x:Name="FontSpecimenLarge" Text="The quick brown fox jumps over the lazy dog." TextColor="#111111" FontSize="26"/>
+-                                <Label x:Name="FontSpecimenCharacters" Text="0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ" TextColor="#111111" FontSize="15"/>
++                                <Label x:Name="FontSpecimenXLarge" Text="The quick brown fox jumps over the lazy dog." TextColor="#111111" FontSize="36"/>
++                                <Label x:Name="FontSpecimenHuge" Text="The quick brown fox jumps over the lazy dog." TextColor="#111111" FontSize="48"/>
++                                <Label x:Name="FontSpecimenCharacters" Text="0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz" TextColor="#111111" FontSize="15"/>
+                             </VerticalStackLayout>
+                         </Border>
+                         <Border x:Name="AudioPreviewFrame" IsVisible="False" BackgroundColor="#F7F7F7" Stroke="#C8C8C8" StrokeThickness="1" Padding="8">
+diff --git a/AssetStudio.Mobile/MainPage.xaml.cs b/AssetStudio.Mobile/MainPage.xaml.cs
+index e1a32af..837d500 100644
+--- a/AssetStudio.Mobile/MainPage.xaml.cs
++++ b/AssetStudio.Mobile/MainPage.xaml.cs
+@@ -2,6 +2,7 @@ using Microsoft.Maui.ApplicationModel.DataTransfer;
+ using Microsoft.Maui.Storage;
+ using SixLabors.ImageSharp;
+ using SixLabors.ImageSharp.PixelFormats;
++using Color = Microsoft.Maui.Graphics.Color;
+ using System.Collections.ObjectModel;
+ using System.Globalization;
+ using System.IO;
+@@ -42,7 +43,7 @@ public partial class MainPage : ContentPage
+     private readonly ObservableCollection<ClassRow> _classes = new();
+     private readonly ObservableCollection<MetadataRow> _metadataRows = new();
+     private readonly ObservableCollection<ClassRow> _visibleClasses = new();
+-    private string _classSortKey = "name";
++    private string _classSortKey = "version";
+     private bool _classSortDescending;
+     private string _browserTab = "Asset List";
+     private bool _showAllAssets;
+@@ -103,6 +104,8 @@ public partial class MainPage : ContentPage
+         _convertTextures = Preferences.Get("AssetStudio.ConvertTextures", true);
+         _convertAudio = Preferences.Get("AssetStudio.ConvertAudio", true);
+         _restoreTextAssetExtension = Preferences.Get("AssetStudio.RestoreTextAssetExtension", true);
++        for (var index = 0; index < _textureChannels.Length; index++)
++            _textureChannels[index] = Preferences.Get(TextureChannelsPage.PreferenceKeys[index], true);
+         if (Enum.TryParse(
+             Preferences.Get("AssetStudio.ArchiveGrouping", nameof(MobileArchiveGrouping.None)),
+             ignoreCase: true,
+@@ -453,7 +456,7 @@ public partial class MainPage : ContentPage
+         try
+         {
+             await _assetLoader.LoadFilesAsync(selected, progress, cancellation.Token);
+-            SetBusy(false, $"{sourceLabel} loaded · {_allAssets.Count} assets");
++            SetBusy(false, $"{sourceLabel} loaded · {_allAssets.Count} assets · {_classes.Count} classes");
+         }
+         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+         {
+@@ -497,7 +500,7 @@ public partial class MainPage : ContentPage
+         try
+         {
+             await _assetLoader.LoadFolderAsync(folderPath, progress, cancellation.Token);
+-            SetBusy(false, $"{sourceLabel} loaded · {_allAssets.Count} assets");
++            SetBusy(false, $"{sourceLabel} loaded · {_allAssets.Count} assets · {_classes.Count} classes");
+         }
+         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+         {
+@@ -667,7 +670,14 @@ public partial class MainPage : ContentPage
+             foreach (var item in incoming) _classes.Add(item);
+             ApplyClassFilter();
+             if (_browserTab == "Asset Classes")
+-                StatusLabel.Text = $"Asset Classes · {_classes.Count} classes";
++            {
++                var versionCount = incoming
++                    .Select(item => item.Version)
++                    .Where(version => !string.IsNullOrWhiteSpace(version))
++                    .Distinct(StringComparer.OrdinalIgnoreCase)
++                    .Count();
++                StatusLabel.Text = $"Asset Classes · {_classes.Count} classes · {versionCount} Unity version(s)";
++            }
+         }
+ 
+         if (MainThread.IsMainThread) Apply();
+@@ -1095,9 +1105,12 @@ public partial class MainPage : ContentPage
+         OpenSceneObjectPreviewButton.IsVisible = false;
+         AssetImagePreview.Source = null;
+         AssetTextPreview.Text = string.Empty;
++        FontSpecimenTiny.FontFamily = null;
+         FontSpecimenSmall.FontFamily = null;
+         FontSpecimenMedium.FontFamily = null;
+         FontSpecimenLarge.FontFamily = null;
++        FontSpecimenXLarge.FontFamily = null;
++        FontSpecimenHuge.FontFamily = null;
+         FontSpecimenCharacters.FontFamily = null;
+         AudioPreviewInfo.Text = string.Empty;
+         AudioPlaybackStatus.Text = "Stopped";
+@@ -1639,7 +1652,17 @@ public partial class MainPage : ContentPage
+                     await PresentAssetPreviewAsync(_selectedAsset);
+                 break;
+             case "Export options":
+-                await ChooseDefaultExportKindAsync();
++                try
++                {
++                    await Navigation.PushModalAsync(CreateModalNavigationPage(
++                        new ExportOptionsPage(MobileExportSettings.Load(), ApplyExportSettings)));
++                }
++                catch (Exception exception)
++                {
++                    StatusLabel.Text = $"Could not open export options: {exception.Message}";
++                    if (_showErrorMessages)
++                        await DisplayAlert("Export options", exception.Message, "OK");
++                }
+                 break;
+             default:
+                 StatusLabel.Text = $"Unsupported options action: {choice}";
+@@ -1647,6 +1670,24 @@ public partial class MainPage : ContentPage
+         }
+     }
+ 
++    private void ApplyExportSettings(MobileExportSettings settings)
++    {
++        ArgumentNullException.ThrowIfNull(settings);
++        _defaultExportKind = settings.DefaultExportKind switch
++        {
++            MobileExportKind.Raw => "Raw",
++            MobileExportKind.Dump => "Dump",
++            _ => "Convert"
++        };
++        _textureExportFormat = settings.TextureFormat;
++        _convertTextures = settings.ConvertTextures;
++        _convertAudio = settings.ConvertAudio;
++        _restoreTextAssetExtension = settings.RestoreTextAssetExtension;
++        _archiveGrouping = settings.ArchiveGrouping;
++        StatusLabel.Text = "Export options saved · "
++            + $"texture {settings.TextureFormat} · grouping {settings.ArchiveGrouping} · FBX {settings.Fbx.Format}";
++    }
++
+     private async Task LoadMonoBehaviourAssembliesAsync()
+     {
+         SetBusy(true, "Choose the game's Managed DLL assemblies…");
+@@ -1842,10 +1883,11 @@ public partial class MainPage : ContentPage
+         var modelOptions = new List<string>
+         {
+             "Preview checked scene objects",
+-            "Export all meshes (split OBJ)",
+-            "Export all meshes (merged OBJ)",
+-            "Export checked scene objects (split OBJ)",
+-            "Export checked scene objects (merged OBJ)"
++            "Export all objects (split)",
++            "Export selected objects (split)",
++            "Export selected objects (split) + selected AnimationClips",
++            "Export selected objects (merge)",
++            "Export selected objects (merge) + selected AnimationClips"
+         };
+ #if IOS
+         modelOptions.Add("Export all meshes (static FBX)");
+@@ -1861,7 +1903,8 @@ public partial class MainPage : ContentPage
+         }
+ 
+         var exportAll = choice.StartsWith("Export all", StringComparison.Ordinal);
+-        var merge = choice.Contains("merged", StringComparison.Ordinal);
++        var merge = choice.Contains("(merge)", StringComparison.Ordinal);
++        var withAnimationClips = choice.EndsWith("+ selected AnimationClips", StringComparison.Ordinal);
+         var exportFbx = choice.Contains("(static FBX)", StringComparison.Ordinal);
+         var sceneObjects = exportAll ? null : GetCheckedSceneObjects().ToList();
+         var materialContexts = exportAll
+@@ -1881,6 +1924,22 @@ public partial class MainPage : ContentPage
+             return;
+         }
+ 
++        var explicitClips = _selectedAssets
++            .Select(row => row.SourceAsset)
++            .OfType<AssetStudio.AnimationClip>()
++            .Distinct()
++            .ToList();
++        var animationContext = FindExportAnimationContext(sceneObjects, explicitClips);
++        var animationClips = withAnimationClips
++            ? CollectExportAnimationClips(sceneObjects, explicitClips)
++            : null;
++        if (withAnimationClips && (animationClips == null || animationClips.Count == 0))
++        {
++            StatusLabel.Text = "Select AnimationClips or an Animator with controller clips before exporting with animations";
++            return;
++        }
++
++        var fbxOptions = MobileFbxExportOptions.Load();
+         using var cancellation = new CancellationTokenSource();
+         _loadCancellation = cancellation;
+         CancelLoadButton.Text = "Cancel export";
+@@ -1897,18 +1956,22 @@ public partial class MainPage : ContentPage
+                                 meshes,
+                                 materialContexts,
+                                 cancellation.Token),
+-                            cancellation.Token)
++                            cancellation.Token,
++                            fbxOptions)
+                         : MobileFbxExporter.ExportSceneMeshes(
+                             MobileAssetExporter.GetSceneMeshGeometries(sceneObjects, cancellation.Token),
+-                            cancellation.Token),
++                            cancellation.Token,
++                            fbxOptions),
+                     cancellation.Token);
+             }
+             else if (sceneObjects != null)
+             {
+                 outputPath = await Task.Run(
+                     () => merge
+-                        ? MobileAssetExporter.ExportMergedSceneObjects(sceneObjects, cancellation.Token)
+-                        : MobileAssetExporter.ExportSceneObjectsArchive(sceneObjects, cancellation.Token),
++                        ? MobileAssetExporter.ExportMergedSceneObjects(
++                            sceneObjects, cancellation.Token, animationClips, animationContext)
++                        : MobileAssetExporter.ExportSceneObjectsArchive(
++                            sceneObjects, cancellation.Token, animationClips, animationContext),
+                     cancellation.Token);
+             }
+             else
+@@ -1918,14 +1981,21 @@ public partial class MainPage : ContentPage
+                         ? MobileAssetExporter.ExportMergedMeshAssetsArchive(
+                             meshes,
+                             materialContexts,
+-                            cancellation.Token)
++                            cancellation.Token,
++                            animationClips,
++                            animationContext)
+                         : MobileAssetExporter.ExportMeshAssetsArchive(
+                             meshes,
+                             materialContexts,
+-                            cancellation.Token),
++                            cancellation.Token,
++                            animationClips,
++                            animationContext),
+                     cancellation.Token);
+             }
+             cancellation.Token.ThrowIfCancellationRequested();
++            var animationNote = animationClips is { Count: > 0 }
++                ? $" · {animationClips.Count} AnimationClip(s) included as converted data"
++                : string.Empty;
+             var shareTitle = exportFbx
+                 ? "AssetStudio static FBX model"
+                 : sceneObjects != null
+@@ -1941,12 +2011,12 @@ public partial class MainPage : ContentPage
+             else if (sceneObjects != null)
+             {
+                 StatusLabel.Text =
+-                    $"Exported {meshes.Count} scene mesh(es) as static OBJ with material maps, vertex colors and baked skin/blend-shape pose; rigs and animation are not included";
++                    $"Exported {meshes.Count} scene mesh(es) as static OBJ with material maps, vertex colors and baked skin/blend-shape pose; rigs are not included{animationNote}";
+             }
+             else
+             {
+                 StatusLabel.Text =
+-                    $"Exported {meshes.Count} mesh(es) as OBJ with available material colors and texture maps; scene transforms and animation are not included";
++                    $"Exported {meshes.Count} mesh(es) as OBJ with available material colors and texture maps; scene transforms are not included{animationNote}";
+             }
+         }
+         catch (OperationCanceledException)
+@@ -2068,6 +2138,77 @@ public partial class MainPage : ContentPage
+         }
+     }
+ 
++    private AssetStudio.Animator? FindExportAnimationContext(
++        IReadOnlyList<AssetStudio.GameObject>? sceneObjects,
++        IEnumerable<AssetStudio.AnimationClip> explicitClips)
++    {
++        var selectedAnimator = _selectedAssets
++            .Select(row => row.SourceAsset)
++            .OfType<AssetStudio.Animator>()
++            .FirstOrDefault(animator => animator.m_Controller.TryGet(out _));
++        if (selectedAnimator != null)
++            return selectedAnimator;
++
++        if (sceneObjects == null)
++            return null;
++        foreach (var gameObject in sceneObjects)
++        {
++            foreach (var pointer in gameObject.m_Components)
++            {
++                if (pointer.TryGet(out var component)
++                    && component is AssetStudio.Animator animator
++                    && animator.m_Controller.TryGet(out _))
++                {
++                    return animator;
++                }
++            }
++        }
++        return null;
++    }
++
++    private static List<AssetStudio.AnimationClip> CollectExportAnimationClips(
++        IReadOnlyList<AssetStudio.GameObject>? sceneObjects,
++        IEnumerable<AssetStudio.AnimationClip> explicitClips)
++    {
++        var clips = explicitClips.Distinct().ToList();
++        if (clips.Count > 0 || sceneObjects == null)
++            return clips;
++
++        foreach (var gameObject in sceneObjects)
++        {
++            foreach (var pointer in gameObject.m_Components)
++            {
++                if (!pointer.TryGet(out var component)
++                    || component is not AssetStudio.Animator animator
++                    || !animator.m_Controller.TryGet(out var controller))
++                {
++                    continue;
++                }
++
++                switch (controller)
++                {
++                    case AssetStudio.AnimatorController assetController:
++                        foreach (var clipPointer in assetController.m_AnimationClips)
++                        {
++                            if (clipPointer.TryGet(out var clip))
++                                clips.Add(clip);
++                        }
++                        break;
++                    case AssetStudio.AnimatorOverrideController overrideController:
++                        foreach (var mapping in overrideController.m_Clips)
++                        {
++                            if (mapping.m_OverrideClip.TryGet(out var clip))
++                                clips.Add(clip);
++                            else if (mapping.m_OriginalClip.TryGet(out clip))
++                                clips.Add(clip);
++                        }
++                        break;
++                }
++            }
++        }
++        return clips.Distinct().ToList();
++    }
++
+     private static List<AssetStudio.GameObject> GetHierarchyGameObjects(HierarchyRow root)
+     {
+         var gameObjects = new List<AssetStudio.GameObject>();
+@@ -3050,19 +3191,26 @@ public partial class MainPage : ContentPage
+ 
+     private async void OnTextureChannelsClicked(object sender, EventArgs e)
+     {
+-        var enabledChannel = Array.FindIndex(_textureChannels, channel => channel);
+-        if (enabledChannel < 0 || enabledChannel == _textureChannels.Length - 1 ||
+-            _textureChannels.All(channel => channel))
++        try
+         {
+-            Array.Clear(_textureChannels, 0, _textureChannels.Length);
+-            _textureChannels[0] = true;
++            await Navigation.PushModalAsync(CreateModalNavigationPage(
++                new TextureChannelsPage(_textureChannels, ApplyTextureChannels)));
+         }
+-        else
++        catch (Exception exception)
+         {
+-            Array.Clear(_textureChannels, 0, _textureChannels.Length);
+-            _textureChannels[enabledChannel + 1] = true;
++            StatusLabel.Text = $"Could not open texture channels: {exception.Message}";
++            if (_showErrorMessages)
++                await DisplayAlert("Texture channels", exception.Message, "OK");
+         }
++    }
+ 
++    private async void ApplyTextureChannels(IReadOnlyList<bool> channels)
++    {
++        if (channels.Count != _textureChannels.Length)
++            return;
++
++        for (var index = 0; index < _textureChannels.Length; index++)
++            _textureChannels[index] = channels[index];
+         TextureChannelsButton.Text = $"Channels: {DescribeEnabledTextureChannels()}";
+         if (_selectedAsset?.SourceAsset is AssetStudio.Texture2D)
+             await PresentAssetPreviewAsync(_selectedAsset);
+@@ -3243,9 +3391,12 @@ public partial class MainPage : ContentPage
+         if (string.IsNullOrWhiteSpace(fontName) || UIFont.FromName(fontName, 12f) == null)
+             throw new InvalidDataException("iOS registered the font but could not resolve its family name.");
+ 
++        FontSpecimenTiny.FontFamily = fontName;
+         FontSpecimenSmall.FontFamily = fontName;
+         FontSpecimenMedium.FontFamily = fontName;
+         FontSpecimenLarge.FontFamily = fontName;
++        FontSpecimenXLarge.FontFamily = fontName;
++        FontSpecimenHuge.FontFamily = fontName;
+         FontSpecimenCharacters.FontFamily = fontName;
+         PreviewDetails.Text += $"\nRendering embedded font: {fontName}";
+     }
+diff --git a/AssetStudio.Mobile/MeshPreviewPage.cs b/AssetStudio.Mobile/MeshPreviewPage.cs
+index c4f3cb8..19d7a64 100644
+--- a/AssetStudio.Mobile/MeshPreviewPage.cs
++++ b/AssetStudio.Mobile/MeshPreviewPage.cs
+@@ -1,5 +1,6 @@
+ using AssetStudio;
+ using Microsoft.Maui.Graphics;
++using Microsoft.Maui.Layouts;
+ using MauiColor = Microsoft.Maui.Graphics.Color;
+ using NumericsMatrix4x4 = System.Numerics.Matrix4x4;
+ using NumericsVector3 = System.Numerics.Vector3;
+@@ -10,6 +11,11 @@ internal sealed class MeshPreviewPage : ContentPage
+ {
+     private readonly MeshPreviewDrawable _drawable;
+     private readonly GraphicsView _graphicsView;
++    private readonly Button _modeButton;
++    private readonly Button _shadeButton;
++    private readonly Button _normalsButton;
++    private readonly Button _interactionButton;
++    private readonly Label _instructions;
+ 
+     public MeshPreviewPage(Mesh mesh)
+         : this(mesh?.m_Name ?? "Mesh Preview", new MeshPreviewDrawable(mesh))
+@@ -19,7 +25,7 @@ internal sealed class MeshPreviewPage : ContentPage
+     internal MeshPreviewPage(string title, MeshPreviewDrawable drawable)
+     {
+         Title = string.IsNullOrWhiteSpace(title) ? "Mesh Preview" : title;
+-        _drawable = drawable;
++        _drawable = drawable ?? throw new ArgumentNullException(nameof(drawable));
+         _graphicsView = new GraphicsView
+         {
+             Drawable = _drawable,
+@@ -35,35 +41,100 @@ internal sealed class MeshPreviewPage : ContentPage
+         _graphicsView.GestureRecognizers.Add(pinch);
+ 
+         ToolbarItems.Add(new ToolbarItem("Done", null, async () => await Navigation.PopModalAsync()));
+-        var renderMode = new ToolbarItem { Text = "Wireframe" };
+-        renderMode.Clicked += OnRenderModeClicked;
+-        ToolbarItems.Add(renderMode);
+-        var instructions = new Label
++        _modeButton = CreateControlButton(_drawable.ModeLabel, OnRenderModeClicked);
++        _shadeButton = CreateControlButton(_drawable.ShadeLabel, OnShadeClicked);
++        _normalsButton = CreateControlButton(_drawable.NormalsLabel, OnNormalsClicked);
++        _interactionButton = CreateControlButton(_drawable.InteractionLabel, OnInteractionClicked);
++
++        var controls = new FlexLayout
++        {
++            Direction = FlexDirection.Row,
++            Wrap = FlexWrap.Wrap,
++            AlignItems = FlexAlignItems.Start,
++            JustifyContent = FlexJustify.Start,
++            Padding = new Thickness(2, 4)
++        };
++        controls.Children.Add(_modeButton);
++        controls.Children.Add(_shadeButton);
++        controls.Children.Add(_normalsButton);
++        controls.Children.Add(_interactionButton);
++
++        _instructions = new Label
+         {
+-            Text = "Drag to rotate • Pinch to zoom • Toggle solid/wireframe",
+             TextColor = MauiColor.FromArgb("#555555"),
++            FontSize = 11,
+             HorizontalTextAlignment = TextAlignment.Center,
+-            Margin = new Thickness(0, 10, 0, 4)
++            Margin = new Thickness(0, 4, 0, 2)
+         };
++        UpdateControls();
++
+         var grid = new Grid
+         {
+             Padding = 4,
+             RowDefinitions =
+             {
+                 new RowDefinition { Height = GridLength.Star },
++                new RowDefinition { Height = GridLength.Auto },
+                 new RowDefinition { Height = GridLength.Auto }
+             }
+         };
+         grid.Add(_graphicsView);
+-        grid.Add(instructions, 0, 1);
++        grid.Add(controls, 0, 1);
++        grid.Add(_instructions, 0, 2);
+         Content = grid;
+     }
+ 
++    private static Button CreateControlButton(string text, EventHandler handler)
++    {
++        var button = new Button
++        {
++            Text = text,
++            FontSize = 11,
++            Padding = new Thickness(6, 2),
++            Margin = new Thickness(0, 0, 4, 4),
++            HeightRequest = 32,
++            MinimumHeightRequest = 32,
++            MinimumWidthRequest = 0
++        };
++        button.Clicked += handler;
++        return button;
++    }
++
++    private void UpdateControls()
++    {
++        _modeButton.Text = _drawable.ModeLabel;
++        _shadeButton.Text = _drawable.ShadeLabel;
++        _normalsButton.Text = _drawable.NormalsLabel;
++        _interactionButton.Text = _drawable.InteractionLabel;
++        _instructions.Text = $"Drag to {_drawable.InteractionLanguage} • Pinch to zoom • " +
++            $"{_drawable.ModeLabel} • {_drawable.ShadeLabel} • {_drawable.NormalsLabel}";
++    }
++
+     private void OnRenderModeClicked(object? sender, EventArgs e)
+     {
+         _drawable.ToggleRenderMode();
+-        if (sender is ToolbarItem item)
+-            item.Text = _drawable.IsWireframe ? "Solid" : "Wireframe";
++        UpdateControls();
++        _graphicsView.Invalidate();
++    }
++
++    private void OnShadeClicked(object? sender, EventArgs e)
++    {
++        _drawable.ToggleShading();
++        UpdateControls();
++        _graphicsView.Invalidate();
++    }
++
++    private void OnNormalsClicked(object? sender, EventArgs e)
++    {
++        _drawable.ToggleNormals();
++        UpdateControls();
++        _graphicsView.Invalidate();
++    }
++
++    private void OnInteractionClicked(object? sender, EventArgs e)
++    {
++        _drawable.TogglePanMode();
++        UpdateControls();
+         _graphicsView.Invalidate();
+     }
+ 
+@@ -92,10 +163,31 @@ internal sealed class MeshPreviewDrawable : IDrawable
+     private float _startYaw;
+     private float _startPitch;
+     private float _startZoom;
++    private float _panX;
++    private float _panY;
++    private float _startPanX;
++    private float _startPanY;
+ 
+     public bool IsWireframe { get; private set; }
++    public bool UseShading { get; private set; } = true;
++    public bool ShowNormals { get; private set; }
++    public bool IsPanMode { get; private set; }
++
++    public string ModeLabel => IsWireframe ? "Wireframe" : "Solid";
++    public string ShadeLabel => UseShading ? "Shade: On" : "Shade: Flat";
++    public string NormalsLabel => ShowNormals ? "Normals: On" : "Normals: Off";
++    public string InteractionLabel => IsPanMode ? "Pan" : "Rotate";
++    public string InteractionLanguage => IsPanMode ? "pan" : "rotate";
+ 
+     public void ToggleRenderMode() => IsWireframe = !IsWireframe;
++    public void ToggleShading() => UseShading = !UseShading;
++    public void ToggleNormals() => ShowNormals = !ShowNormals;
++    public void TogglePanMode()
++    {
++        IsPanMode = !IsPanMode;
++        _startPanX = _panX;
++        _startPanY = _panY;
++    }
+ 
+     private readonly record struct MeshTriangle(int A, int B, int C, MauiColor Color);
+ 
+@@ -302,11 +394,26 @@ internal sealed class MeshPreviewDrawable : IDrawable
+         {
+             _startYaw = _yaw;
+             _startPitch = _pitch;
++            _startPanX = _panX;
++            _startPanY = _panY;
+         }
+         else if (e.StatusType == GestureStatus.Running)
+         {
+-            _yaw = _startYaw + (float)e.TotalX / 180f;
+-            _pitch = Math.Clamp(_startPitch + (float)e.TotalY / 180f, -1.5f, 1.5f);
++            if (IsPanMode)
++            {
++                _panX = _startPanX + (float)e.TotalX;
++                _panY = _startPanY + (float)e.TotalY;
++            }
++            else
++            {
++                _yaw = _startYaw + (float)e.TotalX / 180f;
++                _pitch = Math.Clamp(_startPitch + (float)e.TotalY / 180f, -1.5f, 1.5f);
++            }
++        }
++        else if (e.StatusType == GestureStatus.Completed)
++        {
++            _startPanX = _panX;
++            _startPanY = _panY;
+         }
+     }
+ 
+@@ -352,8 +459,8 @@ internal sealed class MeshPreviewDrawable : IDrawable
+             var viewDepth = y * sinPitch + rotatedZ * cosPitch;
+             projected[i] = new ProjectedVertex(
+                 new PointF(
+-                    dirtyRect.Center.X + rotatedX * scale,
+-                    dirtyRect.Center.Y - rotatedY * scale),
++                    dirtyRect.Center.X + rotatedX * scale + _panX,
++                    dirtyRect.Center.Y - rotatedY * scale + _panY),
+                 new NumericsVector3(rotatedX, rotatedY, viewDepth));
+         }
+ 
+@@ -367,6 +474,8 @@ internal sealed class MeshPreviewDrawable : IDrawable
+                 canvas.DrawLine(projected[triangle.B].Point, projected[triangle.C].Point);
+                 canvas.DrawLine(projected[triangle.C].Point, projected[triangle.A].Point);
+             }
++            if (ShowNormals)
++                DrawNormalLines(canvas, projected, scale);
+             return;
+         }
+ 
+@@ -391,15 +500,15 @@ internal sealed class MeshPreviewDrawable : IDrawable
+             var normal = NumericsVector3.Cross(
+                 b.ViewPosition - a.ViewPosition,
+                 c.ViewPosition - a.ViewPosition);
+-            var normalLengthSquared = normal.LengthSquared();
+             var diffuse = 0f;
+-            if (float.IsFinite(normalLengthSquared) && normalLengthSquared > 1e-12f)
++            var normalLengthSquared = normal.LengthSquared();
++            if (UseShading && float.IsFinite(normalLengthSquared) && normalLengthSquared > 1e-12f)
+             {
+                 normal /= MathF.Sqrt(normalLengthSquared);
+                 diffuse = MathF.Max(0, NumericsVector3.Dot(normal, lightDirection));
+             }
+ 
+-            var shade = 0.24f + diffuse * 0.76f;
++            var shade = UseShading ? 0.24f + diffuse * 0.76f : 1f;
+             canvas.FillColor = new MauiColor(
+                 triangle.Color.Red * shade,
+                 triangle.Color.Green * shade,
+@@ -412,6 +521,38 @@ internal sealed class MeshPreviewDrawable : IDrawable
+             face.Close();
+             canvas.FillPath(face);
+         }
++
++        if (ShowNormals)
++            DrawNormalLines(canvas, projected, scale);
++    }
++
++    private void DrawNormalLines(ICanvas canvas, ProjectedVertex[] projected, float scale)
++    {
++        canvas.StrokeColor = MauiColor.FromArgb("#D64A3A");
++        canvas.StrokeSize = 1f;
++        var normalLength = MathF.Max(8f, 0.06f * MathF.Abs(scale) * _zoom);
++        var stride = Math.Max(1, _triangles.Length / 2000);
++        for (var index = 0; index < _triangles.Length; index += stride)
++        {
++            var triangle = _triangles[index];
++            var a = projected[triangle.A];
++            var b = projected[triangle.B];
++            var c = projected[triangle.C];
++            var normal = NumericsVector3.Cross(
++                b.ViewPosition - a.ViewPosition,
++                c.ViewPosition - a.ViewPosition);
++            var squared = normal.LengthSquared();
++            if (!float.IsFinite(squared) || squared <= 1e-12f)
++                continue;
++            normal /= MathF.Sqrt(squared);
++            var center = new PointF(
++                (a.Point.X + b.Point.X + c.Point.X) / 3f,
++                (a.Point.Y + b.Point.Y + c.Point.Y) / 3f);
++            var end = new PointF(
++                center.X + normal.X * normalLength,
++                center.Y - normal.Y * normalLength);
++            canvas.DrawLine(center, end);
++        }
+     }
+ 
+     private readonly record struct ProjectedVertex(PointF Point, NumericsVector3 ViewPosition);
+diff --git a/AssetStudio.Mobile/MobileAssetExporter.cs b/AssetStudio.Mobile/MobileAssetExporter.cs
+index 3b5bfa1..60203c8 100644
+--- a/AssetStudio.Mobile/MobileAssetExporter.cs
++++ b/AssetStudio.Mobile/MobileAssetExporter.cs
+@@ -202,53 +202,67 @@ internal static class MobileAssetExporter
+     public static string ExportMeshAssetsArchive(
+         IEnumerable<Mesh> sourceMeshes,
+         IEnumerable<GameObject> materialContexts,
+-        CancellationToken cancellationToken = default)
++        CancellationToken cancellationToken = default,
++        IEnumerable<AnimationClip>? animationClips = null,
++        Animator? animationContext = null)
+     {
+         var geometries = GetMeshAssetGeometries(sourceMeshes, materialContexts, cancellationToken);
+         if (geometries.Count == 0)
+             throw new InvalidOperationException("No meshes were selected for model export.");
+ 
+-        return WriteSceneObjArchive(geometries, mergeObjects: false, cancellationToken);
++        return WriteSceneObjArchive(
++            geometries, mergeObjects: false, cancellationToken, animationClips, animationContext);
+     }
+ 
+     public static string ExportMergedMeshAssetsArchive(
+         IEnumerable<Mesh> sourceMeshes,
+         IEnumerable<GameObject> materialContexts,
+-        CancellationToken cancellationToken = default)
++        CancellationToken cancellationToken = default,
++        IEnumerable<AnimationClip>? animationClips = null,
++        Animator? animationContext = null)
+     {
+         var geometries = GetMeshAssetGeometries(sourceMeshes, materialContexts, cancellationToken);
+         if (geometries.Count == 0)
+             throw new InvalidOperationException("No meshes were selected for model export.");
+ 
+-        return WriteSceneObjArchive(geometries, mergeObjects: true, cancellationToken);
++        return WriteSceneObjArchive(
++            geometries, mergeObjects: true, cancellationToken, animationClips, animationContext);
+     }
+ 
+     public static string ExportMergedSceneObjects(
+         IEnumerable<GameObject> gameObjects,
+-        CancellationToken cancellationToken = default)
++        CancellationToken cancellationToken = default,
++        IEnumerable<AnimationClip>? animationClips = null,
++        Animator? animationContext = null)
+     {
+         var sceneMeshes = GetSceneMeshGeometries(gameObjects, cancellationToken);
+         if (sceneMeshes.Count == 0)
+             throw new InvalidOperationException("The selected scene objects contain no exportable meshes.");
+ 
+-        return WriteSceneObjArchive(sceneMeshes, mergeObjects: true, cancellationToken);
++        return WriteSceneObjArchive(
++            sceneMeshes, mergeObjects: true, cancellationToken, animationClips, animationContext);
+     }
+ 
+     public static string ExportSceneObjectsArchive(
+         IEnumerable<GameObject> gameObjects,
+-        CancellationToken cancellationToken = default)
++        CancellationToken cancellationToken = default,
++        IEnumerable<AnimationClip>? animationClips = null,
++        Animator? animationContext = null)
+     {
+         var sceneMeshes = GetSceneMeshGeometries(gameObjects, cancellationToken);
+         if (sceneMeshes.Count == 0)
+             throw new InvalidOperationException("The selected scene objects contain no exportable meshes.");
+ 
+-        return WriteSceneObjArchive(sceneMeshes, mergeObjects: false, cancellationToken);
++        return WriteSceneObjArchive(
++            sceneMeshes, mergeObjects: false, cancellationToken, animationClips, animationContext);
+     }
+ 
+     private static string WriteSceneObjArchive(
+         IReadOnlyList<SceneMeshGeometry> sceneMeshes,
+         bool mergeObjects,
+-        CancellationToken cancellationToken)
++        CancellationToken cancellationToken,
++        IEnumerable<AnimationClip>? animationClips = null,
++        Animator? animationContext = null)
+     {
+         var entryNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+         entryNames.Add("materials.mtl");
+@@ -327,6 +341,29 @@ internal static class MobileAssetExporter
+                 }
+ 
+                 cancellationToken.ThrowIfCancellationRequested();
++                if (animationClips != null)
++                {
++                    IReadOnlyDictionary<uint, string>? animationPathBindings = null;
++                    foreach (var clip in animationClips.Distinct())
++                    {
++                        cancellationToken.ThrowIfCancellationRequested();
++                        if (clip == null)
++                            continue;
++                        if (!clip.m_Legacy && animationContext != null)
++                        {
++                            animationPathBindings ??= GetAnimationPathBindings(
++                                animationContext, cancellationToken);
++                        }
++                        var payload = ExportAnimationClip(clip, cancellationToken, animationPathBindings);
++                        var entryName = GetUniqueArchiveEntryName(
++                            entryNames,
++                            SanitizeFileName(string.IsNullOrWhiteSpace(clip.m_Name)
++                                ? "AnimationClip"
++                                : clip.m_Name),
++                            ".anim.json");
++                        WriteArchiveEntry(archive, entryName, payload.Data);
++                    }
++                }
+             }
+ 
+             cancellationToken.ThrowIfCancellationRequested();
+diff --git a/AssetStudio.Mobile/MobileExportSettings.cs b/AssetStudio.Mobile/MobileExportSettings.cs
+new file mode 100644
+index 0000000..e6d3182
+--- /dev/null
++++ b/AssetStudio.Mobile/MobileExportSettings.cs
+@@ -0,0 +1,148 @@
++using Microsoft.Maui.Storage;
++
++namespace AssetStudioMobile;
++
++internal enum MobileFbxFormat
++{
++    Binary,
++    Ascii
++}
++
++/// <summary>
++/// Persisted mobile equivalents of the desktop ExportOptions dialog.
++/// Values not honored by the static iOS FBX exporter are retained so the UI
++/// keeps desktop parity without importing native desktop FBX dependencies.
++/// </summary>
++internal sealed class MobileFbxExportOptions
++{
++    public MobileFbxFormat Format { get; init; } = MobileFbxFormat.Binary;
++    public bool BakeSkinPose { get; init; } = true;
++    public bool BakeBlendShapePose { get; init; } = true;
++    public bool EulerFilter { get; init; } = true;
++    public decimal FilterPrecision { get; init; } = 0.25m;
++    public bool ExportAllNodes { get; init; } = true;
++    public bool ExportSkins { get; init; } = true;
++    public bool ExportAnimations { get; init; } = true;
++    public bool ExportBlendShape { get; init; } = true;
++    public bool CastToBone { get; init; } = false;
++    public decimal BoneSize { get; init; } = 10m;
++    public bool ExportAllUvsAsDiffuseMaps { get; init; } = false;
++    public decimal ScaleFactor { get; init; } = 1m;
++    public int FbxVersionIndex { get; init; } = 3;
++
++    public static MobileFbxExportOptions Load()
++    {
++        var format = ParseEnum(
++            Preferences.Get("AssetStudio.FbxFormat", nameof(MobileFbxFormat.Binary)),
++            MobileFbxFormat.Binary);
++        var version = Preferences.Get("AssetStudio.FbxVersionIndex", "3");
++        return new MobileFbxExportOptions
++        {
++            Format = format,
++            BakeSkinPose = Preferences.Get("AssetStudio.FbxBakeSkinPose", true),
++            BakeBlendShapePose = Preferences.Get("AssetStudio.FbxBakeBlendShapePose", true),
++            EulerFilter = Preferences.Get("AssetStudio.FbxEulerFilter", true),
++            FilterPrecision = ParseDecimal(
++                Preferences.Get("AssetStudio.FbxFilterPrecision", "0.25"), 0.25m),
++            ExportAllNodes = Preferences.Get("AssetStudio.FbxExportAllNodes", true),
++            ExportSkins = Preferences.Get("AssetStudio.FbxExportSkins", true),
++            ExportAnimations = Preferences.Get("AssetStudio.FbxExportAnimations", true),
++            ExportBlendShape = Preferences.Get("AssetStudio.FbxExportBlendShape", true),
++            CastToBone = Preferences.Get("AssetStudio.FbxCastToBone", false),
++            BoneSize = ParseDecimal(Preferences.Get("AssetStudio.FbxBoneSize", "10"), 10m),
++            ExportAllUvsAsDiffuseMaps = Preferences.Get("AssetStudio.FbxAllUvsAsDiffuseMaps", false),
++            ScaleFactor = ParseDecimal(Preferences.Get("AssetStudio.FbxScaleFactor", "1"), 1m),
++            FbxVersionIndex = int.TryParse(version, out var parsedVersion)
++                && parsedVersion is >= 0 and <= 5
++                    ? parsedVersion
++                    : 3
++        };
++    }
++
++    public static void Save(MobileFbxExportOptions options)
++    {
++        ArgumentNullException.ThrowIfNull(options);
++        Preferences.Set("AssetStudio.FbxFormat", options.Format.ToString());
++        Preferences.Set("AssetStudio.FbxBakeSkinPose", options.BakeSkinPose);
++        Preferences.Set("AssetStudio.FbxBakeBlendShapePose", options.BakeBlendShapePose);
++        Preferences.Set("AssetStudio.FbxEulerFilter", options.EulerFilter);
++        Preferences.Set("AssetStudio.FbxFilterPrecision", FormatDecimal(options.FilterPrecision));
++        Preferences.Set("AssetStudio.FbxExportAllNodes", options.ExportAllNodes);
++        Preferences.Set("AssetStudio.FbxExportSkins", options.ExportSkins);
++        Preferences.Set("AssetStudio.FbxExportAnimations", options.ExportAnimations);
++        Preferences.Set("AssetStudio.FbxExportBlendShape", options.ExportBlendShape);
++        Preferences.Set("AssetStudio.FbxCastToBone", options.CastToBone);
++        Preferences.Set("AssetStudio.FbxBoneSize", FormatDecimal(options.BoneSize));
++        Preferences.Set("AssetStudio.FbxAllUvsAsDiffuseMaps", options.ExportAllUvsAsDiffuseMaps);
++        Preferences.Set("AssetStudio.FbxScaleFactor", FormatDecimal(options.ScaleFactor));
++        Preferences.Set("AssetStudio.FbxVersionIndex", options.FbxVersionIndex.ToString());
++    }
++
++    private static string FormatDecimal(decimal value) =>
++        value.ToString(System.Globalization.CultureInfo.InvariantCulture);
++
++    private static decimal ParseDecimal(string value, decimal fallback) =>
++        decimal.TryParse(
++            value,
++            System.Globalization.NumberStyles.Number,
++            System.Globalization.CultureInfo.InvariantCulture,
++            out var parsed)
++                ? parsed
++                : fallback;
++
++    private static T ParseEnum<T>(string value, T fallback) where T : struct, Enum =>
++        Enum.TryParse(value, ignoreCase: true, out T parsed) && Enum.IsDefined(typeof(T), parsed)
++            ? parsed
++            : fallback;
++}
++
++internal sealed class MobileExportSettings
++{
++    public MobileExportKind DefaultExportKind { get; init; } = MobileExportKind.Converted;
++    public MobileImageFormat TextureFormat { get; init; } = MobileImageFormat.Png;
++    public bool ConvertTextures { get; init; } = true;
++    public bool ConvertAudio { get; init; } = true;
++    public bool RestoreTextAssetExtension { get; init; } = true;
++    public MobileArchiveGrouping ArchiveGrouping { get; init; } = MobileArchiveGrouping.TypeName;
++    public MobileFbxExportOptions Fbx { get; init; } = new();
++
++    public static MobileExportSettings Load()
++    {
++        var defaultKind = ParseEnum(
++            Preferences.Get("AssetStudio.DefaultExportKind", nameof(MobileExportKind.Converted)),
++            MobileExportKind.Converted);
++        var textureFormat = ParseEnum(
++            Preferences.Get("AssetStudio.TextureExportFormat", nameof(MobileImageFormat.Png)),
++            MobileImageFormat.Png);
++        var grouping = ParseEnum(
++            Preferences.Get("AssetStudio.ArchiveGrouping", nameof(MobileArchiveGrouping.TypeName)),
++            MobileArchiveGrouping.TypeName);
++        return new MobileExportSettings
++        {
++            DefaultExportKind = defaultKind,
++            TextureFormat = textureFormat,
++            ConvertTextures = Preferences.Get("AssetStudio.ConvertTextures", true),
++            ConvertAudio = Preferences.Get("AssetStudio.ConvertAudio", true),
++            RestoreTextAssetExtension = Preferences.Get("AssetStudio.RestoreTextAssetExtension", true),
++            ArchiveGrouping = grouping,
++            Fbx = MobileFbxExportOptions.Load()
++        };
++    }
++
++    public static void Save(MobileExportSettings settings)
++    {
++        ArgumentNullException.ThrowIfNull(settings);
++        Preferences.Set("AssetStudio.DefaultExportKind", settings.DefaultExportKind.ToString());
++        Preferences.Set("AssetStudio.TextureExportFormat", settings.TextureFormat.ToString());
++        Preferences.Set("AssetStudio.ConvertTextures", settings.ConvertTextures);
++        Preferences.Set("AssetStudio.ConvertAudio", settings.ConvertAudio);
++        Preferences.Set("AssetStudio.RestoreTextAssetExtension", settings.RestoreTextAssetExtension);
++        Preferences.Set("AssetStudio.ArchiveGrouping", settings.ArchiveGrouping.ToString());
++        MobileFbxExportOptions.Save(settings.Fbx);
++    }
++
++    private static T ParseEnum<T>(string value, T fallback) where T : struct, Enum =>
++        Enum.TryParse(value, ignoreCase: true, out T parsed) && Enum.IsDefined(typeof(T), parsed)
++            ? parsed
++            : fallback;
++}
+diff --git a/AssetStudio.Mobile/MobileFbxExporter.cs b/AssetStudio.Mobile/MobileFbxExporter.cs
+index e73970d..7d230cf 100644
+--- a/AssetStudio.Mobile/MobileFbxExporter.cs
++++ b/AssetStudio.Mobile/MobileFbxExporter.cs
+@@ -11,7 +11,10 @@ namespace AssetStudioMobile;
+ 
+ internal static class MobileFbxExporter
+ {
+-    public static string ExportMeshes(IEnumerable<Mesh> sourceMeshes, CancellationToken cancellationToken = default)
++    public static string ExportMeshes(
++        IEnumerable<Mesh> sourceMeshes,
++        CancellationToken cancellationToken = default,
++        MobileFbxExportOptions? options = null)
+     {
+         var meshes = sourceMeshes?.Distinct().ToList()
+             ?? throw new ArgumentNullException(nameof(sourceMeshes));
+@@ -28,24 +31,27 @@ internal static class MobileFbxExporter
+                 null,
+                 null,
+                 null)),
+-            cancellationToken);
++            cancellationToken,
++            options ?? MobileFbxExportOptions.Load());
+     }
+ 
+     public static string ExportSceneMeshes(
+         IEnumerable<MobileAssetExporter.SceneMeshGeometry> sourceMeshes,
+-        CancellationToken cancellationToken = default)
++        CancellationToken cancellationToken = default,
++        MobileFbxExportOptions? options = null)
+     {
+         var meshes = sourceMeshes?.ToList()
+             ?? throw new ArgumentNullException(nameof(sourceMeshes));
+         if (meshes.Count == 0)
+             throw new InvalidOperationException("The selected scene objects contain no exportable meshes.");
+ 
+-        return ExportGeometry(meshes, cancellationToken);
++        return ExportGeometry(meshes, cancellationToken, options ?? MobileFbxExportOptions.Load());
+     }
+ 
+     private static string ExportGeometry(
+         IEnumerable<MobileAssetExporter.SceneMeshGeometry> sourceMeshes,
+-        CancellationToken cancellationToken)
++        CancellationToken cancellationToken,
++        MobileFbxExportOptions options)
+     {
+         var meshes = sourceMeshes.ToList();
+         if (meshes.Count == 0)
+@@ -69,17 +75,21 @@ internal static class MobileFbxExporter
+                     geometry.Name,
+                     geometry.Materials,
+                     materialCache,
+-                    geometry.SkinTransforms,
+-                    geometry.SkinNormalTransforms,
+-                    geometry.BlendShapePositionDeltas,
+-                    geometry.BlendShapeNormalDeltas,
++                    options.BakeSkinPose ? geometry.SkinTransforms : null,
++                    options.BakeSkinPose ? geometry.SkinNormalTransforms : null,
++                    options.BakeBlendShapePose ? geometry.BlendShapePositionDeltas : null,
++                    options.BakeBlendShapePose ? geometry.BlendShapeNormalDeltas : null,
+                     allocator,
+                     cancellationToken));
+             }
+ 
+             cancellationToken.ThrowIfCancellationRequested();
+             using var scene = new FbxScene(asset);
+-            scene.Save(outputPath, -1, 0, 0);
++            scene.Save(
++                outputPath,
++                -1,
++                0,
++                options.Format == MobileFbxFormat.Ascii ? 1 : 0);
+             cancellationToken.ThrowIfCancellationRequested();
+             if (!File.Exists(outputPath) || new FileInfo(outputPath).Length == 0)
+                 throw new InvalidDataException("The FBX SDK did not produce an output file.");
+@@ -422,12 +432,16 @@ namespace AssetStudioMobile;
+ 
+ internal static class MobileFbxExporter
+ {
+-    public static string ExportMeshes(IEnumerable<Mesh> sourceMeshes, CancellationToken cancellationToken = default) =>
++    public static string ExportMeshes(
++        IEnumerable<Mesh> sourceMeshes,
++        CancellationToken cancellationToken = default,
++        MobileFbxExportOptions? options = null) =>
+         throw new PlatformNotSupportedException("FBX export is available only in the iOS app.");
+ 
+     public static string ExportSceneMeshes(
+         IEnumerable<MobileAssetExporter.SceneMeshGeometry> sourceMeshes,
+-        CancellationToken cancellationToken = default) =>
++        CancellationToken cancellationToken = default,
++        MobileFbxExportOptions? options = null) =>
+         throw new PlatformNotSupportedException("FBX export is available only in the iOS app.");
+ }
+ #endif
+diff --git a/AssetStudio.Mobile/TextureChannelsPage.cs b/AssetStudio.Mobile/TextureChannelsPage.cs
+new file mode 100644
+index 0000000..9262ca4
+--- /dev/null
++++ b/AssetStudio.Mobile/TextureChannelsPage.cs
+@@ -0,0 +1,91 @@
++using Microsoft.Maui.Controls;
++using Color = Microsoft.Maui.Graphics.Color;
++
++namespace AssetStudioMobile;
++
++/// <summary>
++/// Desktop-style channel visibility dialog for decoded texture previews.
++/// The array order matches the exporter's BGRA byte order.
++/// </summary>
++internal sealed class TextureChannelsPage : ContentPage
++{
++    internal static readonly string[] PreferenceKeys =
++    {
++        "AssetStudio.TextureChannel.B",
++        "AssetStudio.TextureChannel.G",
++        "AssetStudio.TextureChannel.R",
++        "AssetStudio.TextureChannel.A"
++    };
++
++    private static readonly string[] ChannelLabels = { "Blue (B)", "Green (G)", "Red (R)", "Alpha (A)" };
++    private readonly CheckBox[] _checks = new CheckBox[4];
++    private readonly Action<bool[]> _apply;
++
++    public TextureChannelsPage(IReadOnlyList<bool> channels, Action<bool[]> apply)
++    {
++        ArgumentNullException.ThrowIfNull(channels);
++        if (channels.Count != _checks.Length)
++            throw new ArgumentException("Expected four BGRA channel flags.", nameof(channels));
++
++        _apply = apply ?? throw new ArgumentNullException(nameof(apply));
++        Title = "Texture channels";
++        BackgroundColor = Color.FromArgb("#FFFFFF");
++
++        var layout = new VerticalStackLayout { Padding = 16, Spacing = 12 };
++        layout.Children.Add(new Label
++        {
++            Text = "Choose which decoded channels are visible in the preview:",
++            TextColor = Color.FromArgb("#202020"),
++            FontSize = 13
++        });
++
++        for (var index = 0; index < _checks.Length; index++)
++        {
++            _checks[index] = new CheckBox
++            {
++                IsChecked = channels[index],
++                Color = Color.FromArgb("#2878C8"),
++                MinimumWidthRequest = 24,
++                MinimumHeightRequest = 24
++            };
++            layout.Children.Add(new HorizontalStackLayout
++            {
++                Spacing = 8,
++                Children =
++                {
++                    _checks[index],
++                    new Label
++                    {
++                        Text = ChannelLabels[index],
++                        TextColor = Color.FromArgb("#202020"),
++                        FontSize = 13,
++                        VerticalTextAlignment = TextAlignment.Center
++                    }
++                }
++            });
++        }
++
++        var buttons = new HorizontalStackLayout { Spacing = 8, HorizontalOptions = LayoutOptions.End };
++        var cancel = new Button { Text = "Cancel", FontSize = 12, MinimumHeightRequest = 36 };
++        cancel.Clicked += OnCancelClicked;
++        var applyButton = new Button { Text = "Apply", FontSize = 12, MinimumHeightRequest = 36 };
++        applyButton.Clicked += OnApplyClicked;
++        buttons.Children.Add(cancel);
++        buttons.Children.Add(applyButton);
++        layout.Children.Add(buttons);
++
++        Content = new ScrollView { Content = layout };
++    }
++
++    private async void OnCancelClicked(object? sender, EventArgs e) =>
++        await Navigation.PopModalAsync();
++
++    private async void OnApplyClicked(object? sender, EventArgs e)
++    {
++        var channels = _checks.Select(check => check.IsChecked).ToArray();
++        for (var index = 0; index < channels.Length; index++)
++            Preferences.Set(PreferenceKeys[index], channels[index]);
++        _apply(channels);
++        await Navigation.PopModalAsync();
++    }
++}

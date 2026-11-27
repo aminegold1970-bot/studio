@@ -1,5 +1,6 @@
 using AssetStudio;
 using Microsoft.Maui.Graphics;
+using Microsoft.Maui.Layouts;
 using MauiColor = Microsoft.Maui.Graphics.Color;
 using NumericsMatrix4x4 = System.Numerics.Matrix4x4;
 using NumericsVector3 = System.Numerics.Vector3;
@@ -10,6 +11,11 @@ internal sealed class MeshPreviewPage : ContentPage
 {
     private readonly MeshPreviewDrawable _drawable;
     private readonly GraphicsView _graphicsView;
+    private readonly Button _modeButton;
+    private readonly Button _shadeButton;
+    private readonly Button _normalsButton;
+    private readonly Button _interactionButton;
+    private readonly Label _instructions;
 
     public MeshPreviewPage(Mesh mesh)
         : this(mesh?.m_Name ?? "Mesh Preview", new MeshPreviewDrawable(mesh))
@@ -19,7 +25,7 @@ internal sealed class MeshPreviewPage : ContentPage
     internal MeshPreviewPage(string title, MeshPreviewDrawable drawable)
     {
         Title = string.IsNullOrWhiteSpace(title) ? "Mesh Preview" : title;
-        _drawable = drawable;
+        _drawable = drawable ?? throw new ArgumentNullException(nameof(drawable));
         _graphicsView = new GraphicsView
         {
             Drawable = _drawable,
@@ -35,35 +41,100 @@ internal sealed class MeshPreviewPage : ContentPage
         _graphicsView.GestureRecognizers.Add(pinch);
 
         ToolbarItems.Add(new ToolbarItem("Done", null, async () => await Navigation.PopModalAsync()));
-        var renderMode = new ToolbarItem { Text = "Wireframe" };
-        renderMode.Clicked += OnRenderModeClicked;
-        ToolbarItems.Add(renderMode);
-        var instructions = new Label
+        _modeButton = CreateControlButton(_drawable.ModeLabel, OnRenderModeClicked);
+        _shadeButton = CreateControlButton(_drawable.ShadeLabel, OnShadeClicked);
+        _normalsButton = CreateControlButton(_drawable.NormalsLabel, OnNormalsClicked);
+        _interactionButton = CreateControlButton(_drawable.InteractionLabel, OnInteractionClicked);
+
+        var controls = new FlexLayout
         {
-            Text = "Drag to rotate • Pinch to zoom • Toggle solid/wireframe",
-            TextColor = MauiColor.FromArgb("#555555"),
-            HorizontalTextAlignment = TextAlignment.Center,
-            Margin = new Thickness(0, 10, 0, 4)
+            Direction = FlexDirection.Row,
+            Wrap = FlexWrap.Wrap,
+            AlignItems = FlexAlignItems.Start,
+            JustifyContent = FlexJustify.Start,
+            Padding = new Thickness(2, 4)
         };
+        controls.Children.Add(_modeButton);
+        controls.Children.Add(_shadeButton);
+        controls.Children.Add(_normalsButton);
+        controls.Children.Add(_interactionButton);
+
+        _instructions = new Label
+        {
+            TextColor = MauiColor.FromArgb("#555555"),
+            FontSize = 11,
+            HorizontalTextAlignment = TextAlignment.Center,
+            Margin = new Thickness(0, 4, 0, 2)
+        };
+        UpdateControls();
+
         var grid = new Grid
         {
             Padding = 4,
             RowDefinitions =
             {
                 new RowDefinition { Height = GridLength.Star },
+                new RowDefinition { Height = GridLength.Auto },
                 new RowDefinition { Height = GridLength.Auto }
             }
         };
         grid.Add(_graphicsView);
-        grid.Add(instructions, 0, 1);
+        grid.Add(controls, 0, 1);
+        grid.Add(_instructions, 0, 2);
         Content = grid;
+    }
+
+    private static Button CreateControlButton(string text, EventHandler handler)
+    {
+        var button = new Button
+        {
+            Text = text,
+            FontSize = 11,
+            Padding = new Thickness(6, 2),
+            Margin = new Thickness(0, 0, 4, 4),
+            HeightRequest = 32,
+            MinimumHeightRequest = 32,
+            MinimumWidthRequest = 0
+        };
+        button.Clicked += handler;
+        return button;
+    }
+
+    private void UpdateControls()
+    {
+        _modeButton.Text = _drawable.ModeLabel;
+        _shadeButton.Text = _drawable.ShadeLabel;
+        _normalsButton.Text = _drawable.NormalsLabel;
+        _interactionButton.Text = _drawable.InteractionLabel;
+        _instructions.Text = $"Drag to {_drawable.InteractionLanguage} • Pinch to zoom • " +
+            $"{_drawable.ModeLabel} • {_drawable.ShadeLabel} • {_drawable.NormalsLabel}";
     }
 
     private void OnRenderModeClicked(object? sender, EventArgs e)
     {
         _drawable.ToggleRenderMode();
-        if (sender is ToolbarItem item)
-            item.Text = _drawable.IsWireframe ? "Solid" : "Wireframe";
+        UpdateControls();
+        _graphicsView.Invalidate();
+    }
+
+    private void OnShadeClicked(object? sender, EventArgs e)
+    {
+        _drawable.ToggleShading();
+        UpdateControls();
+        _graphicsView.Invalidate();
+    }
+
+    private void OnNormalsClicked(object? sender, EventArgs e)
+    {
+        _drawable.ToggleNormals();
+        UpdateControls();
+        _graphicsView.Invalidate();
+    }
+
+    private void OnInteractionClicked(object? sender, EventArgs e)
+    {
+        _drawable.TogglePanMode();
+        UpdateControls();
         _graphicsView.Invalidate();
     }
 
@@ -92,10 +163,31 @@ internal sealed class MeshPreviewDrawable : IDrawable
     private float _startYaw;
     private float _startPitch;
     private float _startZoom;
+    private float _panX;
+    private float _panY;
+    private float _startPanX;
+    private float _startPanY;
 
     public bool IsWireframe { get; private set; }
+    public bool UseShading { get; private set; } = true;
+    public bool ShowNormals { get; private set; }
+    public bool IsPanMode { get; private set; }
+
+    public string ModeLabel => IsWireframe ? "Wireframe" : "Solid";
+    public string ShadeLabel => UseShading ? "Shade: On" : "Shade: Flat";
+    public string NormalsLabel => ShowNormals ? "Normals: On" : "Normals: Off";
+    public string InteractionLabel => IsPanMode ? "Pan" : "Rotate";
+    public string InteractionLanguage => IsPanMode ? "pan" : "rotate";
 
     public void ToggleRenderMode() => IsWireframe = !IsWireframe;
+    public void ToggleShading() => UseShading = !UseShading;
+    public void ToggleNormals() => ShowNormals = !ShowNormals;
+    public void TogglePanMode()
+    {
+        IsPanMode = !IsPanMode;
+        _startPanX = _panX;
+        _startPanY = _panY;
+    }
 
     private readonly record struct MeshTriangle(int A, int B, int C, MauiColor Color);
 
@@ -302,11 +394,26 @@ internal sealed class MeshPreviewDrawable : IDrawable
         {
             _startYaw = _yaw;
             _startPitch = _pitch;
+            _startPanX = _panX;
+            _startPanY = _panY;
         }
         else if (e.StatusType == GestureStatus.Running)
         {
-            _yaw = _startYaw + (float)e.TotalX / 180f;
-            _pitch = Math.Clamp(_startPitch + (float)e.TotalY / 180f, -1.5f, 1.5f);
+            if (IsPanMode)
+            {
+                _panX = _startPanX + (float)e.TotalX;
+                _panY = _startPanY + (float)e.TotalY;
+            }
+            else
+            {
+                _yaw = _startYaw + (float)e.TotalX / 180f;
+                _pitch = Math.Clamp(_startPitch + (float)e.TotalY / 180f, -1.5f, 1.5f);
+            }
+        }
+        else if (e.StatusType == GestureStatus.Completed)
+        {
+            _startPanX = _panX;
+            _startPanY = _panY;
         }
     }
 
@@ -352,8 +459,8 @@ internal sealed class MeshPreviewDrawable : IDrawable
             var viewDepth = y * sinPitch + rotatedZ * cosPitch;
             projected[i] = new ProjectedVertex(
                 new PointF(
-                    dirtyRect.Center.X + rotatedX * scale,
-                    dirtyRect.Center.Y - rotatedY * scale),
+                    dirtyRect.Center.X + rotatedX * scale + _panX,
+                    dirtyRect.Center.Y - rotatedY * scale + _panY),
                 new NumericsVector3(rotatedX, rotatedY, viewDepth));
         }
 
@@ -367,6 +474,8 @@ internal sealed class MeshPreviewDrawable : IDrawable
                 canvas.DrawLine(projected[triangle.B].Point, projected[triangle.C].Point);
                 canvas.DrawLine(projected[triangle.C].Point, projected[triangle.A].Point);
             }
+            if (ShowNormals)
+                DrawNormalLines(canvas, projected, scale);
             return;
         }
 
@@ -391,15 +500,15 @@ internal sealed class MeshPreviewDrawable : IDrawable
             var normal = NumericsVector3.Cross(
                 b.ViewPosition - a.ViewPosition,
                 c.ViewPosition - a.ViewPosition);
-            var normalLengthSquared = normal.LengthSquared();
             var diffuse = 0f;
-            if (float.IsFinite(normalLengthSquared) && normalLengthSquared > 1e-12f)
+            var normalLengthSquared = normal.LengthSquared();
+            if (UseShading && float.IsFinite(normalLengthSquared) && normalLengthSquared > 1e-12f)
             {
                 normal /= MathF.Sqrt(normalLengthSquared);
                 diffuse = MathF.Max(0, NumericsVector3.Dot(normal, lightDirection));
             }
 
-            var shade = 0.24f + diffuse * 0.76f;
+            var shade = UseShading ? 0.24f + diffuse * 0.76f : 1f;
             canvas.FillColor = new MauiColor(
                 triangle.Color.Red * shade,
                 triangle.Color.Green * shade,
@@ -411,6 +520,38 @@ internal sealed class MeshPreviewDrawable : IDrawable
             face.LineTo(c.Point);
             face.Close();
             canvas.FillPath(face);
+        }
+
+        if (ShowNormals)
+            DrawNormalLines(canvas, projected, scale);
+    }
+
+    private void DrawNormalLines(ICanvas canvas, ProjectedVertex[] projected, float scale)
+    {
+        canvas.StrokeColor = MauiColor.FromArgb("#D64A3A");
+        canvas.StrokeSize = 1f;
+        var normalLength = MathF.Max(8f, 0.06f * MathF.Abs(scale) * _zoom);
+        var stride = Math.Max(1, _triangles.Length / 2000);
+        for (var index = 0; index < _triangles.Length; index += stride)
+        {
+            var triangle = _triangles[index];
+            var a = projected[triangle.A];
+            var b = projected[triangle.B];
+            var c = projected[triangle.C];
+            var normal = NumericsVector3.Cross(
+                b.ViewPosition - a.ViewPosition,
+                c.ViewPosition - a.ViewPosition);
+            var squared = normal.LengthSquared();
+            if (!float.IsFinite(squared) || squared <= 1e-12f)
+                continue;
+            normal /= MathF.Sqrt(squared);
+            var center = new PointF(
+                (a.Point.X + b.Point.X + c.Point.X) / 3f,
+                (a.Point.Y + b.Point.Y + c.Point.Y) / 3f);
+            var end = new PointF(
+                center.X + normal.X * normalLength,
+                center.Y - normal.Y * normalLength);
+            canvas.DrawLine(center, end);
         }
     }
 

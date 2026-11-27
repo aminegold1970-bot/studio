@@ -230,7 +230,7 @@ jobs:
             fi
           done
 
-          for key in CFBundleShortVersionString CFBundleVersion UILaunchStoryboardName XSAppIconAssets; do
+          for key in CFBundleShortVersionString CFBundleVersion UILaunchStoryboardName; do
             value="$(plutil -extract "$key" raw -o - "$info" || true)"
             if [[ -z "$value" ]]; then
               echo "::error::Missing Info.plist key: $key"

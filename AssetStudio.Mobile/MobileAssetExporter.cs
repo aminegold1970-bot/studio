@@ -202,53 +202,67 @@ internal static class MobileAssetExporter
     public static string ExportMeshAssetsArchive(
         IEnumerable<Mesh> sourceMeshes,
         IEnumerable<GameObject> materialContexts,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IEnumerable<AnimationClip>? animationClips = null,
+        Animator? animationContext = null)
     {
         var geometries = GetMeshAssetGeometries(sourceMeshes, materialContexts, cancellationToken);
         if (geometries.Count == 0)
             throw new InvalidOperationException("No meshes were selected for model export.");
 
-        return WriteSceneObjArchive(geometries, mergeObjects: false, cancellationToken);
+        return WriteSceneObjArchive(
+            geometries, mergeObjects: false, cancellationToken, animationClips, animationContext);
     }
 
     public static string ExportMergedMeshAssetsArchive(
         IEnumerable<Mesh> sourceMeshes,
         IEnumerable<GameObject> materialContexts,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IEnumerable<AnimationClip>? animationClips = null,
+        Animator? animationContext = null)
     {
         var geometries = GetMeshAssetGeometries(sourceMeshes, materialContexts, cancellationToken);
         if (geometries.Count == 0)
             throw new InvalidOperationException("No meshes were selected for model export.");
 
-        return WriteSceneObjArchive(geometries, mergeObjects: true, cancellationToken);
+        return WriteSceneObjArchive(
+            geometries, mergeObjects: true, cancellationToken, animationClips, animationContext);
     }
 
     public static string ExportMergedSceneObjects(
         IEnumerable<GameObject> gameObjects,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IEnumerable<AnimationClip>? animationClips = null,
+        Animator? animationContext = null)
     {
         var sceneMeshes = GetSceneMeshGeometries(gameObjects, cancellationToken);
         if (sceneMeshes.Count == 0)
             throw new InvalidOperationException("The selected scene objects contain no exportable meshes.");
 
-        return WriteSceneObjArchive(sceneMeshes, mergeObjects: true, cancellationToken);
+        return WriteSceneObjArchive(
+            sceneMeshes, mergeObjects: true, cancellationToken, animationClips, animationContext);
     }
 
     public static string ExportSceneObjectsArchive(
         IEnumerable<GameObject> gameObjects,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IEnumerable<AnimationClip>? animationClips = null,
+        Animator? animationContext = null)
     {
         var sceneMeshes = GetSceneMeshGeometries(gameObjects, cancellationToken);
         if (sceneMeshes.Count == 0)
             throw new InvalidOperationException("The selected scene objects contain no exportable meshes.");
 
-        return WriteSceneObjArchive(sceneMeshes, mergeObjects: false, cancellationToken);
+        return WriteSceneObjArchive(
+            sceneMeshes, mergeObjects: false, cancellationToken, animationClips, animationContext);
     }
 
     private static string WriteSceneObjArchive(
         IReadOnlyList<SceneMeshGeometry> sceneMeshes,
         bool mergeObjects,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IEnumerable<AnimationClip>? animationClips = null,
+        Animator? animationContext = null)
     {
         var entryNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         entryNames.Add("materials.mtl");
@@ -327,6 +341,29 @@ internal static class MobileAssetExporter
                 }
 
                 cancellationToken.ThrowIfCancellationRequested();
+                if (animationClips != null)
+                {
+                    IReadOnlyDictionary<uint, string>? animationPathBindings = null;
+                    foreach (var clip in animationClips.Distinct())
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        if (clip == null)
+                            continue;
+                        if (!clip.m_Legacy && animationContext != null)
+                        {
+                            animationPathBindings ??= GetAnimationPathBindings(
+                                animationContext, cancellationToken);
+                        }
+                        var payload = ExportAnimationClip(clip, cancellationToken, animationPathBindings);
+                        var entryName = GetUniqueArchiveEntryName(
+                            entryNames,
+                            SanitizeFileName(string.IsNullOrWhiteSpace(clip.m_Name)
+                                ? "AnimationClip"
+                                : clip.m_Name),
+                            ".anim.json");
+                        WriteArchiveEntry(archive, entryName, payload.Data);
+                    }
+                }
             }
 
             cancellationToken.ThrowIfCancellationRequested();

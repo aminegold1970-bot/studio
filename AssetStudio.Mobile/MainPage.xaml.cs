@@ -43,7 +43,7 @@ public partial class MainPage : ContentPage
     private readonly ObservableCollection<ClassRow> _classes = new();
     private readonly ObservableCollection<MetadataRow> _metadataRows = new();
     private readonly ObservableCollection<ClassRow> _visibleClasses = new();
-    private string _classSortKey = "name";
+    private string _classSortKey = "version";
     private bool _classSortDescending;
     private string _browserTab = "Asset List";
     private bool _showAllAssets;
@@ -104,6 +104,8 @@ public partial class MainPage : ContentPage
         _convertTextures = Preferences.Get("AssetStudio.ConvertTextures", true);
         _convertAudio = Preferences.Get("AssetStudio.ConvertAudio", true);
         _restoreTextAssetExtension = Preferences.Get("AssetStudio.RestoreTextAssetExtension", true);
+        for (var index = 0; index < _textureChannels.Length; index++)
+            _textureChannels[index] = Preferences.Get(TextureChannelsPage.PreferenceKeys[index], true);
         if (Enum.TryParse(
             Preferences.Get("AssetStudio.ArchiveGrouping", nameof(MobileArchiveGrouping.None)),
             ignoreCase: true,
@@ -454,7 +456,7 @@ public partial class MainPage : ContentPage
         try
         {
             await _assetLoader.LoadFilesAsync(selected, progress, cancellation.Token);
-            SetBusy(false, $"{sourceLabel} loaded · {_allAssets.Count} assets");
+            SetBusy(false, $"{sourceLabel} loaded · {_allAssets.Count} assets · {_classes.Count} classes");
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {
@@ -498,7 +500,7 @@ public partial class MainPage : ContentPage
         try
         {
             await _assetLoader.LoadFolderAsync(folderPath, progress, cancellation.Token);
-            SetBusy(false, $"{sourceLabel} loaded · {_allAssets.Count} assets");
+            SetBusy(false, $"{sourceLabel} loaded · {_allAssets.Count} assets · {_classes.Count} classes");
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {
@@ -668,7 +670,14 @@ public partial class MainPage : ContentPage
             foreach (var item in incoming) _classes.Add(item);
             ApplyClassFilter();
             if (_browserTab == "Asset Classes")
-                StatusLabel.Text = $"Asset Classes · {_classes.Count} classes";
+            {
+                var versionCount = incoming
+                    .Select(item => item.Version)
+                    .Where(version => !string.IsNullOrWhiteSpace(version))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Count();
+                StatusLabel.Text = $"Asset Classes · {_classes.Count} classes · {versionCount} Unity version(s)";
+            }
         }
 
         if (MainThread.IsMainThread) Apply();
@@ -1096,9 +1105,12 @@ public partial class MainPage : ContentPage
         OpenSceneObjectPreviewButton.IsVisible = false;
         AssetImagePreview.Source = null;
         AssetTextPreview.Text = string.Empty;
+        FontSpecimenTiny.FontFamily = null;
         FontSpecimenSmall.FontFamily = null;
         FontSpecimenMedium.FontFamily = null;
         FontSpecimenLarge.FontFamily = null;
+        FontSpecimenXLarge.FontFamily = null;
+        FontSpecimenHuge.FontFamily = null;
         FontSpecimenCharacters.FontFamily = null;
         AudioPreviewInfo.Text = string.Empty;
         AudioPlaybackStatus.Text = "Stopped";
@@ -1640,12 +1652,40 @@ public partial class MainPage : ContentPage
                     await PresentAssetPreviewAsync(_selectedAsset);
                 break;
             case "Export options":
-                await ChooseDefaultExportKindAsync();
+                try
+                {
+                    await Navigation.PushModalAsync(CreateModalNavigationPage(
+                        new ExportOptionsPage(MobileExportSettings.Load(), ApplyExportSettings)));
+                }
+                catch (Exception exception)
+                {
+                    StatusLabel.Text = $"Could not open export options: {exception.Message}";
+                    if (_showErrorMessages)
+                        await DisplayAlert("Export options", exception.Message, "OK");
+                }
                 break;
             default:
                 StatusLabel.Text = $"Unsupported options action: {choice}";
                 break;
         }
+    }
+
+    private void ApplyExportSettings(MobileExportSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        _defaultExportKind = settings.DefaultExportKind switch
+        {
+            MobileExportKind.Raw => "Raw",
+            MobileExportKind.Dump => "Dump",
+            _ => "Convert"
+        };
+        _textureExportFormat = settings.TextureFormat;
+        _convertTextures = settings.ConvertTextures;
+        _convertAudio = settings.ConvertAudio;
+        _restoreTextAssetExtension = settings.RestoreTextAssetExtension;
+        _archiveGrouping = settings.ArchiveGrouping;
+        StatusLabel.Text = "Export options saved · "
+            + $"texture {settings.TextureFormat} · grouping {settings.ArchiveGrouping} · FBX {settings.Fbx.Format}";
     }
 
     private async Task LoadMonoBehaviourAssembliesAsync()
@@ -1843,10 +1883,11 @@ public partial class MainPage : ContentPage
         var modelOptions = new List<string>
         {
             "Preview checked scene objects",
-            "Export all meshes (split OBJ)",
-            "Export all meshes (merged OBJ)",
-            "Export checked scene objects (split OBJ)",
-            "Export checked scene objects (merged OBJ)"
+            "Export all objects (split)",
+            "Export selected objects (split)",
+            "Export selected objects (split) + selected AnimationClips",
+            "Export selected objects (merge)",
+            "Export selected objects (merge) + selected AnimationClips"
         };
 #if IOS
         modelOptions.Add("Export all meshes (static FBX)");
@@ -1862,7 +1903,8 @@ public partial class MainPage : ContentPage
         }
 
         var exportAll = choice.StartsWith("Export all", StringComparison.Ordinal);
-        var merge = choice.Contains("merged", StringComparison.Ordinal);
+        var merge = choice.Contains("(merge)", StringComparison.Ordinal);
+        var withAnimationClips = choice.EndsWith("+ selected AnimationClips", StringComparison.Ordinal);
         var exportFbx = choice.Contains("(static FBX)", StringComparison.Ordinal);
         var sceneObjects = exportAll ? null : GetCheckedSceneObjects().ToList();
         var materialContexts = exportAll
@@ -1882,6 +1924,22 @@ public partial class MainPage : ContentPage
             return;
         }
 
+        var explicitClips = _selectedAssets
+            .Select(row => row.SourceAsset)
+            .OfType<AssetStudio.AnimationClip>()
+            .Distinct()
+            .ToList();
+        var animationContext = FindExportAnimationContext(sceneObjects, explicitClips);
+        var animationClips = withAnimationClips
+            ? CollectExportAnimationClips(sceneObjects, explicitClips)
+            : null;
+        if (withAnimationClips && (animationClips == null || animationClips.Count == 0))
+        {
+            StatusLabel.Text = "Select AnimationClips or an Animator with controller clips before exporting with animations";
+            return;
+        }
+
+        var fbxOptions = MobileFbxExportOptions.Load();
         using var cancellation = new CancellationTokenSource();
         _loadCancellation = cancellation;
         CancelLoadButton.Text = "Cancel export";
@@ -1898,18 +1956,22 @@ public partial class MainPage : ContentPage
                                 meshes,
                                 materialContexts,
                                 cancellation.Token),
-                            cancellation.Token)
+                            cancellation.Token,
+                            fbxOptions)
                         : MobileFbxExporter.ExportSceneMeshes(
                             MobileAssetExporter.GetSceneMeshGeometries(sceneObjects, cancellation.Token),
-                            cancellation.Token),
+                            cancellation.Token,
+                            fbxOptions),
                     cancellation.Token);
             }
             else if (sceneObjects != null)
             {
                 outputPath = await Task.Run(
                     () => merge
-                        ? MobileAssetExporter.ExportMergedSceneObjects(sceneObjects, cancellation.Token)
-                        : MobileAssetExporter.ExportSceneObjectsArchive(sceneObjects, cancellation.Token),
+                        ? MobileAssetExporter.ExportMergedSceneObjects(
+                            sceneObjects, cancellation.Token, animationClips, animationContext)
+                        : MobileAssetExporter.ExportSceneObjectsArchive(
+                            sceneObjects, cancellation.Token, animationClips, animationContext),
                     cancellation.Token);
             }
             else
@@ -1919,14 +1981,21 @@ public partial class MainPage : ContentPage
                         ? MobileAssetExporter.ExportMergedMeshAssetsArchive(
                             meshes,
                             materialContexts,
-                            cancellation.Token)
+                            cancellation.Token,
+                            animationClips,
+                            animationContext)
                         : MobileAssetExporter.ExportMeshAssetsArchive(
                             meshes,
                             materialContexts,
-                            cancellation.Token),
+                            cancellation.Token,
+                            animationClips,
+                            animationContext),
                     cancellation.Token);
             }
             cancellation.Token.ThrowIfCancellationRequested();
+            var animationNote = animationClips is { Count: > 0 }
+                ? $" · {animationClips.Count} AnimationClip(s) included as converted data"
+                : string.Empty;
             var shareTitle = exportFbx
                 ? "AssetStudio static FBX model"
                 : sceneObjects != null
@@ -1942,12 +2011,12 @@ public partial class MainPage : ContentPage
             else if (sceneObjects != null)
             {
                 StatusLabel.Text =
-                    $"Exported {meshes.Count} scene mesh(es) as static OBJ with material maps, vertex colors and baked skin/blend-shape pose; rigs and animation are not included";
+                    $"Exported {meshes.Count} scene mesh(es) as static OBJ with material maps, vertex colors and baked skin/blend-shape pose; rigs are not included{animationNote}";
             }
             else
             {
                 StatusLabel.Text =
-                    $"Exported {meshes.Count} mesh(es) as OBJ with available material colors and texture maps; scene transforms and animation are not included";
+                    $"Exported {meshes.Count} mesh(es) as OBJ with available material colors and texture maps; scene transforms are not included{animationNote}";
             }
         }
         catch (OperationCanceledException)
@@ -2067,6 +2136,77 @@ public partial class MainPage : ContentPage
                     break;
             }
         }
+    }
+
+    private AssetStudio.Animator? FindExportAnimationContext(
+        IReadOnlyList<AssetStudio.GameObject>? sceneObjects,
+        IEnumerable<AssetStudio.AnimationClip> explicitClips)
+    {
+        var selectedAnimator = _selectedAssets
+            .Select(row => row.SourceAsset)
+            .OfType<AssetStudio.Animator>()
+            .FirstOrDefault(animator => animator.m_Controller.TryGet(out _));
+        if (selectedAnimator != null)
+            return selectedAnimator;
+
+        if (sceneObjects == null)
+            return null;
+        foreach (var gameObject in sceneObjects)
+        {
+            foreach (var pointer in gameObject.m_Components)
+            {
+                if (pointer.TryGet(out var component)
+                    && component is AssetStudio.Animator animator
+                    && animator.m_Controller.TryGet(out _))
+                {
+                    return animator;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static List<AssetStudio.AnimationClip> CollectExportAnimationClips(
+        IReadOnlyList<AssetStudio.GameObject>? sceneObjects,
+        IEnumerable<AssetStudio.AnimationClip> explicitClips)
+    {
+        var clips = explicitClips.Distinct().ToList();
+        if (clips.Count > 0 || sceneObjects == null)
+            return clips;
+
+        foreach (var gameObject in sceneObjects)
+        {
+            foreach (var pointer in gameObject.m_Components)
+            {
+                if (!pointer.TryGet(out var component)
+                    || component is not AssetStudio.Animator animator
+                    || !animator.m_Controller.TryGet(out var controller))
+                {
+                    continue;
+                }
+
+                switch (controller)
+                {
+                    case AssetStudio.AnimatorController assetController:
+                        foreach (var clipPointer in assetController.m_AnimationClips)
+                        {
+                            if (clipPointer.TryGet(out var clip))
+                                clips.Add(clip);
+                        }
+                        break;
+                    case AssetStudio.AnimatorOverrideController overrideController:
+                        foreach (var mapping in overrideController.m_Clips)
+                        {
+                            if (mapping.m_OverrideClip.TryGet(out var clip))
+                                clips.Add(clip);
+                            else if (mapping.m_OriginalClip.TryGet(out clip))
+                                clips.Add(clip);
+                        }
+                        break;
+                }
+            }
+        }
+        return clips.Distinct().ToList();
     }
 
     private static List<AssetStudio.GameObject> GetHierarchyGameObjects(HierarchyRow root)
@@ -3051,19 +3191,26 @@ public partial class MainPage : ContentPage
 
     private async void OnTextureChannelsClicked(object sender, EventArgs e)
     {
-        var enabledChannel = Array.FindIndex(_textureChannels, channel => channel);
-        if (enabledChannel < 0 || enabledChannel == _textureChannels.Length - 1 ||
-            _textureChannels.All(channel => channel))
+        try
         {
-            Array.Clear(_textureChannels, 0, _textureChannels.Length);
-            _textureChannels[0] = true;
+            await Navigation.PushModalAsync(CreateModalNavigationPage(
+                new TextureChannelsPage(_textureChannels, ApplyTextureChannels)));
         }
-        else
+        catch (Exception exception)
         {
-            Array.Clear(_textureChannels, 0, _textureChannels.Length);
-            _textureChannels[enabledChannel + 1] = true;
+            StatusLabel.Text = $"Could not open texture channels: {exception.Message}";
+            if (_showErrorMessages)
+                await DisplayAlert("Texture channels", exception.Message, "OK");
         }
+    }
 
+    private async void ApplyTextureChannels(IReadOnlyList<bool> channels)
+    {
+        if (channels.Count != _textureChannels.Length)
+            return;
+
+        for (var index = 0; index < _textureChannels.Length; index++)
+            _textureChannels[index] = channels[index];
         TextureChannelsButton.Text = $"Channels: {DescribeEnabledTextureChannels()}";
         if (_selectedAsset?.SourceAsset is AssetStudio.Texture2D)
             await PresentAssetPreviewAsync(_selectedAsset);
@@ -3244,9 +3391,12 @@ public partial class MainPage : ContentPage
         if (string.IsNullOrWhiteSpace(fontName) || UIFont.FromName(fontName, 12f) == null)
             throw new InvalidDataException("iOS registered the font but could not resolve its family name.");
 
+        FontSpecimenTiny.FontFamily = fontName;
         FontSpecimenSmall.FontFamily = fontName;
         FontSpecimenMedium.FontFamily = fontName;
         FontSpecimenLarge.FontFamily = fontName;
+        FontSpecimenXLarge.FontFamily = fontName;
+        FontSpecimenHuge.FontFamily = fontName;
         FontSpecimenCharacters.FontFamily = fontName;
         PreviewDetails.Text += $"\nRendering embedded font: {fontName}";
     }
