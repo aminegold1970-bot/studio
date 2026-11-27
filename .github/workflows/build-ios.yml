@@ -4,6 +4,12 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish the IPA as a direct GitHub Release asset
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -16,6 +22,8 @@ jobs:
   build-ios:
     runs-on: macos-26
     timeout-minutes: 60
+    permissions:
+      contents: write
     env:
       DOTNET_NOLOGO: "1"
       DOTNET_CLI_TELEMETRY_OPTOUT: "1"
@@ -307,3 +315,25 @@ jobs:
           path: artifacts/AssetStudioMobile-unsigned.ipa
           if-no-files-found: error
           retention-days: 30
+
+      # GitHub Actions artifacts are always downloaded as ZIP archives. Publishing
+      # a Release asset is the supported way to expose the .ipa itself as a direct
+      # download. Run this workflow manually to create the release; push/PR builds
+      # still only upload the normal Actions artifact.
+      - name: Publish direct IPA download
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IPA_PATH: artifacts/AssetStudioMobile-unsigned.ipa
+          TAG_NAME: ios-unsigned-${{ github.run_number }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          title="AssetStudio Mobile unsigned IPA #${{ github.run_number }}"
+          notes="Unsigned iOS device IPA from workflow run #${{ github.run_number }}. Install requires signing with your own certificate/profile or sideloading tools."
+          gh release create "$TAG_NAME" "$IPA_PATH" \
+            --title "$title" \
+            --notes "$notes" \
+            --prerelease
+          echo "### Direct IPA download" >> "$GITHUB_STEP_SUMMARY"
+          echo "[AssetStudioMobile-unsigned.ipa](https://github.com/${{ github.repository }}/releases/download/$TAG_NAME/AssetStudioMobile-unsigned.ipa)" >> "$GITHUB_STEP_SUMMARY"

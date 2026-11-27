@@ -63,7 +63,7 @@ dotnet build AssetStudio.Mobile/AssetStudioMobile.csproj -f net10.0-ios
 
 This builds the iOS simulator target; it does not produce an installable iPhone IPA. A physical-device build, IPA signing, and App Store distribution require macOS with Xcode and Apple signing credentials. On Windows, use Visual Studio's Pair to Mac workflow to build and sign for a device.
 
-The [GitHub Actions workflow](.github/workflows/build-ios.yml) builds the `net10.0-ios` app for `ios-arm64` on macOS and uploads an unsigned IPA artifact. It packages the app without signing credentials; the IPA is not installable on an iPhone until it is signed. Device installation requires an Apple Development certificate and a provisioning profile that includes the device (or appropriate distribution signing for TestFlight/App Store), matching the app's bundle identifier `com.assetstudio.mobile`.
+The [GitHub Actions workflow](../.github/workflows/build-ios.yml) builds the `net10.0-ios` app for `ios-arm64` on macOS and uploads an unsigned IPA artifact. Run the workflow manually to also publish the `.ipa` as a direct GitHub Release asset (GitHub Actions artifacts are always downloaded as ZIPs). Push and pull-request builds keep the normal Actions artifact. The IPA is packaged without signing credentials and is not installable on an iPhone until it is signed. Device installation requires an Apple Development certificate and a provisioning profile that includes the device (or appropriate distribution signing for TestFlight/App Store), matching the app's bundle identifier `com.assetstudio.mobile`.
 
 ## Usage
 
