@@ -12,9 +12,11 @@ jobs:
   build-ios:
     runs-on: macos-26
     env:
-      # Workload set 10.0.401 ships .NET for iOS 26.5.10318, which supports the
-      # Xcode 26.6 installed on macos-26. Newer sets (10.0.402+) require Xcode
-      # 27.x and fail with "This version of .NET for iOS ... requires Xcode 27.x".
+      # Keep in sync with sdk.workloadVersion in global.json. That setting pins
+      # the CLI to workload set 10.0.401 (.NET for iOS 26.5.10318, which supports
+      # the Xcode 26.6 on macos-26); newer sets require Xcode 27.x. The CLI
+      # rejects --version when global.json already specifies a workload version,
+      # so the install step relies on global.json instead.
       IOS_WORKLOAD_SET: 10.0.401
 
     steps:
@@ -30,7 +32,7 @@ jobs:
         run: dotnet --version
 
       - name: Install iOS workload
-        run: dotnet workload install maui-ios --version "$IOS_WORKLOAD_SET"
+        run: dotnet workload install maui-ios
 
       - name: Verify workload set
         shell: bash
