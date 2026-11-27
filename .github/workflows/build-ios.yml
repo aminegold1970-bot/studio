@@ -18,6 +18,10 @@ jobs:
       # rejects --version when global.json already specifies a workload version,
       # so the install step relies on global.json instead.
       IOS_WORKLOAD_SET: 10.0.401
+      # Use the real Xcode 26.6 bundle path. The /Applications/Xcode.app symlink
+      # makes .NET's actool task look for a MacOSX SDK inside the symlink path,
+      # which does not exist on the macos-26 runner.
+      IOS_XCODE_PATH: /Applications/Xcode_26.6.app
 
     steps:
       - name: Check out source
@@ -46,19 +50,30 @@ jobs:
           fi
 
       - name: Select Xcode
+        shell: bash
         run: |
-          XCODE_PATH=$(find /Applications -maxdepth 1 -name 'Xcode*.app' | sort | tail -n 1)
-          if [ -z "$XCODE_PATH" ]; then
-            echo "::error::No Xcode installation found"
+          set -euo pipefail
+          if [[ ! -d "$IOS_XCODE_PATH" ]]; then
+            echo "::error::Expected Xcode at $IOS_XCODE_PATH"
+            ls -1 /Applications | grep '^Xcode' || true
             exit 1
           fi
-          sudo xcode-select --switch "$XCODE_PATH"
+          if [[ -L "$IOS_XCODE_PATH" ]]; then
+            echo "::error::$IOS_XCODE_PATH is a symlink; select the real Xcode app bundle"
+            exit 1
+          fi
+          sudo xcode-select --switch "$IOS_XCODE_PATH/Contents/Developer"
+          echo "Selected Xcode path: $(xcode-select -p)"
           xcodebuild -version
 
       - name: Verify Apple toolchain
+        shell: bash
         run: |
+          set -euo pipefail
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
+          echo "actool: $(xcrun --find actool)"
+          echo "macOS SDK actool: $(xcrun --sdk macosx --find actool)"
 
       - name: Restore iOS app
         run: |
