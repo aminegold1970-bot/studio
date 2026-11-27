@@ -41,9 +41,9 @@ internal static class MobileFolderPicker
                     if (presenter == null)
                         throw new InvalidOperationException("Could not find the active Apple view controller.");
 
-                    var picker = new UIKit.UIDocumentPickerViewController(
-                        new[] { "public.folder" },
-                        UIKit.UIDocumentPickerMode.Open);
+                    var folderType = UniformTypeIdentifiers.UTType.CreateFromIdentifier("public.folder")
+                        ?? throw new InvalidOperationException("iOS could not resolve the folder content type.");
+                    var picker = new UIKit.UIDocumentPickerViewController(new[] { folderType }, false);
                     picker.AllowsMultipleSelection = false;
                     var pickerDelegate = new PickerDelegate(completion, library, progress, cancellationToken);
                     _activeDelegate = pickerDelegate;

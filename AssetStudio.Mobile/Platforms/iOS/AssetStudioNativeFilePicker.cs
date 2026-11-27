@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Foundation;
 using Microsoft.Maui.Storage;
 using UIKit;
+using UniformTypeIdentifiers;
 
 namespace AssetStudioMobile;
 
@@ -33,8 +34,11 @@ internal static class AssetStudioNativeFilePicker
                 if (presenter == null)
                     throw new InvalidOperationException("Could not find the active iOS view controller.");
 
-                var picker = new UIDocumentPickerViewController(
-                    new[] { "public.data", "public.item" }, UIDocumentPickerMode.Import);
+                var dataType = UTType.CreateFromIdentifier("public.data")
+                    ?? throw new InvalidOperationException("iOS could not resolve the data content type.");
+                var itemType = UTType.CreateFromIdentifier("public.item")
+                    ?? throw new InvalidOperationException("iOS could not resolve the item content type.");
+                var picker = new UIDocumentPickerViewController(new[] { dataType, itemType }, true);
                 picker.AllowsMultipleSelection = allowMultiple;
 
                 var pickerDelegate = new PickerDelegate(completion, progress, cancellationToken);
