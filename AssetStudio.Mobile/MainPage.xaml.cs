@@ -2,6 +2,7 @@ using Microsoft.Maui.ApplicationModel.DataTransfer;
 using Microsoft.Maui.Storage;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
+using Color = Microsoft.Maui.Graphics.Color;
 using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
