@@ -131,14 +131,23 @@ jobs:
           set -euo pipefail
           rm -rf AssetStudio.Mobile/bin AssetStudio.Mobile/obj artifacts
 
-      - name: Restore iOS app
+      - name: Restore iOS app and referenced projects
         shell: bash
         run: |
           set -euo pipefail
+          # Restore only the app here. Passing -p:TargetFramework to the whole
+          # graph would overwrite the net6.0 assets of the library projects.
           dotnet restore "$APP_PROJECT" \
             --runtime "$RUNTIME_IDENTIFIER" \
             -p:TargetFramework="$TARGET_FRAMEWORK" \
+            --no-dependencies \
             -v:minimal
+          for project in \
+            AssetStudio/AssetStudio.csproj \
+            AssetStudio.PInvoke/AssetStudio.PInvoke.csproj \
+            Texture2DDecoderWrapper/Texture2DDecoderWrapper.csproj; do
+            dotnet restore "$project" -v:minimal
+          done
 
       - name: Publish unsigned device app
         shell: bash
