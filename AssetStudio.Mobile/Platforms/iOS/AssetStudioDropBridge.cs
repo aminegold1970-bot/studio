@@ -72,20 +72,33 @@ internal sealed class AssetStudioDropBridge : UIDropInteractionDelegate
     }
 
     public override void SessionDidEnter(UIDropInteraction interaction, IUIDropSession session)
-        => MainPage.PublishDropTargetChanged(true);
+    {
+        MainPage.PublishDropTargetChanged(true);
+        MainPage.PublishDropActivity($"Drag detected: {session.Items.Count()} item(s). Release to import.");
+    }
 
     public override UIDropProposal SessionDidUpdate(UIDropInteraction interaction, IUIDropSession session)
-        => new UIDropProposal(UIDropOperation.Copy);
+    {
+        MainPage.PublishDropActivity($"Drag detected: {session.Items.Count()} item(s). Release to import.");
+        return new UIDropProposal(UIDropOperation.Copy);
+    }
 
     public override void SessionDidExit(UIDropInteraction interaction, IUIDropSession session)
-        => MainPage.PublishDropTargetChanged(false);
+    {
+        MainPage.PublishDropTargetChanged(false);
+        MainPage.PublishDropActivity("Drag left the app; no files were imported.");
+    }
 
     public override void SessionDidEnd(UIDropInteraction interaction, IUIDropSession session)
-        => MainPage.PublishDropTargetChanged(false);
+    {
+        MainPage.PublishDropTargetChanged(false);
+        MainPage.PublishDropActivity("Drag ended.");
+    }
 
     public override void PerformDrop(UIDropInteraction interaction, IUIDropSession session)
     {
         MainPage.PublishDropTargetChanged(false);
+        MainPage.PublishDropActivity($"Drop detected: {session.Items.Count()} item(s). Preparing import…");
         var providers = session.Items
             .Where(item => item?.ItemProvider != null)
             .Select(item => item.ItemProvider)

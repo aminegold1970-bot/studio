@@ -83,12 +83,12 @@
                                     <Label Grid.Column="2" Text="{Binding Type}" TextColor="{AppThemeBinding Light=#555555, Dark=#B8B8B8}" FontSize="11" LineBreakMode="TailTruncation"/>
                                     <Label Grid.Column="3" Text="{Binding PathId}" TextColor="{AppThemeBinding Light=#555555, Dark=#B8B8B8}" FontSize="11"/>
                                     <Label Grid.Column="4" Text="{Binding Size}" TextColor="{AppThemeBinding Light=#555555, Dark=#B8B8B8}" FontSize="11"/>
-                                    <Button Grid.Column="5" Text="⋯" Clicked="OnAssetContextClicked" CommandParameter="{Binding .}" Padding="0" WidthRequest="24" HeightRequest="24" MinimumWidthRequest="0" MinimumHeightRequest="0" BackgroundColor="Transparent" TextColor="{AppThemeBinding Light=#555555, Dark=#B8B8B8}" FontSize="16"/>
+                                    <Button Grid.Column="5" Text="" Clicked="OnAssetContextClicked" AutomationProperties.Name="Asset actions" SemanticProperties.Hint="Open asset actions" CommandParameter="{Binding .}" Padding="0" WidthRequest="24" HeightRequest="24" MinimumWidthRequest="0" MinimumHeightRequest="0" BackgroundColor="Transparent" TextColor="{AppThemeBinding Light=#555555, Dark=#B8B8B8}" FontSize="16"/>
                                 </Grid>
                                 <Grid Grid.Row="0" ColumnDefinitions="*,34" RowDefinitions="Auto,Auto" RowSpacing="2"
                                       IsVisible="{Binding IsCompactLayout}">
                                     <Label Text="{Binding Name}" TextColor="{AppThemeBinding Light=#202020, Dark=#F2F2F2}" FontSize="11" LineBreakMode="TailTruncation"/>
-                                    <Button Grid.Column="1" Grid.RowSpan="2" Text="⋯" Clicked="OnAssetContextClicked" CommandParameter="{Binding .}" Padding="0" WidthRequest="24" HeightRequest="24" MinimumWidthRequest="0" MinimumHeightRequest="0" BackgroundColor="Transparent" TextColor="{AppThemeBinding Light=#555555, Dark=#B8B8B8}" FontSize="16"/>
+                                    <Button Grid.Column="1" Grid.RowSpan="2" Text="" Clicked="OnAssetContextClicked" AutomationProperties.Name="Asset actions" SemanticProperties.Hint="Open asset actions" CommandParameter="{Binding .}" Padding="0" WidthRequest="24" HeightRequest="24" MinimumWidthRequest="0" MinimumHeightRequest="0" BackgroundColor="Transparent" TextColor="{AppThemeBinding Light=#555555, Dark=#B8B8B8}" FontSize="16"/>
                                     <Label Grid.Row="1" Text="{Binding CompactDetails}" TextColor="{AppThemeBinding Light=#555555, Dark=#B8B8B8}" FontSize="9" LineBreakMode="TailTruncation"/>
                                 </Grid>
                                 <BoxView Grid.Row="1" HeightRequest="1" BackgroundColor="{AppThemeBinding Light=#D6D6D6, Dark=#3A3A3A}"/>
@@ -257,7 +257,7 @@
             <Label x:Name="LoadInfoLabel" Grid.Row="1" Text="" TextColor="{AppThemeBinding Light=#666666, Dark=#A8A8A8}" FontSize="9" IsVisible="False" LineBreakMode="TailTruncation" VerticalTextAlignment="Center"/>
             <Button x:Name="CancelLoadButton" Grid.Row="0" Grid.Column="1" Text="Cancel load" IsVisible="False" Clicked="OnCancelLoadClicked" Padding="8,3" HeightRequest="26" MinimumHeightRequest="0" MinimumWidthRequest="0" FontSize="10" BackgroundColor="{AppThemeBinding Light=#7B3438, Dark=#A34A4E}" TextColor="White"/>
             <ActivityIndicator x:Name="BusyIndicator" Grid.Row="0" Grid.Column="2" IsRunning="False" IsVisible="False" HeightRequest="20"/>
-            <ProgressBar x:Name="LoadProgressBar" Grid.Row="2" Grid.ColumnSpan="3" Progress="0" IsVisible="False" ProgressColor="#2D7D32" BackgroundColor="{AppThemeBinding Light=#D0D0D0, Dark=#3A3A3A}" HeightRequest="3"/>
+            <ProgressBar x:Name="LoadProgressBar" Grid.Row="2" Grid.ColumnSpan="3" Progress="0" IsVisible="False" ProgressColor="{AppThemeBinding Light=#2878C8, Dark=#4FA3F7}" BackgroundColor="{AppThemeBinding Light=#D0D0D0, Dark=#3A3A3A}" HeightRequest="3"/>
         </Grid>
         <Grid x:Name="MenuOverlay" Grid.RowSpan="4" IsVisible="False" ZIndex="200">
             <BoxView BackgroundColor="#01000000">
@@ -281,8 +281,10 @@
                 <VerticalStackLayout Spacing="6">
                     <Label Text="Drop files or folders to load" TextColor="{AppThemeBinding Light=#202020, Dark=#F2F2F2}" FontSize="18"
                            FontAttributes="Bold" HorizontalTextAlignment="Center"/>
-                    <Label Text="Unity assets, bundles, folders, and ZIP files" TextColor="{AppThemeBinding Light=#555555, Dark=#B8B8B8}" FontSize="12"
+                    <Label Text="Unity assets, bundles, folders, ZIP and RAR files" TextColor="{AppThemeBinding Light=#555555, Dark=#B8B8B8}" FontSize="12"
                            HorizontalTextAlignment="Center"/>
+                    <Label x:Name="DropDetectionLabel" Text="Waiting for a drop" TextColor="{AppThemeBinding Light=#2878C8, Dark=#4FA3F7}" FontSize="11"
+                           FontAttributes="Bold" HorizontalTextAlignment="Center"/>
                 </VerticalStackLayout>
             </Border>
         </Grid>

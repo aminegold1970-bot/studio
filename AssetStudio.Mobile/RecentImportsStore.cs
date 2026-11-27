@@ -32,6 +32,7 @@ internal static partial class RecentImportsStore
                 .Where(entry => entry != null && !string.IsNullOrWhiteSpace(entry.Path))
                 .Where(entry => entry.IsFolder ? Directory.Exists(entry.Path) : File.Exists(entry.Path))
                 .Take(MaximumEntries)
+                .Select(entry => entry with { DisplayName = DisplayNameFor(entry.DisplayName) })
                 .ToList();
         }
         catch
@@ -40,23 +41,33 @@ internal static partial class RecentImportsStore
         }
     }
 
-    public static void AddFiles(IEnumerable<FileResult> files)
+    public static void AddFiles(
+        IEnumerable<FileResult> files,
+        IReadOnlyList<string>? originalNames = null)
     {
         var entries = new List<RecentImport>();
+        var index = 0;
         foreach (var file in files)
         {
+            var originalName = originalNames != null && index < originalNames.Count
+                ? originalNames[index]
+                : file?.FileName;
+            index++;
             if (file == null || string.IsNullOrWhiteSpace(file.FullPath))
                 continue;
-            entries.Add(new RecentImport(file.FullPath, DisplayNameFor(file.FullPath), false));
+            entries.Add(new RecentImport(
+                file.FullPath,
+                DisplayNameFor(originalName ?? file.FullPath),
+                false));
         }
         Add(entries);
     }
 
-    public static void AddFolder(string path)
+    public static void AddFolder(string path, string? originalName = null)
     {
         if (string.IsNullOrWhiteSpace(path))
             return;
-        Add(new[] { new RecentImport(path, DisplayNameFor(path), true) });
+        Add(new[] { new RecentImport(path, DisplayNameFor(originalName ?? path), true) });
     }
 
     public static void Remove(RecentImport entry)
@@ -80,10 +91,13 @@ internal static partial class RecentImportsStore
 
     private static string DisplayNameFor(string path)
     {
-        var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(path));
+        var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(path)) ?? string.Empty;
         return CachedNamePattern().Replace(name, string.Empty);
     }
 
-    [GeneratedRegex(@"^\d{14}_[0-9a-fA-F]{32}_")]
+    // Older builds displayed cache names like 20261127123456_<guid>_hero.unity
+    // or <guid>_hero.unity. Strip both layouts so saved recent entries recover
+    // the original file name even before the app re-adds it.
+    [GeneratedRegex(@"^(?:\d{14}_[0-9a-fA-F]{32}_|[0-9a-fA-F]{32}_)")]
     private static partial Regex CachedNamePattern();
 }

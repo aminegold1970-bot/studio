@@ -80,6 +80,7 @@
 		<PackageReference Include="Microsoft.Extensions.Logging.Debug" Version="10.0.0" />
 		<PackageReference Include="NVorbis" Version="0.10.5" />
 		<PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+		<PackageReference Include="SharpCompress" Version="0.50.12" />
 		<PackageReference Include="Mono.Cecil" Version="0.11.3" />
 		<PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
 		<PackageReference Include="Praeclarum.FbxSharp" Version="0.1.12" Condition="'$(TargetFramework)' == 'net10.0-ios'" />

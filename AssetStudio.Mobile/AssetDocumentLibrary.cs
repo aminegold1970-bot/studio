@@ -1,4 +1,5 @@
 using Microsoft.Maui.Storage;
+using SharpCompress.Readers;
 using System.Security.Cryptography;
 
 namespace AssetStudioMobile;
@@ -15,6 +16,11 @@ public sealed class AssetDocumentLibrary
 
     private string ImportedFoldersPath => Path.Combine(
         FileSystem.CacheDirectory, "AssetStudio", "Folders");
+
+    private readonly Dictionary<string, (long Length, string Hash)> _cacheHashes =
+        new(StringComparer.Ordinal);
+    private readonly SemaphoreSlim _cacheIndexLock = new(1, 1);
+    private bool _cacheIndexBuilt;
 
     public AssetDocumentLibrary() => Directory.CreateDirectory(SourceCachePath);
 
@@ -147,26 +153,173 @@ public sealed class AssetDocumentLibrary
                 await input.CopyToAsync(output, 81920, cancellationToken);
 
             var incomingHash = await ComputeSha256Async(staging, cancellationToken);
-            foreach (var existing in Directory.EnumerateFiles(SourceCachePath).Where(File.Exists))
+            var incomingLength = new FileInfo(staging).Length;
+            var cached = (await GetCacheIndexAsync(cancellationToken)).ToArray();
+            foreach (var existing in cached)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (Path.GetFileName(existing).StartsWith(".incoming_", StringComparison.Ordinal)) continue;
-                if (new FileInfo(existing).Length != new FileInfo(staging).Length) continue;
-                if (string.Equals(incomingHash, await ComputeSha256Async(existing, cancellationToken), StringComparison.Ordinal))
+                if (existing.Value.Length != incomingLength) continue;
+                if (string.Equals(incomingHash, existing.Value.Hash, StringComparison.Ordinal))
                 {
                     File.Delete(staging);
-                    return new FileResult(existing);
+                    return new FileResult(existing.Key);
                 }
             }
 
             var destination = Path.Combine(SourceCachePath, $"{DateTime.UtcNow:yyyyMMddHHmmss}_{Guid.NewGuid():N}_{safeName}");
             File.Move(staging, destination);
+            await AddCachedHashAsync(destination, incomingLength, incomingHash, cancellationToken);
             return new FileResult(destination);
         }
         catch
         {
             if (File.Exists(staging)) File.Delete(staging);
             throw;
+        }
+    }
+
+    // Hashing every cached file for every import made large multi-file loads
+    // effectively O(n²). Build the index once, then reuse it for the session.
+    private async Task<IReadOnlyDictionary<string, (long Length, string Hash)>> GetCacheIndexAsync(
+        CancellationToken cancellationToken)
+    {
+        await _cacheIndexLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (!_cacheIndexBuilt)
+            {
+                foreach (var path in Directory.EnumerateFiles(SourceCachePath).ToArray())
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var name = Path.GetFileName(path);
+                    if (name.StartsWith(".incoming_", StringComparison.Ordinal) || !File.Exists(path))
+                        continue;
+                    if (!_cacheHashes.ContainsKey(path))
+                        _cacheHashes[path] = (new FileInfo(path).Length, await ComputeSha256Async(path, cancellationToken));
+                }
+                _cacheIndexBuilt = true;
+            }
+            return _cacheHashes.ToArray().ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+        }
+        finally
+        {
+            _cacheIndexLock.Release();
+        }
+    }
+
+    private async Task AddCachedHashAsync(
+        string path, long length, string hash, CancellationToken cancellationToken)
+    {
+        await _cacheIndexLock.WaitAsync(cancellationToken);
+        try
+        {
+            _cacheHashes[path] = (length, hash);
+        }
+        finally
+        {
+            _cacheIndexLock.Release();
+        }
+    }
+
+    internal static bool IsExtractableArchive(string? fileName)
+    {
+        var extension = Path.GetExtension(fileName ?? string.Empty);
+        return extension.Equals(".zip", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".rar", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".7z", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".tar", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".tgz", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".tbz2", StringComparison.OrdinalIgnoreCase);
+    }
+
+    // Extract archives into the imported-folder cache and let the normal folder
+    // loader parse their contents. This avoids the parser's in-memory ZIP path
+    // for large archives and adds RAR/7z/tar support through SharpCompress.
+    public async Task<string> ImportArchivesAsync(
+        IReadOnlyList<FileResult> sources,
+        IProgress<MainPage.AssetLoadProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        Directory.CreateDirectory(ImportedFoldersPath);
+        var staging = Path.Combine(ImportedFoldersPath, $".incoming_archives_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(staging);
+        try
+        {
+            for (var index = 0; index < sources.Count; index++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var source = sources[index];
+                var originalName = Path.GetFileName(source.FileName);
+                var safeName = SanitizeFileName(originalName);
+
+                if (!IsExtractableArchive(originalName))
+                {
+                    var destination = Path.Combine(staging, $"{index:D3}_{safeName}");
+                    await using var input = await source.OpenReadAsync();
+                    await using var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, useAsync: true);
+                    await input.CopyToAsync(output, 81920, cancellationToken);
+                    continue;
+                }
+
+                progress?.Report(new MainPage.AssetLoadProgress(
+                    2, $"Copying archive {originalName}…"));
+                var cached = await ImportAsync(source, cancellationToken);
+                progress?.Report(new MainPage.AssetLoadProgress(
+                    3, $"Extracting archive {originalName}…"));
+                var destinationRoot = Path.Combine(staging, $"{index:D3}_{SanitizeFileName(Path.GetFileNameWithoutExtension(originalName))}");
+                await Task.Run(
+                    () => ExtractArchive(cached.FullPath, destinationRoot, originalName, progress, cancellationToken),
+                    cancellationToken);
+            }
+
+            progress?.Report(new MainPage.AssetLoadProgress(4, "Archive extracted; loading assets…"));
+            var importedFolder = Path.Combine(
+                ImportedFoldersPath,
+                $"{DateTime.UtcNow:yyyyMMddHHmmss}_{Guid.NewGuid():N}_Archives");
+            Directory.Move(staging, importedFolder);
+            return importedFolder;
+        }
+        catch
+        {
+            if (Directory.Exists(staging))
+                Directory.Delete(staging, recursive: true);
+            throw;
+        }
+    }
+
+    private static void ExtractArchive(
+        string archivePath,
+        string destinationRoot,
+        string displayName,
+        IProgress<MainPage.AssetLoadProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(destinationRoot);
+        var rootPrefix = Path.GetFullPath(destinationRoot) + Path.DirectorySeparatorChar;
+        using var input = File.OpenRead(archivePath);
+        using var reader = ReaderFactory.OpenReader(input);
+        var extracted = 0;
+        while (reader.MoveToNextEntry())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (reader.Entry.IsDirectory)
+                continue;
+
+            var entryName = reader.Entry.Key ?? string.Empty;
+            var relative = entryName
+                .Replace('\\', Path.DirectorySeparatorChar)
+                .Replace('/', Path.DirectorySeparatorChar);
+            var fullPath = Path.GetFullPath(Path.Combine(destinationRoot, relative));
+            if (!fullPath.StartsWith(rootPrefix, StringComparison.Ordinal))
+                throw new InvalidDataException($"The archive {displayName} contains an unsafe path: {entryName}");
+
+            Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+            using var output = File.Create(fullPath);
+            reader.WriteEntryTo(output);
+            extracted++;
+            if (extracted % 16 == 0)
+                progress?.Report(new MainPage.AssetLoadProgress(
+                    3, $"Extracting archive {displayName} · {extracted:N0} files"));
         }
     }
 

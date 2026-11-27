@@ -54,7 +54,8 @@ public partial class MainPage : ContentPage
                 "Disable preview if you have performance or compatibility issues.",
             ["Display asset infromation"] =
                 "Toggle the overlay that shows information about each asset, eg. image size, format, audio bitrate, etc.",
-            ["Night mode"] = "Use the dark color theme. The setting is remembered after the app closes."
+            ["Night mode"] = "Use the dark color theme. The setting is remembered after the app closes.",
+            ["Live2D viewer"] = "Open the static Live2D/Spine atlas viewer. Select a PNG, atlas and skeleton with matching names."
         };
 
     private CancellationTokenSource? _loadCancellation;
@@ -190,6 +191,7 @@ public partial class MainPage : ContentPage
         DroppedFilesReceived += OnDroppedFilesReceived;
         DropFailed += OnDropFailed;
         DropTargetChanged += OnDropTargetChanged;
+        DropActivity += OnDropActivity;
         ExportFolderDropped += OnExportFolderDropped;
 #if IOS
         Loaded += OnDropPageLoaded;
@@ -440,10 +442,12 @@ public partial class MainPage : ContentPage
     public static event Action<IReadOnlyList<string>>? DroppedFilesReceived;
     public static event Action<string>? DropFailed;
     public static event Action<bool>? DropTargetChanged;
+    public static event Action<string>? DropActivity;
     public static event Action<string, string>? ExportFolderDropped;
     public static void PublishDroppedFiles(IReadOnlyList<string> paths) => DroppedFilesReceived?.Invoke(paths);
     public static void PublishDropFailure(string message) => DropFailed?.Invoke(message);
     public static void PublishDropTargetChanged(bool isTargeted) => DropTargetChanged?.Invoke(isTargeted);
+    public static void PublishDropActivity(string message) => DropActivity?.Invoke(message);
     public static void PublishDroppedExportFolder(string bookmark, string displayName) =>
         ExportFolderDropped?.Invoke(bookmark, displayName);
 
@@ -455,32 +459,54 @@ public partial class MainPage : ContentPage
             // multiple dropped paths to LoadFiles.
             if (paths.Count == 1 && Directory.Exists(paths[0]))
             {
+                var originalFolderName = Path.GetFileName(Path.TrimEndingDirectorySeparator(paths[0]));
                 var folderPath = await _documentLibrary.ImportFolderAsync(paths[0]);
 #if IOS
                 AssetStudioDropBridge.CleanupTemporaryCopy(paths[0]);
 #endif
-                await LoadPersistentFolderAsync(folderPath, "Dropped folder");
+                await LoadPersistentFolderAsync(folderPath, "Dropped folder", originalFolderName);
                 return;
             }
 
-            var imported = new List<FileResult>();
+            var sources = new List<FileResult>();
+            var originalNames = new List<string>();
             foreach (var path in paths)
             {
-                try
+                if (!File.Exists(path))
+                    throw new FileNotFoundException("A dropped file was no longer available.", path);
+                sources.Add(new FileResult(path));
+                originalNames.Add(Path.GetFileName(path));
+            }
+            if (sources.Count == 0) return;
+
+            try
+            {
+                var archives = sources
+                    .Where(file => AssetDocumentLibrary.IsExtractableArchive(file.FileName))
+                    .ToList();
+                if (archives.Count > 0)
                 {
-                    if (!File.Exists(path))
-                        throw new FileNotFoundException("A dropped file was no longer available.", path);
-                    imported.Add(await _documentLibrary.ImportPathAsync(path));
+                    SetBusy(true, $"Extracting {archives.Count} dropped archive(s)…");
+                    var archiveFolder = await _documentLibrary.ImportArchivesAsync(sources);
+                    var displayName = archives.Count == 1
+                        ? Path.GetFileName(archives[0].FileName)
+                        : $"{archives.Count} archives";
+                    await LoadPersistentFolderAsync(archiveFolder, "Dropped archives", displayName);
+                    return;
                 }
-                finally
-                {
+
+                var imported = new List<FileResult>(sources.Count);
+                for (var index = 0; index < sources.Count; index++)
+                    imported.Add(await _documentLibrary.ImportPathAsync(sources[index].FullPath));
+                await LoadPersistentFilesAsync(imported, "Dropped files", originalNames);
+            }
+            finally
+            {
 #if IOS
+                foreach (var path in paths)
                     AssetStudioDropBridge.CleanupTemporaryCopy(path);
 #endif
-                }
             }
-            if (imported.Count == 0) return;
-            await LoadPersistentFilesAsync(imported, "Dropped files");
         }
         catch (Exception ex)
         {
@@ -504,9 +530,31 @@ public partial class MainPage : ContentPage
     }
 
     private void OnDropTargetChanged(bool isTargeted) =>
-        MainThread.BeginInvokeOnMainThread(() => DropTargetOverlay.IsVisible = isTargeted);
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            DropTargetOverlay.IsVisible = isTargeted;
+            DropDetectionLabel.Text = isTargeted
+                ? "Drag detected — release to import"
+#if IOS
+                : "No external drag detected. Use Load file or Load folder."
+#else
+                : "Waiting for a file or folder drop."
+#endif
+            ;
+        });
 
-    private async Task LoadPersistentFilesAsync(IReadOnlyList<FileResult> selected, string sourceLabel)
+    private void OnDropActivity(string message) =>
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            StatusLabel.Text = message;
+            if (DropTargetOverlay.IsVisible)
+                DropDetectionLabel.Text = message;
+        });
+
+    private async Task LoadPersistentFilesAsync(
+        IReadOnlyList<FileResult> selected,
+        string sourceLabel,
+        IReadOnlyList<string>? originalNames = null)
     {
         if (_assetLoadActive || _loadCancellation != null)
         {
@@ -530,7 +578,7 @@ public partial class MainPage : ContentPage
         try
         {
             await _assetLoader.LoadFilesAsync(selected, progress, cancellation.Token);
-            RecentImportsStore.AddFiles(selected);
+            RecentImportsStore.AddFiles(selected, originalNames);
             SetBusy(false, BuildDesktopLoadStatus(sourceLabel));
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
@@ -552,7 +600,10 @@ public partial class MainPage : ContentPage
         }
     }
 
-    private async Task LoadPersistentFolderAsync(string folderPath, string sourceLabel)
+    private async Task LoadPersistentFolderAsync(
+        string folderPath,
+        string sourceLabel,
+        string? originalName = null)
     {
         if (_assetLoadActive || _loadCancellation != null)
         {
@@ -577,7 +628,7 @@ public partial class MainPage : ContentPage
         try
         {
             await _assetLoader.LoadFolderAsync(folderPath, progress, cancellation.Token);
-            RecentImportsStore.AddFolder(folderPath);
+            RecentImportsStore.AddFolder(folderPath, originalName);
             SetBusy(false, BuildDesktopLoadStatus(sourceLabel));
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
@@ -859,16 +910,21 @@ public partial class MainPage : ContentPage
         return count == 0 ? "None" : string.Join(string.Empty, enabled, 0, count);
     }
 
-    private (string Path, bool Temporary) ApplyTextureChannelMask(string imagePath)
+    private Task<(string Path, bool Temporary)> ApplyTextureChannelMaskAsync(string imagePath)
     {
-        if (_textureChannels.All(channel => channel) || string.IsNullOrWhiteSpace(imagePath) || !File.Exists(imagePath))
-            return (imagePath, false);
+        var channels = _textureChannels.ToArray();
+        if (channels.All(channel => channel) || string.IsNullOrWhiteSpace(imagePath) || !File.Exists(imagePath))
+            return Task.FromResult<(string, bool)>((imagePath, false));
+        return Task.Run(() => ApplyTextureChannelMask(imagePath, channels));
+    }
 
+    private static (string Path, bool Temporary) ApplyTextureChannelMask(string imagePath, bool[] channels)
+    {
         try
         {
             using var image = SixLabors.ImageSharp.Image.Load<Rgba32>(imagePath);
-            var validChannel = _textureChannels.Count(channel => channel);
-            var disabledColor = validChannel == 1 && _textureChannels[3] ? byte.MaxValue : byte.MinValue;
+            var validChannel = channels.Count(channel => channel);
+            var disabledColor = validChannel == 1 && channels[3] ? byte.MaxValue : byte.MinValue;
             image.ProcessPixelRows(accessor =>
             {
                 for (var y = 0; y < accessor.Height; y++)
@@ -877,10 +933,10 @@ public partial class MainPage : ContentPage
                     for (var x = 0; x < row.Length; x++)
                     {
                         ref var pixel = ref row[x];
-                        if (!_textureChannels[0]) pixel.B = disabledColor;
-                        if (!_textureChannels[1]) pixel.G = disabledColor;
-                        if (!_textureChannels[2]) pixel.R = disabledColor;
-                        if (!_textureChannels[3]) pixel.A = byte.MaxValue;
+                        if (!channels[0]) pixel.B = disabledColor;
+                        if (!channels[1]) pixel.G = disabledColor;
+                        if (!channels[2]) pixel.R = disabledColor;
+                        if (!channels[3]) pixel.A = byte.MaxValue;
                     }
                 }
             });
@@ -1384,13 +1440,18 @@ public partial class MainPage : ContentPage
         }
 
         _menuAnchor = null;
+        // The invisible suffix keeps duplicate display names selectable without
+        // showing numbers or changing the file name the user expects.
         var labels = recent
-            .Select(entry => entry.IsFolder ? $"{entry.DisplayName} (folder)" : entry.DisplayName)
+            .Select((entry, index) =>
+                $"{entry.DisplayName}{(entry.IsFolder ? " (folder)" : string.Empty)}\u200B{index}")
             .ToArray();
         var choice = await Choose("Recent files", labels);
         if (choice == null) return;
-        var index = Array.IndexOf(labels, choice);
-        if (index < 0 || index >= recent.Count) return;
+        var suffix = choice.LastIndexOf('\u200B');
+        if (suffix < 0 || !int.TryParse(choice[(suffix + 1)..], out var index)
+            || index < 0 || index >= recent.Count)
+            return;
         var entry = recent[index];
 
         if (entry.IsFolder)
@@ -1401,7 +1462,7 @@ public partial class MainPage : ContentPage
                 StatusLabel.Text = "The recent folder is no longer available.";
                 return;
             }
-            await LoadPersistentFolderAsync(entry.Path, "Recent folder");
+            await LoadPersistentFolderAsync(entry.Path, "Recent folder", entry.DisplayName);
             return;
         }
 
@@ -1411,7 +1472,10 @@ public partial class MainPage : ContentPage
             StatusLabel.Text = "The recent file is no longer available.";
             return;
         }
-        await LoadPersistentFilesAsync(new[] { new FileResult(entry.Path) }, "Recent file");
+        await LoadPersistentFilesAsync(
+            new[] { new FileResult(entry.Path) },
+            "Recent file",
+            new[] { entry.DisplayName });
     }
 
     private async Task<List<FileResult>> PickFilesForExtractionAsync(
@@ -1592,32 +1656,35 @@ public partial class MainPage : ContentPage
 
         _isPickingAssetFiles = true;
         CancellationTokenSource? pickerCancellation = null;
+        IProgress<AssetLoadProgress>? pickerProgress = null;
+        var pickerToken = CancellationToken.None;
         try
         {
 #if IOS
             var pickerCts = new CancellationTokenSource();
             pickerCancellation = pickerCts;
+            pickerToken = pickerCts.Token;
             _loadCancellation = pickerCts;
-            await WaitForActionSheetDismissalAsync(pickerCts.Token);
+            await WaitForActionSheetDismissalAsync(pickerToken);
 #endif
-            SetBusy(true, "Choose Unity files…");
+            SetBusy(true, "Choose Unity, ZIP or RAR files…");
             List<FileResult> selected;
 #if IOS
             // Use Apple's document picker directly. This avoids the MAUI FilePicker
             // callback getting stuck on iOS after a document is tapped.
-            var pickerProgress = new Progress<AssetLoadProgress>(update =>
+            pickerProgress = new Progress<AssetLoadProgress>(update =>
             {
                 if (ReferenceEquals(_loadCancellation, pickerCancellation))
                     SetLoadingProgress(Math.Clamp(update.Percent, 0, 100), update.Message);
             });
             selected = await AssetStudioNativeFilePicker.PickAsync(
-                allowMultiple: true, pickerProgress, pickerCts.Token);
-            pickerCts.Token.ThrowIfCancellationRequested();
+                allowMultiple: true, pickerProgress, pickerToken);
+            pickerToken.ThrowIfCancellationRequested();
             if (ReferenceEquals(_loadCancellation, pickerCancellation))
                 _loadCancellation = null;
 #else
             var files = await FilePicker.Default.PickMultipleAsync(
-                new PickOptions { PickerTitle = "Select Unity asset files" });
+                new PickOptions { PickerTitle = "Select Unity, ZIP or RAR files" });
             selected = files?.ToList() ?? new List<FileResult>();
 #endif
 
@@ -1627,9 +1694,33 @@ public partial class MainPage : ContentPage
                 return;
             }
 
+            var archives = selected
+                .Where(file => AssetDocumentLibrary.IsExtractableArchive(file.FileName))
+                .ToList();
+            if (archives.Count > 0)
+            {
+                // Extract to disk rather than holding every archive entry in
+                // memory. The imported folder cache keeps the files available
+                // for Recent files and for the normal folder parser.
+                SetBusy(true, $"Extracting {archives.Count} archive(s)…");
+                var archiveFolder = await _documentLibrary.ImportArchivesAsync(
+                    selected, pickerProgress, pickerToken);
+                pickerToken.ThrowIfCancellationRequested();
+                if (ReferenceEquals(_loadCancellation, pickerCancellation))
+                    _loadCancellation = null;
+                var displayName = archives.Count == 1
+                    ? Path.GetFileName(archives[0].FileName)
+                    : $"{archives.Count} archives";
+                await LoadPersistentFolderAsync(archiveFolder, "Loaded archives", displayName);
+                return;
+            }
+
             // Use the selected document paths directly; do not copy them into an app library.
             // The host loader must consume the picker-provided FileResult paths while access is valid.
-            await LoadPersistentFilesAsync(selected, "Loaded files");
+            await LoadPersistentFilesAsync(
+                selected,
+                "Loaded files",
+                selected.Select(file => file.FileName).ToList());
         }
         catch (OperationCanceledException)
         {
@@ -1845,6 +1936,7 @@ public partial class MainPage : ContentPage
             "Enable preview",
             "Display asset infromation",
             "Night mode",
+            "Live2D viewer",
             "Specify Unity version",
             "Export options");
         if (choice == null) return;
@@ -1886,6 +1978,9 @@ public partial class MainPage : ContentPage
                 RefreshBrowserTab();
                 RefreshPreviewSurfaceVisibility();
                 break;
+            case "Live2D viewer":
+                await OpenLive2DViewerAsync();
+                break;
             case "Specify Unity version":
                 await SpecifyUnityVersionAsync();
                 break;
@@ -1904,6 +1999,20 @@ public partial class MainPage : ContentPage
             default:
                 StatusLabel.Text = $"Unsupported options action: {choice}";
                 break;
+        }
+    }
+
+    private async Task OpenLive2DViewerAsync()
+    {
+        try
+        {
+            await Navigation.PushModalAsync(CreateModalNavigationPage(new Live2DViewerPage()));
+            StatusLabel.Text = "Live2D viewer opened. Select matching PNG, atlas and skeleton files.";
+        }
+        catch (Exception exception)
+        {
+            StatusLabel.Text = $"Could not open Live2D viewer: {exception.Message}";
+            await ShowErrorAsync("Live2D viewer", exception.Message);
         }
     }
 
@@ -3155,54 +3264,102 @@ public partial class MainPage : ContentPage
             ClearSelectedAsset();
     }
 
+    private CancellationTokenSource? _assetFilterCancellation;
+
     private void ApplyAssetFilter()
     {
-        var query = AssetSearch?.Text?.Trim() ?? "";
         // The desktop menu title never changes when types are checked.
         FilterTypeMenuButton.Text = "Filter Type";
-        // Mirror the original WinForms FilterAssetList search scope: Name,
-        // Container and PathID. Type filtering is a separate filter-menu state;
-        // searching Size, Type or SourceFile here changes desktop semantics.
-        IEnumerable<AssetRow> filtered = _allAssets.Where(asset =>
-            (_showAllAssets || asset.IsExportable) &&
-            (_selectedTypes == null || _selectedTypes.Contains(asset.Type)) &&
-            (query.Length == 0 ||
-             Contains(asset.Name, query) || Contains(asset.Container, query) ||
-             Contains(asset.PathId, query)));
-        filtered = SortAssets(filtered);
-        _visibleAssets.Clear();
-        foreach (var asset in filtered) _visibleAssets.Add(asset);
-        _selectedAssets.RemoveAll(asset => !_visibleAssets.Contains(asset));
-        if (_selectedAsset != null && !_visibleAssets.Contains(_selectedAsset))
+        _ = ApplyAssetFilterAsync();
+    }
+
+    // Filtering and sorting thousands of rows on the UI thread made typing and
+    // loading stutter. Snapshot the inputs, sort off-thread, then publish one
+    // collection change on the UI thread.
+    private async Task ApplyAssetFilterAsync()
+    {
+        _assetFilterCancellation?.Cancel();
+        var cancellation = new CancellationTokenSource();
+        _assetFilterCancellation = cancellation;
+
+        var query = AssetSearch?.Text?.Trim() ?? "";
+        var showAll = _showAllAssets;
+        var selectedTypes = _selectedTypes == null ? null : new HashSet<string>(_selectedTypes, StringComparer.Ordinal);
+        var sortColumn = _sortColumn;
+        var reverseSort = _reverseSort;
+        var all = _allAssets.ToList();
+
+        try
         {
-            AssetCollection.SelectedItems.Clear();
-            ClearSelectedAsset();
+            var visible = await Task.Run(() =>
+            {
+                // Mirror the original WinForms FilterAssetList search scope: Name,
+                // Container and PathID. Type filtering is a separate filter-menu state.
+                IEnumerable<AssetRow> filtered = all.Where(asset =>
+                    (showAll || asset.IsExportable) &&
+                    (selectedTypes == null || selectedTypes.Contains(asset.Type)) &&
+                    (query.Length == 0 ||
+                     Contains(asset.Name, query) || Contains(asset.Container, query) ||
+                     Contains(asset.PathId, query)));
+                return SortAssets(filtered, sortColumn, reverseSort).ToList();
+            }, cancellation.Token);
+
+            if (cancellation.IsCancellationRequested) return;
+            void Publish()
+            {
+                if (cancellation.IsCancellationRequested) return;
+                _visibleAssets.Clear();
+                foreach (var asset in visible) _visibleAssets.Add(asset);
+                var visibleSet = new HashSet<AssetRow>(visible);
+                _selectedAssets.RemoveAll(asset => !visibleSet.Contains(asset));
+                if (_selectedAsset != null && !visibleSet.Contains(_selectedAsset))
+                {
+                    AssetCollection.SelectedItems.Clear();
+                    ClearSelectedAsset();
+                }
+                AssetEmptyLabel.Text = all.Count == 0
+                    ? "No assets loaded. Use File → Load file or Load folder."
+                    : "No assets match the current search and filters.";
+                if (StatusLabel != null && _browserTab == "Asset List")
+                    StatusLabel.Text = $"{_visibleAssets.Count} / {all.Count} assets";
+            }
+            if (MainThread.IsMainThread) Publish();
+            else MainThread.BeginInvokeOnMainThread(Publish);
         }
-        AssetEmptyLabel.Text = _allAssets.Count == 0
-            ? "No assets loaded. Use File → Load file or Load folder."
-            : "No assets match the current search and filters.";
-        if (StatusLabel != null && _browserTab == "Asset List")
-            StatusLabel.Text = $"{_visibleAssets.Count} / {_allAssets.Count} assets";
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            // A newer filter request replaced this one.
+        }
+        finally
+        {
+            if (ReferenceEquals(_assetFilterCancellation, cancellation))
+                _assetFilterCancellation = null;
+        }
     }
 
 
-    private IEnumerable<AssetRow> SortAssets(IEnumerable<AssetRow> source)
+    private IEnumerable<AssetRow> SortAssets(
+        IEnumerable<AssetRow> source,
+        int? column = null,
+        bool? reverse = null)
     {
-        return _sortColumn switch
+        var sortColumn = column ?? _sortColumn;
+        var reverseSort = reverse ?? _reverseSort;
+        return sortColumn switch
         {
-            1 => _reverseSort
+            1 => reverseSort
                 ? source.OrderByDescending(x => x.Container, StringComparer.OrdinalIgnoreCase)
                 : source.OrderBy(x => x.Container, StringComparer.OrdinalIgnoreCase),
-            2 => _reverseSort
+            2 => reverseSort
                 ? source.OrderByDescending(x => x.Type, StringComparer.OrdinalIgnoreCase)
                 : source.OrderBy(x => x.Type, StringComparer.OrdinalIgnoreCase),
-            3 => _reverseSort
+            3 => reverseSort
                 ? source.OrderByDescending(x => long.TryParse(x.PathId, out var id) ? id : long.MinValue)
                 : source.OrderBy(x => long.TryParse(x.PathId, out var id) ? id : long.MinValue),
-            4 => _reverseSort
+            4 => reverseSort
                 ? source.OrderByDescending(x => ParseSize(x.Size))
                 : source.OrderBy(x => ParseSize(x.Size)),
-            _ => _reverseSort
+            _ => reverseSort
                 ? source.OrderByDescending(x => x.Name, StringComparer.OrdinalIgnoreCase)
                 : source.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
         };
@@ -3456,7 +3613,7 @@ public partial class MainPage : ContentPage
         StatusLabel.Text = $"Scene object: {node.DisplayName}";
     }
 
-    private void OnAssetSelectionChanged(object sender, SelectionChangedEventArgs e)
+    private async void OnAssetSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
 #if IOS || MACCATALYST || ANDROID || WINDOWS
         StopPreviewAudio();
@@ -3476,20 +3633,26 @@ public partial class MainPage : ContentPage
         PreviewTitle.Text = row.Name;
         PreviewKind.Text = row.Type;
         PreviewDetails.Text = BuildAssetSummary(row);
-        try
-        {
-            DumpText.Text = row.SourceAsset is AssetStudio.Object source
-                ? source.Dump() ?? "No serialized type tree is available for this asset."
-                : "No parsed asset data is available for this row.";
-        }
-        catch (Exception ex)
-        {
-            DumpText.Text = $"Could not create serialized dump: {ex.Message}";
-        }
+        DumpText.Text = "Building serialized dump…";
         _showingDump = false;
         RefreshPreviewSurfaceVisibility();
         StatusLabel.Text = $"{_selectedAssets.Count} selected · Preview: {row.Name}";
         _ = PresentAssetPreviewAsync(row);
+
+        var selectedRow = row;
+        try
+        {
+            var dump = await Task.Run(() => selectedRow.SourceAsset is AssetStudio.Object source
+                ? source.Dump() ?? "No serialized type tree is available for this asset."
+                : "No parsed asset data is available for this row.");
+            if (ReferenceEquals(_selectedAsset, selectedRow))
+                DumpText.Text = dump;
+        }
+        catch (Exception ex)
+        {
+            if (ReferenceEquals(_selectedAsset, selectedRow))
+                DumpText.Text = $"Could not create serialized dump: {ex.Message}";
+        }
     }
 
     private async Task PresentAssetPreviewAsync(AssetRow row)
@@ -3502,8 +3665,10 @@ public partial class MainPage : ContentPage
             switch (row.SourceAsset)
             {
                 case AssetStudio.TextAsset text:
-                    ShowTextPreview(row.Name, "TextAsset",
-                        Encoding.UTF8.GetString(text.m_Script).Replace("\n", "\r\n").Replace("\0", ""));
+                    var script = text.m_Script;
+                    var decoded = await Task.Run(() => Encoding.UTF8.GetString(script).Replace("\n", "\r\n").Replace("\0", ""));
+                    if (!IsActivePreview(row)) return;
+                    ShowTextPreview(row.Name, "TextAsset", decoded);
                     break;
                 case AssetStudio.Texture2D texture:
                     PreviewDetails.Text = "Decoding texture…";
@@ -3523,7 +3688,7 @@ public partial class MainPage : ContentPage
                         StatusLabel.Text = "Unsupported image for preview";
                         break;
                     }
-                    var (previewPath, temporaryPreview) = ApplyTextureChannelMask(exportedPath);
+                    var (previewPath, temporaryPreview) = await ApplyTextureChannelMaskAsync(exportedPath);
                     if (!IsActivePreview(row))
                     {
                         if (temporaryPreview) TryDeletePreviewFile(previewPath);
@@ -3561,8 +3726,10 @@ public partial class MainPage : ContentPage
                     if (!IsActivePreview(row)) return;
                     if (conversion.Data != null)
                     {
-                        var json = Newtonsoft.Json.JsonConvert.SerializeObject(
-                            conversion.Data, Newtonsoft.Json.Formatting.Indented);
+                        var data = conversion.Data;
+                        var json = await Task.Run(() => Newtonsoft.Json.JsonConvert.SerializeObject(
+                            data, Newtonsoft.Json.Formatting.Indented));
+                        if (!IsActivePreview(row)) return;
                         ShowTextPreview(
                             row.Name,
                             conversion.AssemblyAssisted ? "MonoBehaviour · assembly-assisted" : "MonoBehaviour",
