@@ -7,6 +7,9 @@ Fixes:
 - run #173: referenced net6.0 project restore assets were overwritten
 - run #175: MAUI Color vs ImageSharp Color ambiguity in MainPage.xaml.cs
 - run #176: invalid XSAppIconAssets requirement in the unsigned-IPA validator
+- runtime: link Kyaru's iOS Texture2DDecoderNative.framework and resolve it from
+  the embedded Frameworks path so ASTC/ETC/PVRTC/BC textures decode on device
+  instead of reporting a missing native decoder
 - desktop parity: export options page/settings, texture channels, mesh and scene
   preview, font specimens, class sorting/version grouping/status metadata, Model
   menu animation actions, archive/model export extensions, static iOS FBX options,
@@ -15,7 +18,7 @@ Fixes:
   share-after-export toggle, desktop options hints, audio labels/timing, hierarchy
   checkbox behavior, context-menu order, class columns, and export artifact names
 diff --git a/.github/workflows/build-ios.yml b/.github/workflows/build-ios.yml
-index e202b64..baddecc 100644
+index e202b64..6d05958 100644
 --- a/.github/workflows/build-ios.yml
 +++ b/.github/workflows/build-ios.yml
 @@ -131,14 +131,23 @@ jobs:
@@ -52,6 +55,39 @@ index e202b64..baddecc 100644
              value="$(plutil -extract "$key" raw -o - "$info" || true)"
              if [[ -z "$value" ]]; then
                echo "::error::Missing Info.plist key: $key"
+@@ -245,6 +254,10 @@ jobs:
+             echo "::error::Invalid IPA structure"
+             exit 1
+           fi
++          if ! grep -q 'Texture2DDecoderNative.framework/Texture2DDecoderNative$' "$stage/entries.txt"; then
++            echo "::error::Texture2DDecoderNative.framework is missing from the IPA"
++            exit 1
++          fi
+           shasum -a 256 "$ipa_path"
+           ls -lh "$ipa_path"
+           echo "Created: $ipa_path"
+diff --git a/AssetStudio.Mobile/AssetStudioMobile.csproj b/AssetStudio.Mobile/AssetStudioMobile.csproj
+index 6790b92..31ebf81 100644
+--- a/AssetStudio.Mobile/AssetStudioMobile.csproj
++++ b/AssetStudio.Mobile/AssetStudioMobile.csproj
+@@ -88,6 +88,17 @@
+ 		<ProjectReference Include="..\Texture2DDecoderWrapper\Texture2DDecoderWrapper.csproj" />
+ 	</ItemGroup>
+ 
++	<!-- Kyaru's iOS package stores the decoder as a framework outside the
++	     runtimes/<rid>/native convention, so the SDK does not link it
++	     automatically. Without this NativeReference, ASTC/ETC/PVRTC/BC
++	     decoding fails on device with DllNotFoundException. -->
++	<ItemGroup Condition="'$(TargetFramework)' == 'net10.0-ios'">
++		<NativeReference Include="$(NuGetPackageRoot)kyaru.texture2ddecoder.ios/0.2.0/runtimes/ios/Texture2DDecoderNative.framework">
++			<Kind>Framework</Kind>
++			<ForceLoad>true</ForceLoad>
++		</NativeReference>
++	</ItemGroup>
++
+ 	<ItemGroup>
+ 		<Compile Include="..\AssetStudioUtility\Texture2DConverter.cs" Link="Texture2DConverter.cs" />
+ 		<Compile Include="..\AssetStudioUtility\ShaderConverter.cs" Link="ShaderConverter.cs" />
 diff --git a/AssetStudio.Mobile/AssetStudioMobileLoader.cs b/AssetStudio.Mobile/AssetStudioMobileLoader.cs
 index bb00eb2..68f7a88 100644
 --- a/AssetStudio.Mobile/AssetStudioMobileLoader.cs
@@ -2681,3 +2717,80 @@ index 0000000..9262ca4
 +        await Navigation.PopModalAsync();
 +    }
 +}
+diff --git a/Texture2DDecoderWrapper/TextureDecoder.cs b/Texture2DDecoderWrapper/TextureDecoder.cs
+index 81ba78f..84250f5 100644
+--- a/Texture2DDecoderWrapper/TextureDecoder.cs
++++ b/Texture2DDecoderWrapper/TextureDecoder.cs
+@@ -1,4 +1,4 @@
+-﻿using System;
++using System;
+ using System.IO;
+ using System.Runtime.InteropServices;
+ using AssetStudio.PInvoke;
+@@ -16,6 +16,9 @@ namespace Texture2DDecoder
+             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                 NativeLibrary.SetDllImportResolver(
+                     typeof(TextureDecoder).Assembly, ResolveWindowsNativeLibrary);
++            else if (OperatingSystem.IsIOS())
++                NativeLibrary.SetDllImportResolver(
++                    typeof(TextureDecoder).Assembly, ResolveIOSNativeLibrary);
+ #endif
+         }
+ 
+@@ -49,6 +52,56 @@ namespace Texture2DDecoder
+                 ? NativeLibrary.Load(nativeLibraryPath)
+                 : IntPtr.Zero;
+         }
++
++        // .NET for iOS embeds dynamic frameworks under Frameworks, but it does not
++        // reliably resolve a bare DllImport name to that bundle at runtime. The
++        // framework is linked through NativeReference in the app project; load the
++        // embedded copy explicitly so ASTC/ETC/PVRTC/BC decoders are available.
++        private static IntPtr ResolveIOSNativeLibrary(
++            string libraryName,
++            System.Reflection.Assembly assembly,
++            DllImportSearchPath? searchPath)
++        {
++            if (!string.Equals(libraryName, T2DDll.DllName, StringComparison.Ordinal)
++                || !OperatingSystem.IsIOS())
++                return IntPtr.Zero;
++
++            var baseDirectory = AppContext.BaseDirectory;
++            if (string.IsNullOrEmpty(baseDirectory))
++                return IntPtr.Zero;
++
++            var binaryName = T2DDll.DllName;
++            var frameworkRelativePath =
++                Path.Combine($"{binaryName}.framework", binaryName);
++            var candidates = new[]
++            {
++                Path.Combine(baseDirectory, "Frameworks", frameworkRelativePath),
++                Path.Combine(baseDirectory, frameworkRelativePath),
++                Path.Combine(baseDirectory, binaryName),
++                Path.Combine(baseDirectory, $"{binaryName}.dylib"),
++                Path.Combine(baseDirectory, $"lib{binaryName}.dylib"),
++                $"@rpath/{binaryName}.framework/{binaryName}",
++                $"@executable_path/Frameworks/{binaryName}.framework/{binaryName}"
++            };
++
++            foreach (var candidate in candidates)
++            {
++                try
++                {
++                    var handle = NativeLibrary.Load(candidate, assembly, searchPath);
++                    if (handle != IntPtr.Zero)
++                        return handle;
++                }
++                catch (DllNotFoundException)
++                {
++                }
++                catch (BadImageFormatException)
++                {
++                }
++            }
++
++            return IntPtr.Zero;
++        }
+ #endif
+ 
+         public static bool DecodeDXT1(byte[] data, int width, int height, byte[] image)

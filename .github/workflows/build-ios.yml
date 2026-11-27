@@ -254,6 +254,10 @@ jobs:
             echo "::error::Invalid IPA structure"
             exit 1
           fi
+          if ! grep -q 'Texture2DDecoderNative.framework/Texture2DDecoderNative$' "$stage/entries.txt"; then
+            echo "::error::Texture2DDecoderNative.framework is missing from the IPA"
+            exit 1
+          fi
           shasum -a 256 "$ipa_path"
           ls -lh "$ipa_path"
           echo "Created: $ipa_path"

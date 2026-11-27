@@ -88,6 +88,17 @@
 		<ProjectReference Include="..\Texture2DDecoderWrapper\Texture2DDecoderWrapper.csproj" />
 	</ItemGroup>
 
+	<!-- Kyaru's iOS package stores the decoder as a framework outside the
+	     runtimes/<rid>/native convention, so the SDK does not link it
+	     automatically. Without this NativeReference, ASTC/ETC/PVRTC/BC
+	     decoding fails on device with DllNotFoundException. -->
+	<ItemGroup Condition="'$(TargetFramework)' == 'net10.0-ios'">
+		<NativeReference Include="$(NuGetPackageRoot)kyaru.texture2ddecoder.ios/0.2.0/runtimes/ios/Texture2DDecoderNative.framework">
+			<Kind>Framework</Kind>
+			<ForceLoad>true</ForceLoad>
+		</NativeReference>
+	</ItemGroup>
+
 	<ItemGroup>
 		<Compile Include="..\AssetStudioUtility\Texture2DConverter.cs" Link="Texture2DConverter.cs" />
 		<Compile Include="..\AssetStudioUtility\ShaderConverter.cs" Link="ShaderConverter.cs" />

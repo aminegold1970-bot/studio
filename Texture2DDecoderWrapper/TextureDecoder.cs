@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using AssetStudio.PInvoke;
@@ -16,6 +16,9 @@ namespace Texture2DDecoder
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
                 NativeLibrary.SetDllImportResolver(
                     typeof(TextureDecoder).Assembly, ResolveWindowsNativeLibrary);
+            else if (OperatingSystem.IsIOS())
+                NativeLibrary.SetDllImportResolver(
+                    typeof(TextureDecoder).Assembly, ResolveIOSNativeLibrary);
 #endif
         }
 
@@ -48,6 +51,56 @@ namespace Texture2DDecoder
             return File.Exists(nativeLibraryPath)
                 ? NativeLibrary.Load(nativeLibraryPath)
                 : IntPtr.Zero;
+        }
+
+        // .NET for iOS embeds dynamic frameworks under Frameworks, but it does not
+        // reliably resolve a bare DllImport name to that bundle at runtime. The
+        // framework is linked through NativeReference in the app project; load the
+        // embedded copy explicitly so ASTC/ETC/PVRTC/BC decoders are available.
+        private static IntPtr ResolveIOSNativeLibrary(
+            string libraryName,
+            System.Reflection.Assembly assembly,
+            DllImportSearchPath? searchPath)
+        {
+            if (!string.Equals(libraryName, T2DDll.DllName, StringComparison.Ordinal)
+                || !OperatingSystem.IsIOS())
+                return IntPtr.Zero;
+
+            var baseDirectory = AppContext.BaseDirectory;
+            if (string.IsNullOrEmpty(baseDirectory))
+                return IntPtr.Zero;
+
+            var binaryName = T2DDll.DllName;
+            var frameworkRelativePath =
+                Path.Combine($"{binaryName}.framework", binaryName);
+            var candidates = new[]
+            {
+                Path.Combine(baseDirectory, "Frameworks", frameworkRelativePath),
+                Path.Combine(baseDirectory, frameworkRelativePath),
+                Path.Combine(baseDirectory, binaryName),
+                Path.Combine(baseDirectory, $"{binaryName}.dylib"),
+                Path.Combine(baseDirectory, $"lib{binaryName}.dylib"),
+                $"@rpath/{binaryName}.framework/{binaryName}",
+                $"@executable_path/Frameworks/{binaryName}.framework/{binaryName}"
+            };
+
+            foreach (var candidate in candidates)
+            {
+                try
+                {
+                    var handle = NativeLibrary.Load(candidate, assembly, searchPath);
+                    if (handle != IntPtr.Zero)
+                        return handle;
+                }
+                catch (DllNotFoundException)
+                {
+                }
+                catch (BadImageFormatException)
+                {
+                }
+            }
+
+            return IntPtr.Zero;
         }
 #endif
 
