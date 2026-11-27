@@ -140,13 +140,14 @@ jobs:
           dotnet restore "$APP_PROJECT" \
             --runtime "$RUNTIME_IDENTIFIER" \
             -p:TargetFramework="$TARGET_FRAMEWORK" \
+            -p:NuGetAudit=false \
             --no-dependencies \
             -v:minimal
           for project in \
             AssetStudio/AssetStudio.csproj \
             AssetStudio.PInvoke/AssetStudio.PInvoke.csproj \
             Texture2DDecoderWrapper/Texture2DDecoderWrapper.csproj; do
-            dotnet restore "$project" -v:minimal
+            dotnet restore "$project" -p:NuGetAudit=false -v:minimal
           done
 
       - name: Publish unsigned device app
@@ -161,6 +162,10 @@ jobs:
             -p:EnableCodeSigning=false \
             -p:ArchiveOnBuild=false \
             -p:BuildIpa=false \
+            -p:MtouchUseLlvm=false \
+            -p:DebugType=none \
+            -p:DebugSymbols=false \
+            -p:NuGetAudit=false \
             -v:normal
 
       - name: Locate unsigned .app
@@ -210,6 +215,39 @@ jobs:
             echo "::error::Signing material remains in the IPA payload"
             exit 1
           fi
+
+          # MAUI's template assets are unused by this app. The project no
+          # longer copies them, but remove leftovers from the staged payload
+          # so the shipped IPA stays clean even if a later template update
+          # reintroduces them.
+          payload="$stage/Payload/$app_name"
+          shopt -s nullglob
+          for asset in "$payload"/dotnet_bot*.png "$payload"/AboutAssets.txt; do
+            echo "Removing unused asset: $(basename "$asset")"
+            rm -f "$asset"
+          done
+          for dir in "$payload"/*/; do
+            name="$(basename "$dir")"
+            case "$name" in
+              ar|ca|cs|da|de|el|es|fi|fr|he|hi|hr|hu|id|it|ja|ko|ms|nb|nl|pl|pt|pt-BR|ro|ru|sk|sv|th|tr|uk|vi|zh-Hans|zh-Hant|zh-HK)
+                echo "Removing localized satellite resources: $name"
+                rm -rf "$dir"
+                ;;
+            esac
+          done
+          shopt -u nullglob
+
+          if compgen -G "$payload/dotnet_bot*.png" > /dev/null || [[ -e "$payload/AboutAssets.txt" ]]; then
+            echo "::error::Unused template assets remain in the IPA payload"
+            exit 1
+          fi
+
+          # Managed assemblies must stay in the bundle root for Mono AOT, so
+          # report the layout instead of moving them into an unsupported folder.
+          root_files=("$payload"/*)
+          root_dirs=("$payload"/*/)
+          root_dlls=("$payload"/*.dll)
+          echo "Payload root: ${#root_files[@]} entries, ${#root_dlls[@]} assemblies, ${#root_dirs[@]} folders"
 
           info="$stage/Payload/$app_name/Info.plist"
           plutil -lint "$info"
