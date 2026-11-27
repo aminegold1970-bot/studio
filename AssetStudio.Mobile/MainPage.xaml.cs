@@ -2632,20 +2632,48 @@ public partial class MainPage : ContentPage
         return string.IsNullOrWhiteSpace(cleaned) ? "unnamed" : cleaned;
     }
 
-    // iOS equivalent of desktop "Open folder after export": when enabled the
-    // share sheet opens; otherwise the result is copied to the Files-visible
-    // Documents/AssetStudio/Exports folder and the location is reported.
+    // Desktop exports always land in a chosen folder. Mobile cannot open that
+    // folder directly on iOS, so exports always land in Files → AssetStudio →
+    // Exports; "Open folder after export" additionally opens the share sheet.
     private async Task PresentExportResultAsync(string shareTitle, string outputPath, string status)
     {
+        var savedPath = CopyExportToDocuments(outputPath);
+        TryDeleteTemporaryExport(outputPath, savedPath);
+        var savedStatus = $"{status} Saved to Files → AssetStudio → Exports ({Path.GetFileName(savedPath)}).";
+
         if (_shareAfterExport)
         {
-            await Share.Default.RequestAsync(new ShareFileRequest(shareTitle, new ShareFile(outputPath)));
-            StatusLabel.Text = status;
-            return;
+            try
+            {
+                await Share.Default.RequestAsync(new ShareFileRequest(shareTitle, new ShareFile(savedPath)));
+            }
+            catch (Exception ex)
+            {
+                savedStatus += $" Share sheet unavailable: {ex.Message}";
+            }
         }
 
-        var savedPath = CopyExportToDocuments(outputPath);
-        StatusLabel.Text = $"{status} Saved to Files → AssetStudio → Exports ({Path.GetFileName(savedPath)}).";
+        StatusLabel.Text = savedStatus;
+    }
+
+    private static void TryDeleteTemporaryExport(string outputPath, string savedPath)
+    {
+        try
+        {
+            var cacheRoot = Path.GetFullPath(FileSystem.CacheDirectory);
+            var fullOutput = Path.GetFullPath(outputPath);
+            var fullSaved = Path.GetFullPath(savedPath);
+            if (fullOutput.StartsWith(cacheRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(fullOutput, fullSaved, StringComparison.OrdinalIgnoreCase) &&
+                File.Exists(fullOutput))
+            {
+                File.Delete(fullOutput);
+            }
+        }
+        catch (Exception ex)
+        {
+            AssetStudio.Logger.Verbose($"Could not remove temporary export: {ex.Message}");
+        }
     }
 
     private static string CopyExportToDocuments(string sourcePath)
@@ -2697,23 +2725,34 @@ public partial class MainPage : ContentPage
             {
                 ColumnDefinitions =
                 {
+                    new ColumnDefinition(new GridLength(14)),
                     new ColumnDefinition(GridLength.Star),
                     new ColumnDefinition(GridLength.Auto)
                 },
                 HeightRequest = 24
             };
+            // WinForms menus reserve a check column; keeping it fixed stops
+            // checked items from shifting their labels to the right on mobile.
             content.Add(new Label
             {
-                Text = checkedOptions.Contains(option, StringComparer.Ordinal)
-                    ? $"✓ {option}"
-                    : option,
+                Text = checkedOptions.Contains(option, StringComparer.Ordinal) ? "✓" : string.Empty,
+                TextColor = Color.FromArgb("#202020"),
+                FontSize = 12,
+                FontAutoScalingEnabled = false,
+                VerticalTextAlignment = TextAlignment.Center,
+                HorizontalTextAlignment = TextAlignment.Center,
+                LineBreakMode = LineBreakMode.NoWrap
+            }, 0);
+            content.Add(new Label
+            {
+                Text = option,
                 TextColor = Color.FromArgb("#202020"),
                 FontSize = 12,
                 FontAutoScalingEnabled = false,
                 VerticalTextAlignment = TextAlignment.Center,
                 HorizontalTextAlignment = TextAlignment.Start,
                 LineBreakMode = LineBreakMode.NoWrap
-            });
+            }, 1);
             if (hasSubmenu)
             {
                 content.Add(new Label
@@ -2725,7 +2764,7 @@ public partial class MainPage : ContentPage
                     VerticalTextAlignment = TextAlignment.Center,
                     HorizontalTextAlignment = TextAlignment.End,
                     Margin = new Thickness(8, 0, 0, 0)
-                }, 1);
+                }, 2);
             }
             var item = new Border
             {

@@ -86,10 +86,10 @@ internal sealed class ExportOptionsPage : ContentPage
             Margin = new Thickness(0, 4, 0, 8)
         });
         AddSwitch(layout, "Open folder after export", _shareAfterExport,
-            "On mobile this opens the share sheet. When off, files are saved to Files → AssetStudio → Exports.");
+            "On mobile this also opens the share sheet. Exports are always saved to Files → AssetStudio → Exports.");
         layout.Children.Add(new Label
         {
-            Text = "On mobile this opens the share sheet. When off, files are saved to Files → AssetStudio → Exports.",
+            Text = "On mobile this also opens the share sheet. Exports are always saved to Files → AssetStudio → Exports.",
             TextColor = Color.FromArgb("#666666"),
             FontSize = 11,
             Margin = new Thickness(0, 4, 0, 6)

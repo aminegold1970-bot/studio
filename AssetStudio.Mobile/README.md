@@ -79,6 +79,8 @@ Use **File → Extract file** or **Extract folder**. The app creates a ZIP archi
 
 use **Export** menu.
 
+Mobile exports are always saved to `Documents/AssetStudio/Exports` so they appear in the Files app, matching the desktop behavior of writing to a known folder. When **Export options → Open folder after export** is enabled, the share sheet also opens for the exported file; otherwise the status bar reports the saved filename.
+
 ### Export Model
 
 Export model from "Scene Hierarchy" using the **Model** menu.
