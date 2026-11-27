@@ -331,13 +331,12 @@ jobs:
           title="AssetStudio Mobile unsigned IPA (latest)"
           notes="Unsigned iOS device IPA from the latest successful build. Install requires signing with your own certificate/profile or sideloading tools."
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release edit "$TAG_NAME" --title "$title" --notes "$notes" --prerelease
+            gh release edit "$TAG_NAME" --title "$title" --notes "$notes" --prerelease=false
             gh release upload "$TAG_NAME" "$IPA_PATH" --clobber
           else
             gh release create "$TAG_NAME" "$IPA_PATH" \
               --title "$title" \
-              --notes "$notes" \
-              --prerelease
+              --notes "$notes"
           fi
           echo "### Direct IPA download" >> "$GITHUB_STEP_SUMMARY"
           echo "[AssetStudioMobile-unsigned.ipa](https://github.com/${{ github.repository }}/releases/download/$TAG_NAME/AssetStudioMobile-unsigned.ipa)" >> "$GITHUB_STEP_SUMMARY"
