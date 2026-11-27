@@ -105,11 +105,20 @@ internal sealed class ExportOptionsPage : ContentPage
         layout.Children.Add(exportFolderRow);
         layout.Children.Add(new Label
         {
-            Text = "On iPhone, drag a folder from the Files app onto this page to export into it.",
+            Text = "Choose a folder in Files, or drag one onto this page when drag and drop is available.",
             TextColor = Color.FromArgb("#666666"),
             FontSize = 11,
-            Margin = new Thickness(0, 2, 0, 6)
+            Margin = new Thickness(0, 2, 0, 4)
         });
+        var chooseExportFolder = new Button
+        {
+            Text = "Choose export folder",
+            FontSize = 12,
+            MinimumHeightRequest = 38,
+            HorizontalOptions = LayoutOptions.Start
+        };
+        chooseExportFolder.Clicked += OnChooseExportFolderClicked;
+        layout.Children.Add(chooseExportFolder);
         RefreshExportFolderLabel();
         Appearing += OnExportOptionsAppearing;
         Disappearing += OnExportOptionsDisappearing;
@@ -283,6 +292,19 @@ internal sealed class ExportOptionsPage : ContentPage
 
     private void OnMainExportFolderDropped(string bookmark, string displayName) =>
         RefreshExportFolderLabel();
+
+    private async void OnChooseExportFolderClicked(object? sender, EventArgs e)
+    {
+        try
+        {
+            if (await IOSExportFolder.PickAsync())
+                RefreshExportFolderLabel();
+        }
+        catch (Exception exception)
+        {
+            await DisplayAlert("Export folder", exception.Message, "OK");
+        }
+    }
 
     protected override void OnHandlerChanged()
     {

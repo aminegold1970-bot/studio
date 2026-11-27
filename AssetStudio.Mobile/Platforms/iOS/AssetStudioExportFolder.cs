@@ -1,14 +1,19 @@
 #if IOS
 using System;
 using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
 using Foundation;
+using Microsoft.Maui.ApplicationModel;
 using Microsoft.Maui.Storage;
+using UIKit;
+using UniformTypeIdentifiers;
 
 namespace AssetStudioMobile;
 
 /// <summary>
-/// Persists an iOS security-scoped bookmark for the folder the user dropped from Files.
-/// The scope is held only while an export is copied into that folder.
+/// Persists an iOS security-scoped bookmark for the folder chosen in Files or dropped
+/// from Files. The scope is held only while an export is copied into that folder.
 /// </summary>
 internal static class IOSExportFolder
 {
@@ -37,6 +42,108 @@ internal static class IOSExportFolder
     {
         Preferences.Remove(BookmarkKey);
         Preferences.Remove(NameKey);
+    }
+
+    // iPhone does not reliably support cross-app folder drag and drop, so the
+    // same Files folder picker used by Load folder can also set the destination.
+    public static Task<bool> PickAsync()
+    {
+        var completion = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            try
+            {
+                var presenter = GetTopViewController();
+                if (presenter == null)
+                    throw new InvalidOperationException("Could not find the active iOS view controller.");
+
+                var folderType = UTType.CreateFromIdentifier("public.folder")
+                    ?? throw new InvalidOperationException("iOS could not resolve the folder content type.");
+                var picker = new UIDocumentPickerViewController(new[] { folderType }, false)
+                {
+                    AllowsMultipleSelection = false,
+                    Delegate = new PickerDelegate(completion)
+                };
+                presenter.PresentViewController(picker, true, null);
+            }
+            catch (Exception exception)
+            {
+                completion.TrySetException(exception);
+            }
+        });
+        return completion.Task;
+    }
+
+    private static UIViewController? GetTopViewController()
+    {
+        var root = UIApplication.SharedApplication.ConnectedScenes
+            .OfType<UIWindowScene>()
+            .SelectMany(scene => scene.Windows)
+            .FirstOrDefault(window => window.IsKeyWindow)?
+            .RootViewController;
+        while (root?.PresentedViewController != null)
+            root = root.PresentedViewController;
+        return root;
+    }
+
+    private sealed class PickerDelegate : UIDocumentPickerDelegate
+    {
+        private readonly TaskCompletionSource<bool> _completion;
+        private bool _finished;
+
+        public PickerDelegate(TaskCompletionSource<bool> completion) => _completion = completion;
+
+        public override void DidPickDocument(UIDocumentPickerViewController controller, NSUrl[] urls)
+        {
+            if (_finished)
+                return;
+            _finished = true;
+            try
+            {
+                var url = urls?.FirstOrDefault()
+                    ?? throw new IOException("The folder picker returned no folder.");
+                var accessed = url.StartAccessingSecurityScopedResource();
+                try
+                {
+                    var path = url.Path;
+                    if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
+                        throw new IOException($"iOS could not access the selected folder: {url.LastPathComponent}");
+
+                    var data = url.CreateBookmarkData(
+                        NSUrlBookmarkCreationOptions.WithSecurityScope, null, null, out var error);
+                    if (error != null || data == null)
+                        throw new IOException(error?.LocalizedDescription ?? "iOS could not save access to the selected folder.");
+
+                    var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(path));
+                    Set(Convert.ToBase64String(data.ToArray()),
+                        string.IsNullOrWhiteSpace(name) ? "Export folder" : name);
+                    _completion.TrySetResult(true);
+                }
+                finally
+                {
+                    if (accessed)
+                        url.StopAccessingSecurityScopedResource();
+                }
+            }
+            catch (Exception exception)
+            {
+                _completion.TrySetException(exception);
+            }
+            finally
+            {
+                MainThread.BeginInvokeOnMainThread(() => controller.DismissViewController(true, null));
+            }
+        }
+
+        public override void WasCancelled(UIDocumentPickerViewController controller)
+        {
+            if (_finished)
+                return;
+            _finished = true;
+            MainThread.BeginInvokeOnMainThread(() => controller.DismissViewController(true, null));
+            _completion.TrySetResult(false);
+        }
     }
 
     public static ScopedFolder? Resolve()

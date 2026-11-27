@@ -1484,6 +1484,12 @@ public partial class MainPage : ContentPage
         });
         try
         {
+#if IOS
+            // The custom top menu must finish dismissing before UIKit can
+            // present UIDocumentPickerViewController; otherwise iOS can swallow
+            // the presentation and the user only sees the previous screen.
+            await WaitForActionSheetDismissalAsync(cancellation.Token);
+#endif
             var folderPath = await MobileFolderPicker.PickAsync(
                 _documentLibrary, progress, cancellation.Token);
             cancellation.Token.ThrowIfCancellationRequested();

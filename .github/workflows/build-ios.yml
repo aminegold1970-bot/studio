@@ -318,22 +318,27 @@ jobs:
 
       # GitHub Actions artifacts are always downloaded as ZIP archives. Publishing
       # a Release asset is the supported way to expose the .ipa itself as a direct
-      # download. Run this workflow manually to create the release; push/PR builds
-      # still only upload the normal Actions artifact.
+      # download. Every successful push/manual build updates one stable release.
       - name: Publish direct IPA download
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_release
+        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.publish_release)
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           IPA_PATH: artifacts/AssetStudioMobile-unsigned.ipa
-          TAG_NAME: ios-unsigned-${{ github.run_number }}-${{ github.run_attempt }}
+          TAG_NAME: ios-unsigned-latest
         run: |
           set -euo pipefail
-          title="AssetStudio Mobile unsigned IPA #${{ github.run_number }}"
-          notes="Unsigned iOS device IPA from workflow run #${{ github.run_number }}. Install requires signing with your own certificate/profile or sideloading tools."
-          gh release create "$TAG_NAME" "$IPA_PATH" \
-            --title "$title" \
-            --notes "$notes" \
-            --prerelease
+          title="AssetStudio Mobile unsigned IPA (latest)"
+          notes="Unsigned iOS device IPA from the latest successful build. Install requires signing with your own certificate/profile or sideloading tools."
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release edit "$TAG_NAME" --title "$title" --notes "$notes" --prerelease
+            gh release upload "$TAG_NAME" "$IPA_PATH" --clobber
+          else
+            gh release create "$TAG_NAME" "$IPA_PATH" \
+              --title "$title" \
+              --notes "$notes" \
+              --prerelease
+          fi
           echo "### Direct IPA download" >> "$GITHUB_STEP_SUMMARY"
           echo "[AssetStudioMobile-unsigned.ipa](https://github.com/${{ github.repository }}/releases/download/$TAG_NAME/AssetStudioMobile-unsigned.ipa)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Stable URL: https://github.com/${{ github.repository }}/releases/latest/download/AssetStudioMobile-unsigned.ipa" >> "$GITHUB_STEP_SUMMARY"
