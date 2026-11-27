@@ -1937,7 +1937,7 @@ public partial class MainPage : ContentPage
             $"Texture image: {_textureExportFormat}",
             $"Texture2D data: {(_convertTextures ? "Converted" : "Original .tex")}",
             $"ZIP grouping: {GetArchiveGroupingLabel(_archiveGrouping)}",
-            $"Audio export: {(_convertAudio ? "PCM/Vorbis to WAV" : "Original data")}",
+            $"Audio export: {(_convertAudio ? "PCM/Vorbis/Ogg/ADPCM/VAG to WAV" : "Original data")}",
             $"TextAsset extension: {(_restoreTextAssetExtension ? "Restore source" : ".txt")}");
         if (choice == null)
             return;
@@ -1999,7 +1999,7 @@ public partial class MainPage : ContentPage
                 return;
             _convertAudio = audioMode == "Convert AudioClip to WAV(PCM)";
             Preferences.Set("AssetStudio.ConvertAudio", _convertAudio);
-            StatusLabel.Text = $"Audio export: {(_convertAudio ? "PCM/Vorbis to WAV; other codecs raw" : "original embedded data")}";
+            StatusLabel.Text = $"Audio export: {(_convertAudio ? "PCM/Vorbis/Ogg/ADPCM/VAG to WAV; other codecs raw" : "original embedded data")}";
             return;
         }
 
@@ -3381,7 +3381,7 @@ public partial class MainPage : ContentPage
                     _selectedAudioClip = audio;
 #endif
                     ShowAudioPreview(row.Name, DescribeAudioCompressionFormat(audio),
-                        $"Length: {audio.m_Length:N2} seconds · {audio.m_Channels} channel(s)\nPCM and Vorbis convert to WAV; MP3 and AAC use native playback. Other codecs remain exportable as original data.");
+                        $"Length: {audio.m_Length:N2} seconds · {audio.m_Channels} channel(s)\nPCM, Vorbis/Ogg and managed ADPCM/VAG convert to WAV; MP3 and AAC use native playback. Other codecs remain exportable as original data.");
                     break;
                 case AssetStudio.Font font:
                     ShowFontPreview(row.Name,

@@ -2916,6 +2916,24 @@ internal static class MobileAssetExporter
             throw new InvalidDataException("This audio clip contains no embedded audio data.");
         }
 
+        if (convertAudio && TryDecodeKnownAudioContainer(data, out var container))
+        {
+            return container;
+        }
+
+        if (convertAudio
+            && audio.version is { Length: > 0 }
+            && audio.version[0] >= 5
+            && TryDecodeFsb5Audio(data, cancellationToken, out var fsb5))
+        {
+            return fsb5;
+        }
+
+        if (convertAudio && TryDecodeOggVorbisWave(data, cancellationToken, out var ogg))
+        {
+            return ogg;
+        }
+
         if (convertAudio
             && audio.version is { Length: > 0 }
             && audio.version[0] >= 5
@@ -2963,6 +2981,573 @@ internal static class MobileAssetExporter
             };
 
         return (data, extension);
+    }
+
+    private sealed class Fsb5Bank
+    {
+        public uint Codec;
+        public uint Flags;
+        public int Channels;
+        public int SampleRate;
+        public uint SampleCount;
+        public byte[] SampleData = Array.Empty<byte>();
+        public byte[]? DspCoefficients;
+    }
+
+    private static readonly int[] ImaStepTable =
+    {
+        7, 8, 9, 10, 11, 12, 13, 14,
+        16, 17, 19, 21, 23, 25, 28, 31,
+        34, 37, 41, 45, 50, 55, 60, 66,
+        73, 80, 88, 97, 107, 118, 130, 143,
+        157, 173, 190, 209, 230, 253, 279, 307,
+        337, 371, 408, 449, 494, 544, 598, 658,
+        724, 796, 876, 963, 1060, 1166, 1282, 1411,
+        1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024,
+        3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484,
+        7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899,
+        15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794,
+        32767
+    };
+
+    private static readonly int[] ImaIndexTable =
+    {
+        -1, -1, -1, -1, 2, 4, 6, 8,
+        -1, -1, -1, -1, 2, 4, 6, 8
+    };
+
+    private static readonly int[] VagCoefficient1 = { 0, 60, 115, 98, 122 };
+
+    private static readonly int[] VagCoefficient2 = { 0, 0, -52, -55, -60 };
+
+    private static bool MatchesAscii(byte[] data, int offset, string value)
+    {
+        if (offset < 0 || offset + value.Length > data.Length)
+            return false;
+        for (var index = 0; index < value.Length; index++)
+        {
+            if (data[offset + index] != (byte)value[index])
+                return false;
+        }
+        return true;
+    }
+
+    private static uint ReadUInt32(byte[] data, int offset) =>
+        BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(offset, 4));
+
+    private static ulong ReadUInt64(byte[] data, int offset) =>
+        BinaryPrimitives.ReadUInt64LittleEndian(data.AsSpan(offset, 8));
+
+    private static bool TryDecodeKnownAudioContainer(byte[] data, out (byte[] Data, string Extension) result)
+    {
+        result = default;
+        if (MatchesAscii(data, 0, "RIFF") && MatchesAscii(data, 8, "WAVE"))
+        {
+            result = (data, ".wav");
+            return true;
+        }
+        if (MatchesAscii(data, 0, "FORM")
+            && (MatchesAscii(data, 8, "AIFF") || MatchesAscii(data, 8, "AIFC")))
+        {
+            result = (data, ".aif");
+            return true;
+        }
+        if (MatchesAscii(data, 0, "ID3") || HasMpegAudioSync(data))
+        {
+            result = (data, ".mp3");
+            return true;
+        }
+        if (HasAdtsAacSync(data))
+        {
+            result = (data, ".aac");
+            return true;
+        }
+        return false;
+    }
+
+    private static bool HasMpegAudioSync(byte[] data)
+    {
+        if (data.Length < 2 || data[0] != 0xFF)
+            return false;
+
+        var second = data[1];
+        if ((second & 0xE0) != 0xE0)
+            return false;
+        if ((second & 0x18) == 0x08)
+            return false; // MPEG version 01 is reserved.
+        return (second & 0x06) != 0; // Layer 00 is reserved.
+    }
+
+    private static bool HasAdtsAacSync(byte[] data)
+    {
+        if (data.Length < 3 || data[0] != 0xFF || (data[1] & 0xF6) != 0xF0)
+            return false;
+        var profile = (data[2] >> 6) & 0x03;
+        return profile != 0x03;
+    }
+
+    private static bool TryDecodeOggVorbisWave(
+        byte[] data,
+        CancellationToken cancellationToken,
+        out (byte[] Data, string Extension) result)
+    {
+        result = default;
+        if (!MatchesAscii(data, 0, "OggS"))
+            return false;
+
+        try
+        {
+            result = (DecodeVorbisWave(data, cancellationToken), ".wav");
+            return true;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryDecodeFsb5Audio(
+        byte[] data,
+        CancellationToken cancellationToken,
+        out (byte[] Data, string Extension) result)
+    {
+        result = default;
+        if (!TryReadFsb5Bank(data, out var bank))
+            return false;
+
+        try
+        {
+            switch (bank.Codec)
+            {
+                case 1: // PCM8
+                    result = (DecodeFsb5Pcm(bank, 1, formatTag: 1, cancellationToken), ".wav");
+                    return true;
+                case 2: // PCM16
+                    result = (DecodeFsb5Pcm(bank, 2, formatTag: 1, cancellationToken), ".wav");
+                    return true;
+                case 3: // PCM24
+                    result = (DecodeFsb5Pcm(bank, 3, formatTag: 1, cancellationToken), ".wav");
+                    return true;
+                case 4: // PCM32
+                    result = (DecodeFsb5Pcm(bank, 4, formatTag: 1, cancellationToken), ".wav");
+                    return true;
+                case 5: // 32-bit IEEE float
+                    result = (DecodeFsb5Pcm(bank, 4, formatTag: 3, cancellationToken), ".wav");
+                    return true;
+                case 6: // Nintendo DSP / GC-ADPCM
+                    result = (DecodeGcAdpcmWave(bank, cancellationToken), ".wav");
+                    return true;
+                case 7: // IMA ADPCM
+                    result = (DecodeImaAdpcmWave(bank, cancellationToken), ".wav");
+                    return true;
+                case 8: // Sony VAG / PS-ADPCM
+                    result = (DecodeVagWave(bank, cancellationToken), ".wav");
+                    return true;
+                case 11: // MPEG frames are already playable MP3 data
+                    if (!HasMpegAudioSync(bank.SampleData))
+                        return false;
+                    result = (bank.SampleData, ".mp3");
+                    return true;
+                default:
+                    return false;
+            }
+        }
+        catch (InvalidDataException)
+        {
+            return false;
+        }
+        catch (IndexOutOfRangeException)
+        {
+            return false;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (OverflowException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryReadFsb5Bank(byte[] data, out Fsb5Bank bank)
+    {
+        bank = new Fsb5Bank();
+        if (data.Length < 0x3C || !MatchesAscii(data, 0, "FSB5"))
+            return false;
+
+        var version = ReadUInt32(data, 4);
+        if (version > 1)
+            return false;
+
+        var headerSize = version == 0 ? 0x40 : 0x3C;
+        if (data.Length < headerSize)
+            return false;
+
+        var sampleCount = ReadUInt32(data, 0x08);
+        var sampleHeadersSize = ReadUInt32(data, 0x0C);
+        var nameTableSize = ReadUInt32(data, 0x10);
+        var sampleDataSize = ReadUInt32(data, 0x14);
+        bank.Codec = ReadUInt32(data, 0x18);
+        bank.Flags = ReadUInt32(data, version == 1 ? 0x20 : 0x24);
+
+        if (sampleCount is 0 or > 4096)
+            return false;
+
+        var headersEnd = (long)headerSize + sampleHeadersSize;
+        var dataStart = headersEnd + nameTableSize;
+        if (headersEnd > data.Length || dataStart > data.Length
+            || dataStart + sampleDataSize != data.Length)
+        {
+            return false;
+        }
+
+        var dataOffsets = new uint[sampleCount];
+        var cursor = headerSize;
+        for (var index = 0; index < sampleCount; index++)
+        {
+            if (cursor + 8 > headersEnd)
+                return false;
+
+            var mode = ReadUInt64(data, cursor);
+            cursor += 8;
+
+            var sampleCountForSound = (uint)((mode >> 34) & 0x3FFFFFFF);
+            var dataOffset = (uint)((mode >> 7) & 0x07FFFFFF) * 32u;
+            var frequencyIndex = (int)((mode >> 1) & 0x0F);
+            var channelCode = (int)((mode >> 5) & 0x03);
+            var channels = channelCode switch
+            {
+                0 => 1,
+                1 => 2,
+                2 => 6,
+                3 => 8,
+                _ => 0
+            };
+
+            dataOffsets[index] = dataOffset;
+            if (index == 0)
+            {
+                bank.SampleCount = sampleCountForSound;
+                bank.Channels = channels;
+                bank.SampleRate = GetFsb5Frequency(frequencyIndex);
+            }
+
+            if ((mode & 1) == 0)
+                continue;
+
+            while (cursor + 4 <= headersEnd)
+            {
+                var chunkHeader = ReadUInt32(data, cursor);
+                cursor += 4;
+                var hasAnotherChunk = (chunkHeader & 1) != 0;
+                var chunkSize = (int)((chunkHeader >> 1) & 0x00FFFFFF);
+                var chunkType = (int)((chunkHeader >> 25) & 0x7F);
+                if (chunkSize < 0 || cursor + chunkSize > headersEnd)
+                    return false;
+
+                if (index == 0)
+                {
+                    switch (chunkType)
+                    {
+                        case 1: // explicit channel count
+                            if (chunkSize >= 1 && data[cursor] is >= 1 and <= 8)
+                                bank.Channels = data[cursor];
+                            break;
+                        case 2: // explicit sample rate
+                            if (chunkSize >= 4)
+                            {
+                                var rate = (int)ReadUInt32(data, cursor);
+                                if (rate is > 0 and <= 384000)
+                                    bank.SampleRate = rate;
+                            }
+                            break;
+                        case 7: // Nintendo DSP coefficients
+                            if (chunkSize >= 0x20)
+                                bank.DspCoefficients = data.AsSpan(cursor, chunkSize).ToArray();
+                            break;
+                    }
+                }
+
+                cursor += chunkSize;
+                if (!hasAnotherChunk)
+                    break;
+            }
+        }
+
+        if (bank.SampleCount == 0 || bank.Channels is < 1 or > 8 || bank.SampleRate <= 0)
+            return false;
+
+        var sampleStart = dataOffsets[0];
+        var sampleEnd = sampleCount > 1 ? dataOffsets[1] : sampleDataSize;
+        if (sampleEnd <= sampleStart || sampleEnd > sampleDataSize)
+            return false;
+
+        var absoluteStart = dataStart + sampleStart;
+        if (absoluteStart > data.Length)
+            return false;
+
+        bank.SampleData = data.AsSpan((int)absoluteStart, checked((int)(sampleEnd - sampleStart))).ToArray();
+        return true;
+    }
+
+    private static int GetFsb5Frequency(int index) => index switch
+    {
+        0 => 4000,
+        1 => 8000,
+        2 => 11000,
+        3 => 11025,
+        4 => 16000,
+        5 => 22050,
+        6 => 24000,
+        7 => 32000,
+        8 => 44100,
+        9 => 48000,
+        10 => 96000,
+        _ => 0
+    };
+
+    private static byte[] DecodeFsb5Pcm(
+        Fsb5Bank bank,
+        int bytesPerSample,
+        int formatTag,
+        CancellationToken cancellationToken)
+    {
+        var pcmLength = checked((int)((long)bank.SampleCount * bank.Channels * bytesPerSample));
+        if (pcmLength <= 0 || pcmLength > bank.SampleData.Length)
+            throw new InvalidDataException("FSB5 PCM sample data is smaller than its declared format.");
+
+        var pcm = new byte[pcmLength];
+        bank.SampleData.AsSpan(0, pcmLength).CopyTo(pcm);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if ((bank.Flags & 0x01) != 0 && bytesPerSample > 1)
+        {
+            for (var offset = 0; offset < pcmLength; offset += bytesPerSample)
+            {
+                Array.Reverse(pcm, offset, bytesPerSample);
+            }
+        }
+
+        return BuildWave(pcm, bank.SampleRate, bank.Channels, bytesPerSample * 8, formatTag);
+    }
+
+    private static byte[] DecodeImaAdpcmWave(Fsb5Bank bank, CancellationToken cancellationToken)
+    {
+        if (bank.Channels is < 1 or > 2)
+            throw new InvalidDataException("Only mono and stereo IMA ADPCM clips are supported.");
+
+        const int samplesPerFrame = 0x40;
+        var channels = bank.Channels;
+        var frameCount = (int)((bank.SampleCount + samplesPerFrame - 1) / samplesPerFrame);
+        var pcm = new byte[checked((int)bank.SampleCount * channels * sizeof(short))];
+        var frameSize = 0x24 * channels;
+
+        for (var frame = 0; frame < frameCount; frame++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var frameOffset = checked(frame * frameSize);
+            var samplesInFrame = (int)Math.Min(samplesPerFrame, bank.SampleCount - (uint)(frame * samplesPerFrame));
+
+            for (var channel = 0; channel < channels; channel++)
+            {
+                var headerOffset = frameOffset + 0x04 * channel;
+                if (headerOffset + 4 > bank.SampleData.Length)
+                    throw new InvalidDataException("IMA ADPCM frame header is outside the sample data.");
+
+                var history = (int)BinaryPrimitives.ReadInt16LittleEndian(bank.SampleData.AsSpan(headerOffset, 2));
+                var stepIndex = Math.Clamp((int)(sbyte)bank.SampleData[headerOffset + 2], 0, 88);
+                WritePcm16(pcm, ((frame * samplesPerFrame) * channels + channel) * sizeof(short), history);
+
+                for (var sample = 1; sample < samplesInFrame; sample++)
+                {
+                    var nibbleIndex = sample - 1;
+                    var dataOffset = channels == 1
+                        ? frameOffset + 0x04 + nibbleIndex / 2
+                        : frameOffset + 0x08 + 0x08 * (nibbleIndex / 8) + 0x04 * channel + (nibbleIndex % 8) / 2;
+                    if (dataOffset >= bank.SampleData.Length)
+                        throw new InvalidDataException("IMA ADPCM sample data ends before the declared sample count.");
+
+                    var shift = (nibbleIndex & 1) == 0 ? 0 : 4;
+                    ExpandImaNibble(bank.SampleData[dataOffset], shift, ref history, ref stepIndex);
+                    WritePcm16(pcm, ((frame * samplesPerFrame + sample) * channels + channel) * sizeof(short), history);
+                }
+            }
+        }
+
+        return BuildWave(pcm, bank.SampleRate, channels, 16, 1);
+    }
+
+    private static void ExpandImaNibble(byte value, int shift, ref int history, ref int stepIndex)
+    {
+        var code = (value >> shift) & 0x0F;
+        var step = ImaStepTable[stepIndex];
+        var delta = step >> 3;
+        if ((code & 1) != 0)
+            delta += step >> 2;
+        if ((code & 2) != 0)
+            delta += step >> 1;
+        if ((code & 4) != 0)
+            delta += step;
+        if ((code & 8) != 0)
+            delta = -delta;
+
+        history = Clamp16(history + delta);
+        stepIndex = Math.Clamp(stepIndex + ImaIndexTable[code], 0, 88);
+    }
+
+    private static byte[] DecodeGcAdpcmWave(Fsb5Bank bank, CancellationToken cancellationToken)
+    {
+        if (bank.Channels is < 1 or > 2)
+            throw new InvalidDataException("Only mono and stereo DSP ADPCM clips are supported.");
+        if (bank.DspCoefficients is null || bank.DspCoefficients.Length < bank.Channels * 0x2E)
+            throw new InvalidDataException("DSP ADPCM coefficient metadata is missing.");
+
+        var channels = bank.Channels;
+        var coefficients = new short[channels, 16];
+        for (var channel = 0; channel < channels; channel++)
+        {
+            var coefficientOffset = channel * 0x2E;
+            for (var index = 0; index < 16; index++)
+            {
+                coefficients[channel, index] = BinaryPrimitives.ReadInt16BigEndian(
+                    bank.DspCoefficients.AsSpan(coefficientOffset + index * 2, 2));
+            }
+        }
+
+        const int samplesPerFrame = 14;
+        var frameCount = (int)((bank.SampleCount + samplesPerFrame - 1) / samplesPerFrame);
+        var pcm = new byte[checked((int)bank.SampleCount * channels * sizeof(short))];
+        var history1 = new int[channels];
+        var history2 = new int[channels];
+        var nonInterleaved = (bank.Flags & 0x02) != 0;
+        var frameBytes = new byte[channels, 8];
+
+        for (var frame = 0; frame < frameCount; frame++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var samplesInFrame = (int)Math.Min(samplesPerFrame, bank.SampleCount - (uint)(frame * samplesPerFrame));
+
+            for (var channel = 0; channel < channels; channel++)
+            {
+                for (var byteIndex = 0; byteIndex < 8; byteIndex++)
+                {
+                    var dataOffset = nonInterleaved
+                        ? channel * (bank.SampleData.Length / channels) + frame * 8 + byteIndex
+                        : frame * 8 * channels + (byteIndex / 2) * 2 * channels + (byteIndex % 2) + 2 * channel;
+                    if (dataOffset >= bank.SampleData.Length)
+                        throw new InvalidDataException("DSP ADPCM sample data ends before the declared sample count.");
+                    frameBytes[channel, byteIndex] = bank.SampleData[dataOffset];
+                }
+            }
+
+            for (var sample = 0; sample < samplesInFrame; sample++)
+            {
+                for (var channel = 0; channel < channels; channel++)
+                {
+                    var header = frameBytes[channel, 0];
+                    var scale = 1 << (header & 0x0F);
+                    var predictor = Math.Min((header >> 4) & 0x0F, 7);
+                    var coefficient1 = coefficients[channel, predictor * 2];
+                    var coefficient2 = coefficients[channel, predictor * 2 + 1];
+                    var packed = frameBytes[channel, 1 + sample / 2];
+                    var nibble = sample % 2 == 0 ? packed >> 4 : packed & 0x0F;
+                    if ((nibble & 0x08) != 0)
+                        nibble -= 0x10;
+
+                    var decoded = ((nibble * scale) << 11);
+                    decoded = (decoded + 1024 + coefficient1 * history1[channel] + coefficient2 * history2[channel]) >> 11;
+                    decoded = Clamp16(decoded);
+                    history2[channel] = history1[channel];
+                    history1[channel] = decoded;
+                    WritePcm16(pcm, ((frame * samplesPerFrame + sample) * channels + channel) * sizeof(short), decoded);
+                }
+            }
+        }
+
+        return BuildWave(pcm, bank.SampleRate, channels, 16, 1);
+    }
+
+    private static byte[] DecodeVagWave(Fsb5Bank bank, CancellationToken cancellationToken)
+    {
+        const int bytesPerFrame = 0x10;
+        const int samplesPerFrame = (bytesPerFrame - 2) * 2;
+        var channels = bank.Channels;
+        var nonInterleaved = (bank.Flags & 0x02) != 0;
+        var channelStreamSize = bank.SampleData.Length / channels;
+
+        if (nonInterleaved && (channelStreamSize < bytesPerFrame || channelStreamSize % bytesPerFrame != 0))
+            throw new InvalidDataException("FSB5 VAG stream size is inconsistent with its channel count.");
+
+        var frameCount = (int)((bank.SampleCount + samplesPerFrame - 1) / samplesPerFrame);
+        var pcm = new byte[checked((int)bank.SampleCount * channels * sizeof(short))];
+        var history1 = new int[channels];
+        var history2 = new int[channels];
+
+        for (var frame = 0; frame < frameCount; frame++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var samplesInFrame = (int)Math.Min(samplesPerFrame, bank.SampleCount - (uint)(frame * samplesPerFrame));
+
+            for (var channel = 0; channel < channels; channel++)
+            {
+                var frameOffset = nonInterleaved
+                    ? channel * channelStreamSize + frame * bytesPerFrame
+                    : frame * bytesPerFrame * channels + channel * bytesPerFrame;
+                if (frameOffset < 0 || frameOffset + bytesPerFrame > bank.SampleData.Length)
+                    throw new InvalidDataException("VAG frame is outside the sample data.");
+
+                var header = bank.SampleData[frameOffset];
+                var flag = bank.SampleData[frameOffset + 1] & 0x07;
+                var predictor = header >> 4;
+                if (predictor > 4)
+                    predictor = 0;
+                var shift = header & 0x0F;
+                if (shift > 12)
+                    shift = 9;
+                var scale = 20 - shift;
+                var coefficient1 = VagCoefficient1[predictor];
+                var coefficient2 = VagCoefficient2[predictor];
+
+                for (var sample = 0; sample < samplesInFrame; sample++)
+                {
+                    var packed = bank.SampleData[frameOffset + 2 + sample / 2];
+                    var nibble = (sample & 1) == 0 ? packed & 0x0F : packed >> 4;
+                    var decoded = flag >= 7
+                        ? 0
+                        : (SignExtend4(nibble) << scale)
+                          + ((coefficient1 * history1[channel] + coefficient2 * history2[channel]) >> 6);
+
+                    decoded = Clamp16(decoded);
+                    history2[channel] = history1[channel];
+                    history1[channel] = decoded;
+                    WritePcm16(
+                        pcm,
+                        ((frame * samplesPerFrame + sample) * channels + channel) * sizeof(short),
+                        decoded);
+                }
+            }
+        }
+
+        return BuildWave(pcm, bank.SampleRate, channels, 16, 1);
+    }
+
+    private static int SignExtend4(int value) => ((value & 0x0F) ^ 0x08) - 0x08;
+
+    private static void WritePcm16(byte[] target, int offset, int sample)
+    {
+        BinaryPrimitives.WriteInt16LittleEndian(target.AsSpan(offset, 2), (short)Clamp16(sample));
+    }
+
+    private static int Clamp16(int value) => Math.Clamp(value, short.MinValue, short.MaxValue);
+
+    private static byte[] BuildWave(byte[] pcm, int sampleRate, int channels, int bitsPerSample, int formatTag)
+    {
+        var header = CreateWaveHeader(pcm.Length, sampleRate, channels, bitsPerSample, formatTag);
+        var wave = new byte[header.Length + pcm.Length];
+        header.CopyTo(wave, 0);
+        pcm.CopyTo(wave, header.Length);
+        return wave;
     }
 
     private static byte[] DecodeVorbisWave(byte[] encodedAudio, CancellationToken cancellationToken)
@@ -3068,12 +3653,37 @@ internal static class MobileAssetExporter
             throw new InvalidDataException("PCM audio data is inconsistent with its format metadata.");
         }
 
+        return CreateWaveHeader(pcmLength, sampleRate, channels, bitsPerSample, formatTag: 1);
+    }
+
+    private static byte[] CreateWaveHeader(
+        int pcmLength,
+        int sampleRate,
+        int channels,
+        int bitsPerSample,
+        int formatTag)
+    {
+        if (sampleRate <= 0 || channels <= 0 || channels > ushort.MaxValue
+            || bitsPerSample is not (8 or 16 or 24 or 32) || formatTag is not (1 or 3))
+        {
+            throw new InvalidDataException("PCM audio has invalid sample-rate, channel, or bit-depth metadata.");
+        }
+
+        var blockAlign = checked(channels * (bitsPerSample / 8));
+        var byteRate = (long)sampleRate * blockAlign;
+        if (blockAlign > ushort.MaxValue || byteRate > uint.MaxValue
+            || pcmLength < 0 || pcmLength > int.MaxValue - 44
+            || pcmLength % blockAlign != 0)
+        {
+            throw new InvalidDataException("PCM audio data is inconsistent with its format metadata.");
+        }
+
         var header = new byte[44];
         Encoding.ASCII.GetBytes("RIFF").CopyTo(header, 0);
         BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(4, 4), checked((uint)(36 + pcmLength)));
         Encoding.ASCII.GetBytes("WAVEfmt ").CopyTo(header, 8);
         BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(16, 4), 16);
-        BinaryPrimitives.WriteUInt16LittleEndian(header.AsSpan(20, 2), 1);
+        BinaryPrimitives.WriteUInt16LittleEndian(header.AsSpan(20, 2), checked((ushort)formatTag));
         BinaryPrimitives.WriteUInt16LittleEndian(header.AsSpan(22, 2), checked((ushort)channels));
         BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(24, 4), checked((uint)sampleRate));
         BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(28, 4), checked((uint)byteRate));

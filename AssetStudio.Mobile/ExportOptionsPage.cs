@@ -82,7 +82,7 @@ internal sealed class ExportOptionsPage : ContentPage
         AddSwitch(layout, "Convert AudioClip to WAV(PCM)", _convertAudio);
         layout.Children.Add(new Label
         {
-            Text = "Mobile converts PCM/Vorbis to WAV. Other codecs are preserved as original embedded data; desktop FMOD conversion is not available on iOS.",
+            Text = "Mobile converts PCM, Vorbis/Ogg, IMA ADPCM, VAG and DSP ADPCM to WAV. MP3/AAC use native playback; other codecs stay as original embedded data. Desktop FMOD conversion is not available on iOS.",
             TextColor = Color.FromArgb("#666666"),
             FontSize = 11,
             Margin = new Thickness(0, 4, 0, 8)
