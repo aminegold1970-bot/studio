@@ -113,6 +113,11 @@ public partial class MainPage : ContentPage
     private double _workspaceDragStartRatio = 0.62;
     private TaskCompletionSource<string?>? _menuChoiceCompletion;
     private Button? _menuAnchor;
+    // Filter Type mirrors the desktop menu: "All" is a mode, not the set of
+    // every type, so the menu stays open while individual types are checked.
+    private bool _filterMenuOpen;
+    private string[] _filterMenuTypes = Array.Empty<string>();
+    private readonly Dictionary<string, Label> _filterMenuLabels = new(StringComparer.Ordinal);
 
     public MainPage()
     {
@@ -2580,33 +2585,112 @@ public partial class MainPage : ContentPage
         }
     }
 
-    private async void OnFilterMenuClicked(object sender, EventArgs e)
+    private void OnFilterMenuClicked(object sender, EventArgs e)
     {
+        _menuAnchor = sender as Button;
         // Desktop builds Filter Type from exportableAssets, not all parsed objects.
         var types = _allAssets.Where(x => x.IsExportable).Select(x => x.Type)
             .Where(x => !string.IsNullOrWhiteSpace(x))
-            .Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(x => x, StringComparer.CurrentCulture).ToArray();
         if (types.Length == 0)
         {
             StatusLabel.Text = "Load assets before choosing asset types";
             return;
         }
 
-        var currentTypes = _selectedTypes == null
-            ? null
-            : _selectedTypes.Where(types.Contains).ToHashSet(StringComparer.Ordinal);
-        var dialog = new AssetTypeFilterPage(types, currentTypes);
-        await Navigation.PushModalAsync(CreateModalNavigationPage(dialog));
-        var selectedTypes = await dialog.Completion;
-        if (selectedTypes == null)
-            return;
+        _filterMenuTypes = types;
+        // The desktop clears type items and rechecks All whenever assets are
+        // reloaded; stale selections must not survive a different asset set.
+        if (_selectedTypes != null && !_selectedTypes.All(types.Contains))
+            _selectedTypes = null;
+        ShowFilterTypeMenu();
+    }
 
-        _selectedTypes = selectedTypes.Count == types.Length ? null : selectedTypes;
+    // Native version of the WinForms Filter Type drop-down: "All" plus one
+    // checkable item per ClassIDType, with the filter applied on every tap.
+    private void ShowFilterTypeMenu()
+    {
+        _filterMenuOpen = true;
+        MenuOptionsHost.Children.Clear();
+        _filterMenuLabels.Clear();
+
+        var options = new string[_filterMenuTypes.Length + 1];
+        options[0] = "All";
+        Array.Copy(_filterMenuTypes, 0, options, 1, _filterMenuTypes.Length);
+        foreach (var option in options)
+            AddFilterMenuItem(option);
+
+        PositionMenuPopup("Filter Type", options);
+        MenuOverlay.IsVisible = true;
+    }
+
+    private void AddFilterMenuItem(string option)
+    {
+        var label = new Label
+        {
+            Text = IsFilterTypeChecked(option) ? $"✓ {option}" : option,
+            TextColor = Color.FromArgb("#202020"),
+            FontSize = 12,
+            FontAutoScalingEnabled = false,
+            VerticalTextAlignment = TextAlignment.Center,
+            HorizontalTextAlignment = TextAlignment.Start,
+            LineBreakMode = LineBreakMode.NoWrap
+        };
+        _filterMenuLabels[option] = label;
+        var item = new Border
+        {
+            Style = (Style)Resources["PopupMenuItem"],
+            Content = label
+        };
+        var tap = new TapGestureRecognizer();
+        tap.Tapped += (_, _) => OnFilterTypeTapped(option);
+        item.GestureRecognizers.Add(tap);
+        MenuOptionsHost.Children.Add(item);
+    }
+
+    private bool IsFilterTypeChecked(string option) =>
+        option == "All"
+            ? _selectedTypes == null
+            : _selectedTypes != null && _selectedTypes.Contains(option);
+
+    private void OnFilterTypeTapped(string option)
+    {
+        if (option == "All")
+        {
+            // WinForms CheckOnClick: clicking All toggles it; checking All
+            // clears every type item, unchecking it leaves no types selected.
+            _selectedTypes = _selectedTypes == null
+                ? new HashSet<string>(StringComparer.Ordinal)
+                : null;
+        }
+        else if (_selectedTypes == null)
+        {
+            // With All active the type items are unchecked, so the first type
+            // tap starts a new selection containing only that type.
+            _selectedTypes = new HashSet<string>(StringComparer.Ordinal) { option };
+        }
+        else if (!_selectedTypes.Add(option))
+        {
+            _selectedTypes.Remove(option);
+        }
+
+        foreach (var pair in _filterMenuLabels)
+            pair.Value.Text = IsFilterTypeChecked(pair.Key) ? $"✓ {pair.Key}" : pair.Key;
+
         _browserTab = "Asset List";
         RefreshBrowserTab();
         ClearAssetListSelectionForFilterChange();
         ApplyAssetFilter();
-        AssetCollection.Focus();
+    }
+
+    private void CloseFilterMenu()
+    {
+        if (!_filterMenuOpen) return;
+        _filterMenuOpen = false;
+        MenuOverlay.IsVisible = false;
+        MenuOptionsHost.Children.Clear();
+        _filterMenuLabels.Clear();
     }
 
     private async void OnDebugMenuClicked(object sender, EventArgs e)
@@ -2772,6 +2856,7 @@ public partial class MainPage : ContentPage
         if (options.Length == 0)
             return Task.FromResult<string?>(null);
 
+        CloseFilterMenu();
         _menuChoiceCompletion?.TrySetResult(null);
         var completion = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         _menuChoiceCompletion = completion;
@@ -2889,11 +2974,17 @@ public partial class MainPage : ContentPage
         MenuOptionsScroll.HeightRequest = visibleItems * 24 + separators;
     }
 
-    private void OnMenuOverlayBackgroundTapped(object? sender, TappedEventArgs e) =>
-        FinishMenuChoice(null);
+    private void OnMenuOverlayBackgroundTapped(object? sender, TappedEventArgs e)
+    {
+        if (_filterMenuOpen)
+            CloseFilterMenu();
+        else
+            FinishMenuChoice(null);
+    }
 
     private void FinishMenuChoice(string? choice)
     {
+        CloseFilterMenu();
         var completion = _menuChoiceCompletion;
         _menuChoiceCompletion = null;
         MenuOverlay.IsVisible = false;
@@ -2972,9 +3063,8 @@ public partial class MainPage : ContentPage
     private void ApplyAssetFilter()
     {
         var query = AssetSearch?.Text?.Trim() ?? "";
-        FilterTypeMenuButton.Text = _selectedTypes == null
-            ? "Filter Type"
-            : $"Filter Type ({_selectedTypes.Count})";
+        // The desktop menu title never changes when types are checked.
+        FilterTypeMenuButton.Text = "Filter Type";
         // Mirror the original WinForms FilterAssetList search scope: Name,
         // Container and PathID. Type filtering is a separate filter-menu state;
         // searching Size, Type or SourceFile here changes desktop semantics.
@@ -2997,8 +3087,7 @@ public partial class MainPage : ContentPage
             ? "No assets loaded. Use File → Load file, Load multiple files, or Load folder."
             : "No assets match the current search and filters.";
         if (StatusLabel != null && _browserTab == "Asset List")
-            StatusLabel.Text = $"{_visibleAssets.Count} / {_allAssets.Count} assets" +
-                (_selectedTypes == null ? " · All types" : $" · {_selectedTypes.Count} types selected");
+            StatusLabel.Text = $"{_visibleAssets.Count} / {_allAssets.Count} assets";
     }
 
 
@@ -4227,211 +4316,6 @@ public partial class MainPage : ContentPage
             if (_selectedAsset?.Id != row.Id) return;
             DumpText.Text = $"Dump failed: {ex.Message}";
             StatusLabel.Text = $"Dump failed: {ex.Message}";
-        }
-    }
-
-    // Native multi-select type filter. The original WinForms menu permits
-    // several ClassIDType entries to be checked simultaneously; a single-choice
-    // action sheet would not preserve that behavior.
-    private sealed class AssetTypeFilterPage : ContentPage
-    {
-        private readonly HashSet<string> _selected;
-        private readonly List<TypeFilterRow> _allRows;
-        private readonly TaskCompletionSource<HashSet<string>?> _completion =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private readonly SearchBar _search = new()
-        {
-            Placeholder = "Search asset types…",
-            FontSize = 14,
-            TextColor = Color.FromArgb("#202020"),
-            PlaceholderColor = Color.FromArgb("#777777"),
-            BackgroundColor = Colors.White
-        };
-        private readonly CollectionView _items = new() { SelectionMode = SelectionMode.None };
-        private readonly Label _summary = new() { FontSize = 12, TextColor = Color.FromArgb("#666666") };
-        private bool _updatingRows;
-        private bool _finished;
-
-        public AssetTypeFilterPage(string[] types, HashSet<string>? current)
-        {
-            _selected = current == null ? new HashSet<string>(types, StringComparer.Ordinal)
-                                        : new HashSet<string>(current, StringComparer.Ordinal);
-            Title = "Filter Type";
-            BackgroundColor = Color.FromArgb("#FFFFFF");
-
-            _allRows = types.Select(type => new TypeFilterRow(type, _selected.Contains(type))).ToList();
-            foreach (var row in _allRows)
-            {
-                row.SelectionChanged += changed =>
-                {
-                    if (_updatingRows) return;
-                    if (changed.IsSelected) _selected.Add(changed.Type);
-                    else _selected.Remove(changed.Type);
-                    UpdateSummary();
-                };
-            }
-
-            _items.ItemTemplate = new DataTemplate(() =>
-            {
-                var check = new CheckBox { Color = Color.FromArgb("#2878C8"), VerticalOptions = LayoutOptions.Center };
-                check.SetBinding(CheckBox.IsCheckedProperty,
-                    new Binding(nameof(TypeFilterRow.IsSelected), BindingMode.TwoWay));
-                var label = new Label
-                {
-                    TextColor = Color.FromArgb("#202020"),
-                    VerticalTextAlignment = TextAlignment.Center,
-                    FontSize = 14
-                };
-                label.SetBinding(Label.TextProperty, nameof(TypeFilterRow.Type));
-                var row = new Grid
-                {
-                    ColumnDefinitions =
-                    {
-                        new ColumnDefinition(GridLength.Auto),
-                        new ColumnDefinition(GridLength.Star)
-                    },
-                    Padding = new Thickness(4, 3)
-                };
-                row.Add(check);
-                row.Add(label, 1);
-                var tap = new TapGestureRecognizer();
-                tap.Tapped += (_, _) =>
-                {
-                    if (label.BindingContext is TypeFilterRow item)
-                        item.IsSelected = !item.IsSelected;
-                };
-                label.GestureRecognizers.Add(tap);
-                return row;
-            });
-            _items.EmptyView = new Label
-            {
-                Text = "No asset types match this search.",
-                TextColor = Color.FromArgb("#666666"),
-                HorizontalTextAlignment = TextAlignment.Center,
-                VerticalTextAlignment = TextAlignment.Center
-            };
-            _search.TextChanged += (_, _) => ApplyFilter();
-
-            var selectAll = new Button { Text = "Select all", BackgroundColor = Color.FromArgb("#E0E0E0"), TextColor = Color.FromArgb("#202020") };
-            selectAll.Clicked += (_, _) => SetAll(true);
-            var clearAll = new Button { Text = "Clear all", BackgroundColor = Color.FromArgb("#E0E0E0"), TextColor = Color.FromArgb("#202020") };
-            clearAll.Clicked += (_, _) => SetAll(false);
-            var apply = new Button { Text = "Apply", BackgroundColor = Color.FromArgb("#E2E2E2"), TextColor = Color.FromArgb("#202020") };
-            apply.Clicked += async (_, _) => await Finish(true);
-            var cancel = new Button { Text = "Cancel", BackgroundColor = Color.FromArgb("#E0E0E0"), TextColor = Color.FromArgb("#202020") };
-            cancel.Clicked += async (_, _) => await Finish(false);
-            var top = new Grid { ColumnDefinitions = { new ColumnDefinition(GridLength.Star), new ColumnDefinition(GridLength.Star) }, ColumnSpacing = 8 };
-            top.Add(selectAll); top.Add(clearAll, 1);
-            var bottom = new Grid { ColumnDefinitions = { new ColumnDefinition(GridLength.Star), new ColumnDefinition(GridLength.Star) }, ColumnSpacing = 8, Padding = 12 };
-            bottom.Add(cancel); bottom.Add(apply, 1);
-            Content = new Grid
-            {
-                Padding = new Thickness(12, 8),
-                RowSpacing = 8,
-                RowDefinitions =
-                {
-                    new RowDefinition(GridLength.Auto),
-                    new RowDefinition(GridLength.Auto),
-                    new RowDefinition(GridLength.Auto),
-                    new RowDefinition(GridLength.Auto),
-                    new RowDefinition(GridLength.Star),
-                    new RowDefinition(GridLength.Auto)
-                },
-                Children =
-                {
-                    new Label { Text = "Filter asset types", FontSize = 16, FontAttributes = FontAttributes.Bold, TextColor = Color.FromArgb("#202020") },
-                    _search,
-                    top,
-                    _summary,
-                    _items,
-                    bottom
-                }
-            };
-            Grid.SetRow(_search, 1);
-            Grid.SetRow(top, 2);
-            Grid.SetRow(_summary, 3);
-            Grid.SetRow(_items, 4);
-            Grid.SetRow(bottom, 5);
-            ApplyFilter();
-        }
-
-        public Task<HashSet<string>?> Completion => _completion.Task;
-
-        protected override void OnDisappearing()
-        {
-            base.OnDisappearing();
-            if (!_finished)
-                _completion.TrySetResult(null);
-        }
-
-        private void SetAll(bool enabled)
-        {
-            _updatingRows = true;
-            foreach (var row in _allRows)
-                row.IsSelected = enabled;
-            _updatingRows = false;
-            _selected.Clear();
-            if (enabled)
-                foreach (var row in _allRows)
-                    _selected.Add(row.Type);
-            UpdateSummary();
-        }
-
-        private void ApplyFilter()
-        {
-            var query = _search.Text?.Trim() ?? string.Empty;
-            _items.ItemsSource = _allRows.Where(row =>
-                query.Length == 0 || Contains(row.Type, query)).ToList();
-            UpdateSummary();
-        }
-
-        private void UpdateSummary() =>
-            _summary.Text = $"{_selected.Count} of {_allRows.Count} types selected · " +
-                $"{_items.ItemsSource?.Cast<TypeFilterRow>().Count() ?? 0} shown";
-
-        private sealed class TypeFilterRow : BindableObject
-        {
-            private bool _isSelected;
-
-            public TypeFilterRow(string type, bool isSelected)
-            {
-                Type = type;
-                _isSelected = isSelected;
-            }
-
-            public string Type { get; }
-            public event Action<TypeFilterRow>? SelectionChanged;
-
-            public bool IsSelected
-            {
-                get => _isSelected;
-                set
-                {
-                    if (_isSelected == value) return;
-                    _isSelected = value;
-                    OnPropertyChanged();
-                    SelectionChanged?.Invoke(this);
-                }
-            }
-        }
-
-        private async Task Finish(bool apply)
-        {
-            if (_finished) return;
-            _finished = true;
-            var result = apply
-                ? new HashSet<string>(_selected, StringComparer.Ordinal)
-                : null;
-            try
-            {
-                await Navigation.PopModalAsync();
-                _completion.TrySetResult(result);
-            }
-            catch (Exception exception)
-            {
-                _completion.TrySetException(exception);
-                throw;
-            }
         }
     }
 
