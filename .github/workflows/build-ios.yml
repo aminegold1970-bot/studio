@@ -11,6 +11,7 @@ permissions:
 jobs:
   build-ios:
     runs-on: macos-26
+
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -23,54 +24,87 @@ jobs:
       - name: Verify .NET SDK
         run: dotnet --version
 
-      - name: Install .NET iOS workload
-        run: dotnet workload install maui-ios --version 10.0.401
+      - name: Install iOS workload
+        run: dotnet workload install maui-ios
 
-      - name: Select Xcode 26.6
-        run: sudo xcode-select --switch /Applications/Xcode_26.6.app
+      - name: Select Xcode
+        run: |
+          XCODE_PATH=$(find /Applications -maxdepth 1 -name 'Xcode*.app' | sort | tail -n 1)
+          if [ -z "$XCODE_PATH" ]; then
+            echo "::error::No Xcode installation found"
+            exit 1
+          fi
+          sudo xcode-select --switch "$XCODE_PATH"
+          xcodebuild -version
 
       - name: Verify Apple toolchain
-        run: xcodebuild -version
-
-      - name: Restore iOS app and referenced projects
         run: |
-          dotnet restore AssetStudio.Mobile/AssetStudioMobile.csproj --runtime ios-arm64 -p:TargetFramework=net10.0-ios
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Restore iOS app
+        run: |
+          dotnet restore AssetStudio.Mobile/AssetStudioMobile.csproj \
+            --runtime ios-arm64 \
+            -p:TargetFramework=net10.0-ios
+
+      - name: Restore referenced projects
+        run: |
           dotnet restore AssetStudio/AssetStudio.csproj
           dotnet restore AssetStudio.PInvoke/AssetStudio.PInvoke.csproj
           dotnet restore Texture2DDecoderWrapper/Texture2DDecoderWrapper.csproj
 
+      - name: List build files before publishing
+        run: |
+          find AssetStudio.Mobile -maxdepth 3 -type f | head -200
+
       - name: Publish unsigned Release app for ARM64
-        run: >-
-          dotnet publish AssetStudio.Mobile/AssetStudioMobile.csproj
-          --configuration Release
-          --framework net10.0-ios
-          --runtime ios-arm64
-          --no-restore
-          -p:EnableCodeSigning=false
-          -p:ArchiveOnBuild=false
-          -p:BuildIpa=false
+        run: |
+          dotnet publish AssetStudio.Mobile/AssetStudioMobile.csproj \
+            --configuration Release \
+            --framework net10.0-ios \
+            --runtime ios-arm64 \
+            --no-restore \
+            -p:EnableCodeSigning=false \
+            -p:ArchiveOnBuild=false \
+            -p:BuildIpa=false \
+            -v:normal
+
+      - name: Find generated app
+        run: |
+          find AssetStudio.Mobile/bin -type d -name '*.app' -print
 
       - name: Package unsigned app as IPA
         shell: bash
         run: |
           set -euo pipefail
 
-          app_root="AssetStudio.Mobile/bin/Release/net10.0-ios/ios-arm64"
-          app_path="$(find "$app_root" -type d -name '*.app' -prune -print -quit)"
+          app_path="$(find AssetStudio.Mobile/bin -type d -name '*.app' -prune -print -quit)"
+
           if [[ -z "$app_path" ]]; then
-            echo "::error::No ARM64 iOS .app bundle was produced under $app_root"
+            echo "::error::No iOS .app bundle was produced"
+            echo "Build output:"
+            find AssetStudio.Mobile/bin -maxdepth 8 -print || true
             exit 1
           fi
 
+          echo "Found app: $app_path"
+
           ipa_path="$GITHUB_WORKSPACE/artifacts/AssetStudioMobile-unsigned.ipa"
           staging_root="$(mktemp -d "$RUNNER_TEMP/assetstudio-ipa.XXXXXX")"
-          mkdir -p "$staging_root/Payload" "$(dirname "$ipa_path")"
+
+          mkdir -p "$staging_root/Payload"
+          mkdir -p "$(dirname "$ipa_path")"
+
           ditto "$app_path" "$staging_root/Payload/$(basename "$app_path")"
-          ditto -c -k --sequesterRsrc --keepParent "$staging_root/Payload" "$ipa_path"
+
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$staging_root/Payload" "$ipa_path"
 
           unzip -tq "$ipa_path"
+
           if ! unzip -Z1 "$ipa_path" | grep -Eq '^Payload/[^/]+\.app/Info\.plist$'; then
-            echo "::error::The generated IPA does not contain an app bundle at Payload/<name>.app"
+            echo "::error::Invalid IPA structure"
             exit 1
           fi
 
