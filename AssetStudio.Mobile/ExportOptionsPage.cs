@@ -12,9 +12,10 @@ namespace AssetStudioMobile;
 internal sealed class ExportOptionsPage : ContentPage
 {
     private static readonly string[] ExportKindLabels = { "Converted", "Raw", "Dump" };
-    private static readonly string[] ImageFormatLabels = { "BMP", "PNG", "JPEG", "TGA" };
+    // Desktop ExportOptions uses these exact combobox item strings.
+    private static readonly string[] ImageFormatLabels = { "Bmp", "Png", "Jpeg", "Tga" };
     private static readonly string[] GroupingLabels =
-        { "Type name", "Container path", "Source file name", "Do not group" };
+        { "type name", "container path", "source file name", "do not group" };
     private static readonly string[] FbxVersionLabels = { "6.1", "7.1", "7.2", "7.3", "7.4", "7.5" };
     private static readonly string[] FbxFormatLabels = { "Binary", "Ascii" };
 
@@ -26,6 +27,7 @@ internal sealed class ExportOptionsPage : ContentPage
     private readonly Switch _restoreExtension = new();
     private readonly Switch _convertTextures = new();
     private readonly Switch _convertAudio = new();
+    private readonly Switch _shareAfterExport = new();
     private readonly Switch _eulerFilter = new();
     private readonly Entry _filterPrecision = CreateNumberEntry();
     private readonly Switch _exportAllNodes = new();
@@ -45,7 +47,7 @@ internal sealed class ExportOptionsPage : ContentPage
     {
         _source = settings ?? throw new ArgumentNullException(nameof(settings));
         _apply = apply ?? throw new ArgumentNullException(nameof(apply));
-        Title = "Export Options";
+        Title = "Export options";
         BackgroundColor = Color.FromArgb("#FFFFFF");
 
         ConfigurePicker(_defaultKind, ExportKindLabels, (int)_source.DefaultExportKind);
@@ -56,6 +58,7 @@ internal sealed class ExportOptionsPage : ContentPage
         _restoreExtension.IsToggled = _source.RestoreTextAssetExtension;
         _convertTextures.IsToggled = _source.ConvertTextures;
         _convertAudio.IsToggled = _source.ConvertAudio;
+        _shareAfterExport.IsToggled = _source.ShareAfterExport;
         _eulerFilter.IsToggled = _source.Fbx.EulerFilter;
         _filterPrecision.Text = Format(_source.Fbx.FilterPrecision);
         _exportAllNodes.IsToggled = _source.Fbx.ExportAllNodes;
@@ -76,10 +79,18 @@ internal sealed class ExportOptionsPage : ContentPage
         AddSwitch(layout, "Restore TextAsset extension name", _restoreExtension);
         AddSwitch(layout, "Convert Texture2D", _convertTextures);
         AddPicker(layout, "Texture image format", _imageFormat);
-        AddSwitch(layout, "Convert AudioClip to WAV (PCM)", _convertAudio);
+        AddSwitch(layout, "Convert AudioClip to WAV(PCM)", _convertAudio);
         layout.Children.Add(new Label
         {
-            Text = "Mobile presents the share sheet after export instead of opening a desktop folder.",
+            Text = "Mobile converts PCM/Vorbis to WAV. Other codecs are preserved as original embedded data; desktop FMOD conversion is not available on iOS.",
+            TextColor = Color.FromArgb("#666666"),
+            FontSize = 11,
+            Margin = new Thickness(0, 4, 0, 8)
+        });
+        AddSwitch(layout, "Show share sheet after export", _shareAfterExport);
+        layout.Children.Add(new Label
+        {
+            Text = "iOS equivalent of Open folder after export. When off, files are saved to Files → AssetStudio → Exports.",
             TextColor = Color.FromArgb("#666666"),
             FontSize = 11,
             Margin = new Thickness(0, 4, 0, 6)
@@ -94,7 +105,11 @@ internal sealed class ExportOptionsPage : ContentPage
         AddSwitch(layout, "Export blendshape", _exportBlendShape);
         AddSwitch(layout, "All nodes cast to bone", _castToBone);
         AddNumber(layout, "BoneSize", _boneSize);
-        AddSwitch(layout, "Export all UVs as diffuse maps", _allUvsAsDiffuse);
+        AddSwitch(
+            layout,
+            "Export all UVs as diffuse maps",
+            _allUvsAsDiffuse,
+            "Unchecked: UV1 exported as normal map. Check this if your export is missing a UV map.");
         AddNumber(layout, "ScaleFactor", _scaleFactor);
         AddPicker(layout, "FBXVersion", _fbxVersion);
         AddPicker(layout, "FBXFormat", _fbxFormat);
@@ -155,11 +170,22 @@ internal sealed class ExportOptionsPage : ContentPage
         layout.Children.Add(row);
     }
 
-    private static void AddSwitch(VerticalStackLayout layout, string label, Switch toggle)
+    private static void AddSwitch(
+        VerticalStackLayout layout,
+        string label,
+        Switch toggle,
+        string? hint = null)
     {
         var row = CreateRow(GridLength.Auto);
-        row.Add(CreateRowLabel(label));
+        var rowLabel = CreateRowLabel(label);
+        row.Add(rowLabel);
         row.Add(toggle, 1);
+        if (!string.IsNullOrWhiteSpace(hint))
+        {
+            ToolTipProperties.SetText(row, hint);
+            ToolTipProperties.SetText(rowLabel, hint);
+            SemanticProperties.SetHint(row, hint);
+        }
         layout.Children.Add(row);
     }
 
@@ -218,7 +244,14 @@ internal sealed class ExportOptionsPage : ContentPage
             || !TryParse(_boneSize.Text, out var boneSize)
             || !TryParse(_scaleFactor.Text, out var scaleFactor))
         {
-            await DisplayAlert("Export Options", "FilterPrecision, BoneSize and ScaleFactor must be numbers.", "OK");
+            await DisplayAlert("Export options", "FilterPrecision, BoneSize and ScaleFactor must be numbers.", "OK");
+            return;
+        }
+        if (!IsDesktopNumericRange(filterPrecision)
+            || !IsDesktopNumericRange(boneSize)
+            || !IsDesktopNumericRange(scaleFactor))
+        {
+            await DisplayAlert("Export options", "FilterPrecision, BoneSize and ScaleFactor must be between 0 and 100 with at most 2 decimal places.", "OK");
             return;
         }
 
@@ -228,6 +261,7 @@ internal sealed class ExportOptionsPage : ContentPage
             TextureFormat = ImageFromIndex(_imageFormat.SelectedIndex),
             ConvertTextures = _convertTextures.IsToggled,
             ConvertAudio = _convertAudio.IsToggled,
+            ShareAfterExport = _shareAfterExport.IsToggled,
             RestoreTextAssetExtension = _restoreExtension.IsToggled,
             ArchiveGrouping = (MobileArchiveGrouping)Math.Clamp(_grouping.SelectedIndex, 0, GroupingLabels.Length - 1),
             Fbx = new MobileFbxExportOptions
@@ -256,4 +290,8 @@ internal sealed class ExportOptionsPage : ContentPage
 
     private static bool TryParse(string? text, out decimal value) =>
         decimal.TryParse(text, NumberStyles.Number, CultureInfo.InvariantCulture, out value);
+
+    // Desktop NumericUpDown controls use the default 0-100 range and 2 decimals.
+    private static bool IsDesktopNumericRange(decimal value) =>
+        value >= 0m && value <= 100m && decimal.Round(value, 2) == value;
 }

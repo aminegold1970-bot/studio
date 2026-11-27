@@ -1,4 +1,5 @@
 using Microsoft.Maui.ApplicationModel.DataTransfer;
+using Microsoft.Maui.Dispatching;
 using Microsoft.Maui.Storage;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
@@ -30,8 +31,31 @@ public partial class MainPage : ContentPage
     public event Action<bool>? AudioLoopChanged;
     public event Action<double>? AudioSeekRequested;
     public event Action<double>? AudioVolumeChanged;
+    private static readonly IReadOnlyDictionary<string, int[]> MenuSeparatorIndices =
+        new Dictionary<string, int[]>(StringComparer.Ordinal)
+        {
+            ["Export"] = new[] { 2, 3, 5 },
+            ["Model"] = new[] { 2, 4, 5 }
+        };
+
+    private static readonly IReadOnlyDictionary<string, string> OptionMenuHints =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["Display all assets"] =
+                "Check this option will display all types assets. Not extractable assets can export the RAW file.",
+            ["Enable preview"] =
+                "Toggle the loading and preview of readable assets, such as images, sounds, text, etc.\n" +
+                "Disable preview if you have performance or compatibility issues.",
+            ["Display asset infromation"] =
+                "Toggle the overlay that shows information about each asset, eg. image size, format, audio bitrate, etc."
+        };
+
     private CancellationTokenSource? _loadCancellation;
     private bool _assetLoadActive;
+    private IDispatcherTimer? _assetFilterTimer;
+    private const int AssetFilterDebounceMilliseconds = 800;
+    private bool _suppressFilterTextChanged;
+    private LoadMetadata? _loadMetadata;
     private bool _audioLoopEnabled;
     private bool _updatingAudioPosition;
     private readonly ObservableCollection<AssetRow> _allAssets = new();
@@ -43,6 +67,7 @@ public partial class MainPage : ContentPage
     private readonly ObservableCollection<ClassRow> _classes = new();
     private readonly ObservableCollection<MetadataRow> _metadataRows = new();
     private readonly ObservableCollection<ClassRow> _visibleClasses = new();
+    private readonly ObservableCollection<ClassGroup> _visibleClassGroups = new();
     private string _classSortKey = "version";
     private bool _classSortDescending;
     private string _browserTab = "Asset List";
@@ -63,6 +88,7 @@ public partial class MainPage : ContentPage
     private MobileImageFormat _textureExportFormat = MobileImageFormat.Png;
     private bool _convertTextures = true;
     private bool _convertAudio = true;
+    private bool _shareAfterExport = true;
     private bool _restoreTextAssetExtension = true;
     private MobileArchiveGrouping _archiveGrouping = MobileArchiveGrouping.None;
     private string? _previewImagePath;
@@ -73,6 +99,7 @@ public partial class MainPage : ContentPage
     private readonly bool[] _textureChannels = { true, true, true, true };
     private string? _previewTextureMaskedPath;
     private CommunityToolkit.Maui.Views.MediaElement? _videoPlayer;
+    private MeshPreviewDrawable? _inlineMeshDrawable;
     private readonly AssetDocumentLibrary _documentLibrary = new();
     private readonly AssetStudioMobileLoader _assetLoader = new();
     private readonly MobileMonoBehaviourAssemblyService _monoBehaviourAssemblyService = new();
@@ -90,35 +117,28 @@ public partial class MainPage : ContentPage
     public MainPage()
     {
         InitializeComponent();
+        // Desktop installs GUILogger at startup so parser errors honor the
+        // Debug -> Show error message toggle and other events reach the status strip.
+        AssetStudio.Logger.Default = new MobileLogger(this);
+        _assetFilterTimer = Dispatcher.CreateTimer();
+        _assetFilterTimer.Interval = TimeSpan.FromMilliseconds(AssetFilterDebounceMilliseconds);
+        _assetFilterTimer.IsRepeating = false;
+        _assetFilterTimer.Tick += OnAssetFilterTimerTick;
         _showAllAssets = Preferences.Get("AssetStudio.DisplayAllAssets", false);
         _previewEnabled = Preferences.Get("AssetStudio.EnablePreview", true);
         _displayAssetInformation = Preferences.Get("AssetStudio.DisplayAssetInformation", true);
         PreviewDetails.IsVisible = _displayAssetInformation;
-        if (Enum.TryParse(
-            Preferences.Get("AssetStudio.TextureExportFormat", nameof(MobileImageFormat.Png)),
-            ignoreCase: true,
-            out MobileImageFormat savedImageFormat))
-        {
-            _textureExportFormat = savedImageFormat;
-        }
-        _convertTextures = Preferences.Get("AssetStudio.ConvertTextures", true);
-        _convertAudio = Preferences.Get("AssetStudio.ConvertAudio", true);
-        _restoreTextAssetExtension = Preferences.Get("AssetStudio.RestoreTextAssetExtension", true);
+        // Desktop loads every export option from settings at startup, including
+        // the default export kind and the type-name grouping default.
+        ApplyExportSettings(MobileExportSettings.Load(), announce: false);
         for (var index = 0; index < _textureChannels.Length; index++)
             _textureChannels[index] = Preferences.Get(TextureChannelsPage.PreferenceKeys[index], true);
-        if (Enum.TryParse(
-            Preferences.Get("AssetStudio.ArchiveGrouping", nameof(MobileArchiveGrouping.None)),
-            ignoreCase: true,
-            out MobileArchiveGrouping savedArchiveGrouping)
-            && Enum.IsDefined(typeof(MobileArchiveGrouping), savedArchiveGrouping))
-        {
-            _archiveGrouping = savedArchiveGrouping;
-        }
-        _assetLoader.MainPageHost = (assets, hierarchy, classes) =>
+        _assetLoader.MainPageHost = (assets, hierarchy, classes, metadata) =>
         {
             SetAssets(assets);
             SetHierarchy(hierarchy);
             SetClasses(classes);
+            SetLoadMetadata(metadata);
         };
         AudioPlayRequested += OnAudioPlaybackRequested;
         AudioPauseRequested += OnAudioPauseRequested;
@@ -139,7 +159,7 @@ public partial class MainPage : ContentPage
         }));
         AssetCollection.ItemsSource = _visibleAssets;
         HierarchyCollection.ItemsSource = _hierarchy;
-        ClassesCollection.ItemsSource = _visibleClasses;
+        ClassesCollection.ItemsSource = _visibleClassGroups;
         RefreshBrowserTab();
         DroppedFilesReceived += OnDroppedFilesReceived;
         DropFailed += OnDropFailed;
@@ -150,6 +170,23 @@ public partial class MainPage : ContentPage
         var workspaceSplitter = new PanGestureRecognizer();
         workspaceSplitter.PanUpdated += OnWorkspaceDividerPanUpdated;
         WorkspaceDivider.GestureRecognizers.Add(workspaceSplitter);
+
+        // Desktop shows the mesh in the preview pane immediately; reuse the
+        // full-screen drawable inline and keep the modal viewer for details.
+        var inlineMeshPan = new PanGestureRecognizer();
+        inlineMeshPan.PanUpdated += (_, args) =>
+        {
+            _inlineMeshDrawable?.UpdatePan(args);
+            InlineMeshView.Invalidate();
+        };
+        InlineMeshView.GestureRecognizers.Add(inlineMeshPan);
+        var inlineMeshPinch = new PinchGestureRecognizer();
+        inlineMeshPinch.PinchUpdated += (_, args) =>
+        {
+            _inlineMeshDrawable?.UpdatePinch(args);
+            InlineMeshView.Invalidate();
+        };
+        InlineMeshView.GestureRecognizers.Add(inlineMeshPinch);
     }
 
 
@@ -384,6 +421,18 @@ public partial class MainPage : ContentPage
     {
         try
         {
+            // Desktop routes a single dropped directory to LoadFolder and
+            // multiple dropped paths to LoadFiles.
+            if (paths.Count == 1 && Directory.Exists(paths[0]))
+            {
+                var folderPath = await _documentLibrary.ImportFolderAsync(paths[0]);
+#if IOS
+                AssetStudioDropBridge.CleanupTemporaryCopy(paths[0]);
+#endif
+                await LoadPersistentFolderAsync(folderPath, "Dropped folder");
+                return;
+            }
+
             var imported = new List<FileResult>();
             foreach (var path in paths)
             {
@@ -456,7 +505,7 @@ public partial class MainPage : ContentPage
         try
         {
             await _assetLoader.LoadFilesAsync(selected, progress, cancellation.Token);
-            SetBusy(false, $"{sourceLabel} loaded · {_allAssets.Count} assets · {_classes.Count} classes");
+            SetBusy(false, BuildDesktopLoadStatus(sourceLabel));
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {
@@ -500,7 +549,7 @@ public partial class MainPage : ContentPage
         try
         {
             await _assetLoader.LoadFolderAsync(folderPath, progress, cancellation.Token);
-            SetBusy(false, $"{sourceLabel} loaded · {_allAssets.Count} assets · {_classes.Count} classes");
+            SetBusy(false, BuildDesktopLoadStatus(sourceLabel));
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {
@@ -678,6 +727,25 @@ public partial class MainPage : ContentPage
                     .Count();
                 StatusLabel.Text = $"Asset Classes · {_classes.Count} classes · {versionCount} Unity version(s)";
             }
+        }
+
+        if (MainThread.IsMainThread) Apply();
+        else MainThread.BeginInvokeOnMainThread(Apply);
+    }
+
+    // Mirrors the desktop window title after a load: product name, Unity
+    // version, and target platform. The nav bar is hidden on mobile, so the
+    // desktop-equivalent title is shown as a compact line above the status.
+    public void SetLoadMetadata(LoadMetadata metadata)
+    {
+        _loadMetadata = metadata;
+        void Apply()
+        {
+            LoadInfoLabel.IsVisible = true;
+            var productName = string.IsNullOrWhiteSpace(metadata.ProductName)
+                ? "no productName"
+                : metadata.ProductName;
+            LoadInfoLabel.Text = $"AssetStudioGUI · {productName} · {metadata.UnityVersion} · {metadata.TargetPlatform}";
         }
 
         if (MainThread.IsMainThread) Apply();
@@ -957,10 +1025,10 @@ public partial class MainPage : ContentPage
             AudioSeekSlider.Minimum = 0;
             AudioSeekSlider.Maximum = 1;
             AudioSeekSlider.Value = 0;
-            AudioCurrentTime.Text = "0:00";
-            AudioDuration.Text = "0:00";
+            AudioCurrentTime.Text = "0:00.0";
+            AudioDuration.Text = "0:00.0";
             _audioLoopEnabled = false;
-            AudioLoopButton.Text = "Loop: Off";
+            SetAudioLoopVisualState();
             AudioVolumeSlider.Value = 1;
             PreviewDetails.Text = details;
             RefreshPreviewSurfaceVisibility();
@@ -1039,22 +1107,56 @@ public partial class MainPage : ContentPage
         });
     }
 
-    public void ShowModelPreview(string title, string details)
+    public void ShowModelPreview(string title, string details) =>
+        ShowModelPreview(title, details, null, sceneObject: false);
+
+    private void ShowModelPreview(
+        string title,
+        string details,
+        MeshPreviewDrawable? suppliedDrawable,
+        bool sceneObject)
     {
         MainThread.BeginInvokeOnMainThread(() =>
         {
             _showingEmptyPreview = false;
             ResetPreviewSurface();
             PreviewTitle.Text = title;
-            PreviewKind.Text = "Mesh / Model";
+            PreviewKind.Text = sceneObject ? "Scene Object" : "Mesh / Model";
             ModelPreviewFrame.IsVisible = true;
             ModelPreviewInfo.Text = string.IsNullOrWhiteSpace(details)
                 ? "A wireframe preview is available for individual Mesh assets." : details;
-            OpenMeshPreviewButton.IsVisible = _selectedAsset?.SourceAsset is AssetStudio.Mesh;
-            OpenSceneObjectPreviewButton.IsVisible = false;
+            if (suppliedDrawable != null)
+            {
+                SetInlineMeshDrawable(suppliedDrawable, "Unable to preview this scene object.");
+            }
+            else if (_selectedAsset?.SourceAsset is AssetStudio.Mesh mesh)
+            {
+                try
+                {
+                    var drawable = new MeshPreviewDrawable(mesh);
+                    SetInlineMeshDrawable(drawable, "Unable to preview this mesh. The asset can still be exported.");
+                }
+                catch
+                {
+                    SetInlineMeshDrawable(null, "Unable to preview this mesh. The asset can still be exported.");
+                }
+            }
+            OpenMeshPreviewButton.IsVisible = !sceneObject && _selectedAsset?.SourceAsset is AssetStudio.Mesh;
+            OpenSceneObjectPreviewButton.IsVisible = sceneObject;
             PreviewDetails.Text = "";
             RefreshPreviewSurfaceVisibility();
         });
+    }
+
+    private void SetInlineMeshDrawable(MeshPreviewDrawable? drawable, string failureMessage)
+    {
+        _inlineMeshDrawable = drawable;
+        InlineMeshView.Drawable = drawable;
+        InlineMeshView.IsVisible = drawable != null;
+        if (drawable != null)
+            InlineMeshView.Invalidate();
+        else
+            ModelPreviewInfo.Text = failureMessage;
     }
 
     public void ShowUnsupportedPreview(string title, string type, string message)
@@ -1101,6 +1203,9 @@ public partial class MainPage : ContentPage
         FontPreviewFrame.IsVisible = false;
         AudioPreviewFrame.IsVisible = false;
         ModelPreviewFrame.IsVisible = false;
+        _inlineMeshDrawable = null;
+        InlineMeshView.Drawable = null;
+        InlineMeshView.IsVisible = false;
         OpenMeshPreviewButton.IsVisible = false;
         OpenSceneObjectPreviewButton.IsVisible = false;
         AssetImagePreview.Source = null;
@@ -1111,15 +1216,18 @@ public partial class MainPage : ContentPage
         FontSpecimenLarge.FontFamily = null;
         FontSpecimenXLarge.FontFamily = null;
         FontSpecimenHuge.FontFamily = null;
-        FontSpecimenCharacters.FontFamily = null;
+        FontSpecimenSize60.FontFamily = null;
+        FontSpecimenSize72.FontFamily = null;
         AudioPreviewInfo.Text = string.Empty;
         AudioPlaybackStatus.Text = "Stopped";
         AudioFrequency.Text = "— Hz";
         _updatingAudioPosition = true;
         AudioSeekSlider.Value = 0;
         _updatingAudioPosition = false;
-        AudioCurrentTime.Text = "0:00";
-        AudioDuration.Text = "0:00";
+        AudioCurrentTime.Text = "0:00.0";
+        AudioDuration.Text = "0:00.0";
+        AudioPauseButton.Text = "Pause";
+        SetAudioLoopVisualState();
     }
 
     // Called by the host audio backend as playback progresses. Times are seconds.
@@ -1128,7 +1236,9 @@ public partial class MainPage : ContentPage
     {
         MainThread.BeginInvokeOnMainThread(() =>
         {
-            AudioPlaybackStatus.Text = string.IsNullOrWhiteSpace(status) ? "Stopped" : status;
+            var playbackStatus = string.IsNullOrWhiteSpace(status) ? "Stopped" : status;
+            AudioPlaybackStatus.Text = playbackStatus;
+            AudioPauseButton.Text = playbackStatus == "Paused" ? "Resume" : "Pause";
             AudioFrequency.Text = sampleRateHz > 0 ? $"{sampleRateHz:N0} Hz" : "— Hz";
             var duration = Math.Max(0, durationSeconds);
             var position = Math.Clamp(positionSeconds, 0, duration);
@@ -1143,8 +1253,15 @@ public partial class MainPage : ContentPage
 
     private static string FormatAudioTime(double seconds)
     {
-        var total = (int)Math.Max(0, Math.Floor(seconds));
-        return $"{total / 60}:{total % 60:00}";
+        var tenths = (int)Math.Floor(Math.Max(0, seconds) * 10);
+        return $"{tenths / 600}:{tenths / 10 % 60:00}.{tenths % 10}";
+    }
+
+    private void SetAudioLoopVisualState()
+    {
+        AudioLoopButton.Text = "Loop";
+        AudioLoopButton.BackgroundColor = _audioLoopEnabled ? Color.FromArgb("#2878C8") : Color.FromArgb("#E8E8E8");
+        AudioLoopButton.TextColor = _audioLoopEnabled ? Color.FromArgb("#FFFFFF") : Color.FromArgb("#202020");
     }
 
     private void OnAudioPlayClicked(object sender, EventArgs e) => AudioPlayRequested?.Invoke(this, EventArgs.Empty);
@@ -1154,7 +1271,7 @@ public partial class MainPage : ContentPage
     private void OnAudioLoopClicked(object sender, EventArgs e)
     {
         _audioLoopEnabled = !_audioLoopEnabled;
-        AudioLoopButton.Text = _audioLoopEnabled ? "Loop: On" : "Loop: Off";
+        SetAudioLoopVisualState();
         AudioLoopChanged?.Invoke(_audioLoopEnabled);
     }
 
@@ -1260,7 +1377,7 @@ public partial class MainPage : ContentPage
             cancellation.Token.ThrowIfCancellationRequested();
             await Share.Default.RequestAsync(new ShareFileRequest(
                 "AssetStudio unpacked files", new ShareFile(archivePath)));
-            SetBusy(false, "Unpacked files are ready to share.");
+            SetBusy(false, $"Finished extracting {CountArchiveEntries(archivePath)} files.");
         }
         catch (OperationCanceledException)
         {
@@ -1295,7 +1412,7 @@ public partial class MainPage : ContentPage
             cancellation.Token.ThrowIfCancellationRequested();
             await Share.Default.RequestAsync(new ShareFileRequest(
                 "AssetStudio unpacked files", new ShareFile(archivePath)));
-            SetBusy(false, "Unpacked folder files are ready to share.");
+            SetBusy(false, $"Finished extracting {CountArchiveEntries(archivePath)} files.");
         }
         catch (OperationCanceledException)
         {
@@ -1515,10 +1632,19 @@ public partial class MainPage : ContentPage
     // Existing content is retained when the native picker is cancelled.
     private void ResetLoadedWorkspace()
     {
+        _assetFilterTimer?.Stop();
+        _suppressFilterTextChanged = true;
+        _loadMetadata = null;
+        LoadInfoLabel.IsVisible = false;
+        LoadInfoLabel.Text = string.Empty;
         _allAssets.Clear();
         _visibleAssets.Clear();
         _selectedAssets.Clear();
         _selectedAsset = null;
+        AssetSearch.Text = string.Empty;
+        ClassSearch.Text = string.Empty;
+        HierarchySearch.Text = string.Empty;
+        _suppressFilterTextChanged = false;
         AssetCollection.SelectedItems.Clear();
         _hierarchy.Clear();
         _hierarchyRoots.Clear();
@@ -1566,6 +1692,25 @@ public partial class MainPage : ContentPage
         MainThread.BeginInvokeOnMainThread(() => SetBusy(false, message));
     }
 
+    private static int CountArchiveEntries(string archivePath)
+    {
+        using var archive = System.IO.Compression.ZipFile.OpenRead(archivePath);
+        return archive.Entries.Count;
+    }
+
+    // Mirrors the desktop status strip: "Finished loading N files with M
+    // exportable assets", including the failed-read count when present.
+    private string BuildDesktopLoadStatus(string sourceLabel)
+    {
+        if (_loadMetadata is not { } metadata)
+            return $"{sourceLabel} loaded · {_allAssets.Count} assets · {_classes.Count} classes";
+
+        var failed = metadata.FailedReadCount > 0
+            ? $" and {metadata.FailedReadCount} assets failed to read"
+            : string.Empty;
+        return $"Finished loading {metadata.FileCount} files with {metadata.ExportableCount} exportable assets{failed}";
+    }
+
     private void SetBusy(bool busy, string message)
     {
         BusyIndicator.IsVisible = false;
@@ -1598,11 +1743,11 @@ public partial class MainPage : ContentPage
         if (_previewEnabled)
             checkedOptions.Add("Enable preview");
         if (_displayAssetInformation)
-            checkedOptions.Add("Display asset information");
-        var choice = await Choose("Options", checkedOptions,
+            checkedOptions.Add("Display asset infromation");
+        var choice = await Choose("Options", checkedOptions, OptionMenuHints,
             "Display all assets",
             "Enable preview",
-            "Display asset information",
+            "Display asset infromation",
             "Specify Unity version",
             "Load script assemblies",
             "Clear script assemblies",
@@ -1632,7 +1777,7 @@ public partial class MainPage : ContentPage
                 RefreshPreviewSurfaceVisibility();
                 StatusLabel.Text = $"Preview: {(_previewEnabled ? "Enabled" : "Disabled")}";
                 break;
-            case "Display asset information":
+            case "Display asset infromation":
                 _displayAssetInformation = !_displayAssetInformation;
                 Preferences.Set("AssetStudio.DisplayAssetInformation", _displayAssetInformation);
                 PreviewDetails.IsVisible = _displayAssetInformation;
@@ -1655,7 +1800,7 @@ public partial class MainPage : ContentPage
                 try
                 {
                     await Navigation.PushModalAsync(CreateModalNavigationPage(
-                        new ExportOptionsPage(MobileExportSettings.Load(), ApplyExportSettings)));
+                        new ExportOptionsPage(MobileExportSettings.Load(), settings => ApplyExportSettings(settings))));
                 }
                 catch (Exception exception)
                 {
@@ -1670,7 +1815,7 @@ public partial class MainPage : ContentPage
         }
     }
 
-    private void ApplyExportSettings(MobileExportSettings settings)
+    private void ApplyExportSettings(MobileExportSettings settings, bool announce = true)
     {
         ArgumentNullException.ThrowIfNull(settings);
         _defaultExportKind = settings.DefaultExportKind switch
@@ -1684,8 +1829,12 @@ public partial class MainPage : ContentPage
         _convertAudio = settings.ConvertAudio;
         _restoreTextAssetExtension = settings.RestoreTextAssetExtension;
         _archiveGrouping = settings.ArchiveGrouping;
-        StatusLabel.Text = "Export options saved · "
-            + $"texture {settings.TextureFormat} · grouping {settings.ArchiveGrouping} · FBX {settings.Fbx.Format}";
+        _shareAfterExport = settings.ShareAfterExport;
+        if (announce)
+        {
+            StatusLabel.Text = "Export options saved · "
+                + $"texture {settings.TextureFormat} · grouping {settings.ArchiveGrouping} · FBX {settings.Fbx.Format}";
+        }
     }
 
     private async Task LoadMonoBehaviourAssembliesAsync()
@@ -1844,13 +1993,13 @@ public partial class MainPage : ContentPage
         {
             var audioMode = await Choose(
                 "Audio export",
-                "Convert supported PCM/Vorbis to WAV",
+                "Convert AudioClip to WAV(PCM)",
                 "Preserve original audio data");
             if (audioMode == null)
                 return;
-            _convertAudio = audioMode == "Convert supported PCM/Vorbis to WAV";
+            _convertAudio = audioMode == "Convert AudioClip to WAV(PCM)";
             Preferences.Set("AssetStudio.ConvertAudio", _convertAudio);
-            StatusLabel.Text = $"Audio export: {(_convertAudio ? "supported PCM/Vorbis to WAV" : "original embedded data")}";
+            StatusLabel.Text = $"Audio export: {(_convertAudio ? "PCM/Vorbis to WAV; other codecs raw" : "original embedded data")}";
             return;
         }
 
@@ -1882,12 +2031,12 @@ public partial class MainPage : ContentPage
         _menuAnchor = sender as Button;
         var modelOptions = new List<string>
         {
-            "Preview checked scene objects",
             "Export all objects (split)",
             "Export selected objects (split)",
             "Export selected objects (split) + selected AnimationClips",
             "Export selected objects (merge)",
-            "Export selected objects (merge) + selected AnimationClips"
+            "Export selected objects (merge) + selected AnimationClips",
+            "Preview checked scene objects"
         };
 #if IOS
         modelOptions.Add("Export all meshes (static FBX)");
@@ -2001,23 +2150,24 @@ public partial class MainPage : ContentPage
                 : sceneObjects != null
                     ? "AssetStudio scene OBJ model archive"
                     : merge ? "AssetStudio merged OBJ model" : "AssetStudio split OBJ models";
-            await Share.Default.RequestAsync(new ShareFileRequest(shareTitle, new ShareFile(outputPath)));
+            string status;
             if (exportFbx)
             {
-                StatusLabel.Text = sceneObjects == null
+                status = sceneObjects == null
                     ? $"Exported {meshes.Count} mesh(es) as static FBX with available material colors/PBR values; scene transforms, textures, rigs and animations are not included"
                     : $"Exported {meshes.Count} mesh(es) as static FBX with scene transforms, material colors/PBR values and baked skin/blend-shape pose; textures, rigs and animation are not included";
             }
             else if (sceneObjects != null)
             {
-                StatusLabel.Text =
+                status =
                     $"Exported {meshes.Count} scene mesh(es) as static OBJ with material maps, vertex colors and baked skin/blend-shape pose; rigs are not included{animationNote}";
             }
             else
             {
-                StatusLabel.Text =
+                status =
                     $"Exported {meshes.Count} mesh(es) as OBJ with available material colors and texture maps; scene transforms are not included{animationNote}";
             }
+            await PresentExportResultAsync(shareTitle, outputPath, status);
         }
         catch (OperationCanceledException)
         {
@@ -2280,7 +2430,9 @@ public partial class MainPage : ContentPage
         };
         if (targets.Count == 0)
         {
-            StatusLabel.Text = "No assets in the selected XML export scope";
+            StatusLabel.Text = scope == "Selected assets"
+                ? "No Object selected for export."
+                : "No exportable assets loaded";
             return;
         }
 
@@ -2293,9 +2445,10 @@ public partial class MainPage : ContentPage
             SetBusy(true, $"Exporting XML asset list ({snapshot.Count})…");
             var outputPath = await Task.Run(
                 () => MobileAssetExporter.ExportAssetListXml(snapshot), cancellation.Token);
-            await Share.Default.RequestAsync(new ShareFileRequest(
-                "AssetStudio asset list", new ShareFile(outputPath)));
-            StatusLabel.Text = $"Exported XML asset list · {snapshot.Count} item(s) · {scope}";
+            await PresentExportResultAsync(
+                "AssetStudio asset list",
+                outputPath,
+                $"Exported XML asset list · {snapshot.Count} item(s) · {scope}");
         }
         catch (OperationCanceledException)
         {
@@ -2335,7 +2488,9 @@ public partial class MainPage : ContentPage
         };
         if (targets.Count == 0)
         {
-            StatusLabel.Text = "No assets in the selected export scope";
+            StatusLabel.Text = scope == "Selected assets"
+                ? "No Object selected for export."
+                : "No exportable assets loaded";
             return;
         }
 
@@ -2401,13 +2556,12 @@ public partial class MainPage : ContentPage
             }
 
             cancellation.Token.ThrowIfCancellationRequested();
-            await Share.Default.RequestAsync(new ShareFileRequest(
-                $"AssetStudio {exportKind} export", new ShareFile(outputPath)));
-            StatusLabel.Text = rawFallbackCount == 0
+            var status = rawFallbackCount == 0
                 ? $"Exported {count} item(s) · {exportKind} · {scope}"
                 : rawFallbackCount == 1 && fallbackWarning != null
                     ? $"Exported {count} item(s) · raw fallback: {fallbackWarning}"
                     : $"Exported {count} item(s) · {rawFallbackCount} raw fallback(s); see ZIP report";
+            await PresentExportResultAsync($"AssetStudio {exportKind} export", outputPath, status);
         }
         catch (OperationCanceledException)
         {
@@ -2428,7 +2582,9 @@ public partial class MainPage : ContentPage
 
     private async void OnFilterMenuClicked(object sender, EventArgs e)
     {
-        var types = _allAssets.Select(x => x.Type).Where(x => !string.IsNullOrWhiteSpace(x))
+        // Desktop builds Filter Type from exportableAssets, not all parsed objects.
+        var types = _allAssets.Where(x => x.IsExportable).Select(x => x.Type)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
             .Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
         if (types.Length == 0)
         {
@@ -2460,7 +2616,8 @@ public partial class MainPage : ContentPage
             "Debug",
             _showErrorMessages ? new[] { "Show error message" } : Array.Empty<string>(),
             "Show error message",
-            "Export class structures");
+            "Export class structures",
+            "Export class structures (text files)");
         if (choice == "Show error message")
         {
             _showErrorMessages = !_showErrorMessages;
@@ -2468,6 +2625,8 @@ public partial class MainPage : ContentPage
         }
         else if (choice == "Export class structures")
             await ExportClassStructuresAsync();
+        else if (choice == "Export class structures (text files)")
+            await ExportClassStructureTextFilesAsync();
         else if (choice != null)
             StatusLabel.Text = $"Unsupported debug action: {choice}";
     }
@@ -2484,9 +2643,10 @@ public partial class MainPage : ContentPage
         {
             SetBusy(true, $"Exporting {_classes.Count} class structures…");
             var outputPath = await Task.Run(() => MobileAssetExporter.ExportClassStructuresXml(_classes));
-            await Share.Default.RequestAsync(new ShareFileRequest(
-                "AssetStudio class structures", new ShareFile(outputPath)));
-            StatusLabel.Text = $"Exported {_classes.Count} class structures as XML";
+            await PresentExportResultAsync(
+                "AssetStudio class structures",
+                outputPath,
+                $"Exported {_classes.Count} class structures as XML");
         }
         catch (Exception ex)
         {
@@ -2500,12 +2660,113 @@ public partial class MainPage : ContentPage
         }
     }
 
+    // Desktop writes one .txt per class into a folder per Unity version.
+    // On mobile the same layout is exported as a shareable ZIP archive.
+    private async Task ExportClassStructureTextFilesAsync()
+    {
+        if (_classes.Count == 0)
+        {
+            StatusLabel.Text = "No class structures are loaded";
+            return;
+        }
+
+        try
+        {
+            SetBusy(true, $"Exporting {_classes.Count} class structures…");
+            var outputPath = await Task.Run(() =>
+            {
+                var path = Path.Combine(FileSystem.CacheDirectory,
+                    $"assetstudio-class-structures-{Guid.NewGuid():N}.zip");
+                using (var archive = System.IO.Compression.ZipFile.Open(path, System.IO.Compression.ZipArchiveMode.Create))
+                {
+                    foreach (var group in _classes.GroupBy(
+                        item => string.IsNullOrWhiteSpace(item.Version) ? "unknown-version" : item.Version,
+                        StringComparer.OrdinalIgnoreCase))
+                    {
+                        var versionFolder = SafeClassName(group.Key);
+                        foreach (var item in group)
+                        {
+                            var entryName = $"{versionFolder}/{SafeClassName(item.Id)} {SafeClassName(item.Name)}.txt";
+                            var entry = archive.CreateEntry(entryName);
+                            using var stream = new StreamWriter(entry.Open(), new UTF8Encoding(false));
+                            stream.Write(item.StructureText);
+                        }
+                    }
+                }
+                return path;
+            });
+            await PresentExportResultAsync(
+                "AssetStudio class structures",
+                outputPath,
+                "Finished exporting class structures");
+        }
+        catch (Exception ex)
+        {
+            StatusLabel.Text = $"Class export failed: {ex.Message}";
+            if (_showErrorMessages)
+                await DisplayAlert("Class export failed", ex.Message, "OK");
+        }
+        finally
+        {
+            SetBusy(false, StatusLabel.Text);
+        }
+    }
+
+    private static string SafeClassName(string value)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var cleaned = new string(value.Select(c => invalid.Contains(c) ? '_' : c).ToArray());
+        cleaned = cleaned.Trim().Trim('.');
+        return string.IsNullOrWhiteSpace(cleaned) ? "unnamed" : cleaned;
+    }
+
+    // iOS equivalent of desktop "Open folder after export": when enabled the
+    // share sheet opens; otherwise the result is copied to the Files-visible
+    // Documents/AssetStudio/Exports folder and the location is reported.
+    private async Task PresentExportResultAsync(string shareTitle, string outputPath, string status)
+    {
+        if (_shareAfterExport)
+        {
+            await Share.Default.RequestAsync(new ShareFileRequest(shareTitle, new ShareFile(outputPath)));
+            StatusLabel.Text = status;
+            return;
+        }
+
+        var savedPath = CopyExportToDocuments(outputPath);
+        StatusLabel.Text = $"{status} Saved to Files → AssetStudio → Exports ({Path.GetFileName(savedPath)}).";
+    }
+
+    private static string CopyExportToDocuments(string sourcePath)
+    {
+        var exportDirectory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "AssetStudio", "Exports");
+        Directory.CreateDirectory(exportDirectory);
+        var fileName = Path.GetFileName(sourcePath);
+        var destination = Path.Combine(exportDirectory, fileName);
+        if (File.Exists(destination))
+        {
+            var stem = Path.GetFileNameWithoutExtension(fileName);
+            var extension = Path.GetExtension(fileName);
+            destination = Path.Combine(exportDirectory,
+                $"{stem}_{DateTime.UtcNow:yyyyMMdd_HHmmss}_{Guid.NewGuid():N}{extension}");
+        }
+        File.Copy(sourcePath, destination, false);
+        return destination;
+    }
+
     private Task<string?> Choose(string title, params string[] options) =>
-        Choose(title, Array.Empty<string>(), options);
+        Choose(title, Array.Empty<string>(), null, options);
 
     private Task<string?> Choose(
         string title,
         IReadOnlyCollection<string> checkedOptions,
+        params string[] options) =>
+        Choose(title, checkedOptions, null, options);
+
+    private Task<string?> Choose(
+        string title,
+        IReadOnlyCollection<string> checkedOptions,
+        IReadOnlyDictionary<string, string>? hints,
         params string[] options)
     {
         if (options.Length == 0)
@@ -2558,13 +2819,18 @@ public partial class MainPage : ContentPage
                 Style = (Style)Resources["PopupMenuItem"],
                 Content = content
             };
+            if (hints != null && hints.TryGetValue(option, out var hint))
+            {
+                ToolTipProperties.SetText(item, hint);
+                SemanticProperties.SetHint(item, hint);
+            }
             var tap = new TapGestureRecognizer();
             tap.Tapped += (_, _) => FinishMenuChoice(option);
             item.GestureRecognizers.Add(tap);
             MenuOptionsHost.Children.Add(item);
 
             // Match the desktop menu's visual grouping with thin separators.
-            if (title == "Export" && index is 2 or 3 or 5)
+            if (MenuSeparatorIndices.TryGetValue(title, out var separators) && separators.Contains(index))
                 MenuOptionsHost.Children.Add(new BoxView
                 {
                     HeightRequest = 1,
@@ -2617,7 +2883,9 @@ public partial class MainPage : ContentPage
         // Never compress rows to fit. Show at most five complete menu options;
         // the rest remain reachable by scrolling vertically.
         var visibleItems = Math.Min(options.Count, 5);
-        var separators = title == "Export" ? new[] { 2, 3, 5 }.Count(index => index < visibleItems) : 0;
+        var separators = MenuSeparatorIndices.TryGetValue(title, out var indices)
+            ? indices.Count(index => index < visibleItems)
+            : 0;
         MenuOptionsScroll.HeightRequest = visibleItems * 24 + separators;
     }
 
@@ -2670,6 +2938,23 @@ public partial class MainPage : ContentPage
 
     private void OnAssetSearchTextChanged(object sender, TextChangedEventArgs e)
     {
+        // Desktop ListSearchTextChanged restarts an 800 ms timer on every
+        // keystroke instead of filtering the ListView immediately.
+        if (_suppressFilterTextChanged) return;
+        if (_assetFilterTimer == null)
+        {
+            ClearAssetListSelectionForFilterChange();
+            ApplyAssetFilter();
+            return;
+        }
+
+        _assetFilterTimer.Stop();
+        _assetFilterTimer.Start();
+    }
+
+    private void OnAssetFilterTimerTick(object? sender, EventArgs e)
+    {
+        _assetFilterTimer?.Stop();
         ClearAssetListSelectionForFilterChange();
         ApplyAssetFilter();
     }
@@ -2813,9 +3098,8 @@ public partial class MainPage : ContentPage
     private void CollectHierarchyMatches(HierarchyRow node, string query, HashSet<HierarchyRow> visited)
     {
         if (!visited.Add(node)) return;
-        // Match the visible object name and its stable source identifier. IDs are
-        // useful when names are duplicated or when the user copied a PathID.
-        if (Contains(node.DisplayName, query) || Contains(node.Id, query) || Contains(node.ParentId, query))
+        // Desktop tree search matches only the visible node text.
+        if (Contains(node.DisplayName, query))
             _hierarchySearchResults.Add(node);
         foreach (var child in node.Children) CollectHierarchyMatches(child, query, visited);
     }
@@ -2847,8 +3131,8 @@ public partial class MainPage : ContentPage
     {
         if (_updatingHierarchyChecks || sender is not CheckBox check || check.BindingContext is not HierarchyRow row) return;
         _updatingHierarchyChecks = true;
+        // Desktop propagates the changed state only downward to descendants.
         SetHierarchyCheckedRecursive(row, e.Value);
-        UpdateHierarchyAncestors(row.Parent);
         _updatingHierarchyChecks = false;
         StatusLabel.Text = $"{_hierarchyById.Values.Count(x => x.IsChecked)} scene objects checked";
     }
@@ -2861,18 +3145,6 @@ public partial class MainPage : ContentPage
         if (!visited.Add(node)) return;
         node.IsChecked = value;
         foreach (var child in node.Children) SetHierarchyCheckedRecursive(child, value, visited);
-    }
-
-    // Keep ancestor checkboxes synchronized with their descendants. A parent is
-    // checked only when every direct child subtree is checked.
-    private static void UpdateHierarchyAncestors(HierarchyRow? node)
-    {
-        var visited = new HashSet<HierarchyRow>();
-        while (node != null && visited.Add(node))
-        {
-            node.IsChecked = node.Children.Count > 0 && node.Children.All(child => child.IsChecked);
-            node = node.Parent;
-        }
     }
 
     // Export/integration layer can retrieve the exact checked scene objects.
@@ -2893,41 +3165,31 @@ public partial class MainPage : ContentPage
             ? _selectedAssets.ToList()
             : new List<AssetRow> { row };
 
-        var actions = new List<string>
-        {
-            "Copy name", "Copy container", "Copy type", "Copy PathID", "Copy size"
-        };
+        // Desktop context menu order: Copy text, Export selected assets,
+        // conditional Animator export, Go to scene hierarchy, Show original file.
+        var actions = new List<string> { "Copy text", "Export selected assets" };
+        var hasAnimator = targets.Any(row => row.SourceAsset is AssetStudio.Animator);
+        var hasAnimationClip = targets.Any(row => row.SourceAsset is AssetStudio.AnimationClip);
+        if (hasAnimator && hasAnimationClip)
+            actions.Add("Export Animator + selected AnimationClips");
         if (targets.Count == 1)
         {
+            actions.Add("Go to scene hierarchy");
             actions.Add("Show original file");
-            actions.Add("Go to Scene Hierarchy");
         }
-        actions.Add("Export selected assets");
-        if (targets.Any(row => row.SourceAsset is AssetStudio.Animator or AssetStudio.AnimationClip))
-            actions.Add("Animator + selected AnimationClips");
 
         _menuAnchor = null;
         var action = await Choose(row.Name, actions.ToArray());
         if (action == null) return;
 
-        string? copyValue = action switch
+        if (action == "Copy text")
         {
-            "Copy name" => row.Name,
-            "Copy container" => row.Container,
-            "Copy type" => row.Type,
-            "Copy PathID" => row.PathId,
-            "Copy size" => row.DisplaySize,
-            _ => null
-        };
-
-        if (copyValue != null)
-        {
-            await Clipboard.Default.SetTextAsync(copyValue);
-            StatusLabel.Text = $"Copied {action[5..]}";
+            await Clipboard.Default.SetTextAsync(row.Name);
+            StatusLabel.Text = "Copied text";
             return;
         }
 
-        if (action == "Go to Scene Hierarchy")
+        if (action == "Go to scene hierarchy")
         {
             NavigateToHierarchyNode(row);
             return;
@@ -2947,7 +3209,7 @@ public partial class MainPage : ContentPage
             return;
         }
 
-        if (action == "Animator + selected AnimationClips")
+        if (action == "Export Animator + selected AnimationClips")
         {
             var animatorAndClips = targets
                 .Where(row => row.SourceAsset is AssetStudio.Animator or AssetStudio.AnimationClip)
@@ -3045,8 +3307,21 @@ public partial class MainPage : ContentPage
                     break;
                 case AssetStudio.Texture2D texture:
                     PreviewDetails.Text = "Decoding texture…";
-                    var exportedPath = await Task.Run(() => MobileAssetExporter.Export(texture));
+                    string? exportedPath = null;
+                    try
+                    {
+                        exportedPath = await Task.Run(() => MobileAssetExporter.Export(texture));
+                    }
+                    catch
+                    {
+                        // Desktop reports unsupported images instead of a generic preview error.
+                    }
                     if (!IsActivePreview(row)) return;
+                    if (string.IsNullOrWhiteSpace(exportedPath))
+                    {
+                        StatusLabel.Text = "Unsupported image for preview";
+                        break;
+                    }
                     var (previewPath, temporaryPreview) = ApplyTextureChannelMask(exportedPath);
                     if (!IsActivePreview(row))
                     {
@@ -3066,10 +3341,19 @@ public partial class MainPage : ContentPage
                             texture.m_TextureSettings?.m_MipBias ?? 0f,
                             DescribeTextureWrapMode(texture.m_TextureSettings?.m_WrapMode),
                             DescribeEnabledTextureChannels()));
+                    StatusLabel.Text = "'Ctrl'+'R'/'G'/'B'/'A' for Channel Toggle · or tap Channels";
                     break;
                 case AssetStudio.Mesh mesh:
                     ShowModelPreview(row.Name,
                         $"Mesh · {mesh.m_VertexCount:N0} vertices · Open the wireframe preview to inspect it.");
+                    if (mesh.m_VertexCount <= 0 || mesh.m_Vertices is not { Length: > 0 })
+                    {
+                        StatusLabel.Text = "Mesh can't be previewed.";
+                        break;
+                    }
+                    StatusLabel.Text = InlineMeshView.IsVisible
+                        ? "Drag to rotate · Pinch to zoom · Can be exported to FBX file."
+                        : "Unable to preview this mesh";
                     break;
                 case AssetStudio.MonoBehaviour behaviour:
                     var conversion = await Task.Run(() => _monoBehaviourAssemblyService.Convert(behaviour));
@@ -3107,6 +3391,10 @@ public partial class MainPage : ContentPage
 #if IOS
                     if (font.m_FontData is { Length: > 0 })
                         await ApplyEmbeddedFontPreviewAsync(font, row);
+                    else
+                        StatusLabel.Text = "Unsupported font for preview. Try to export.";
+#else
+                    StatusLabel.Text = "Unsupported font for preview. Try to export.";
 #endif
                     break;
                 case AssetStudio.Shader shader:
@@ -3117,8 +3405,21 @@ public partial class MainPage : ContentPage
                     break;
                 case AssetStudio.Sprite sprite:
                     PreviewDetails.Text = "Cropped sprite preview with packed rotation, tight-mesh masking, and separate alpha texture applied when present.";
-                    var spriteImage = await Task.Run(() => MobileAssetExporter.Export(sprite));
+                    string? spriteImage = null;
+                    try
+                    {
+                        spriteImage = await Task.Run(() => MobileAssetExporter.Export(sprite));
+                    }
+                    catch
+                    {
+                        // Desktop reports unsupported sprites instead of a generic preview error.
+                    }
                     if (!IsActivePreview(row)) return;
+                    if (string.IsNullOrWhiteSpace(spriteImage))
+                    {
+                        StatusLabel.Text = "Unsupported sprite for preview.";
+                        break;
+                    }
                     ShowTexturePreview(row.Name, ImageSource.FromFile(spriteImage),
                         (int)sprite.m_Rect.width, (int)sprite.m_Rect.height,
                         "PNG sprite crop", PreviewDetails.Text, spriteImage);
@@ -3129,6 +3430,17 @@ public partial class MainPage : ContentPage
                 case AssetStudio.MovieTexture:
                     await ShowAssetDumpOrSummaryAsync(row,
                         "Movie data is available through Export in its stored OGV format.");
+                    StatusLabel.Text = "Only supported export.";
+                    break;
+                case AssetStudio.Animator:
+                    await ShowAssetDumpOrSummaryAsync(row,
+                        "Animator clips can be exported with the selected Animator or scene objects.");
+                    StatusLabel.Text = "Can be exported to FBX file.";
+                    break;
+                case AssetStudio.AnimationClip:
+                    await ShowAssetDumpOrSummaryAsync(row,
+                        "AnimationClip data can be exported with an Animator or selected scene objects.");
+                    StatusLabel.Text = "Can be exported with Animator or Objects";
                     break;
                 default:
                     await ShowAssetDumpOrSummaryAsync(row,
@@ -3179,8 +3491,12 @@ public partial class MainPage : ContentPage
             }
 
             var drawable = await Task.Run(() => new MeshPreviewDrawable(geometries));
-            await Navigation.PushModalAsync(CreateModalNavigationPage(
-                new MeshPreviewPage(node.DisplayName, drawable)));
+            ShowModelPreview(
+                node.DisplayName,
+                $"Scene object · {geometries.Count} renderable mesh(es) · Drag to rotate, pinch to zoom.",
+                drawable,
+                sceneObject: true);
+            StatusLabel.Text = "Drag to rotate · Pinch to zoom · Preview selected scene object";
         }
         catch (Exception exception)
         {
@@ -3212,6 +3528,7 @@ public partial class MainPage : ContentPage
         for (var index = 0; index < _textureChannels.Length; index++)
             _textureChannels[index] = channels[index];
         TextureChannelsButton.Text = $"Channels: {DescribeEnabledTextureChannels()}";
+        StatusLabel.Text = "'Ctrl'+'R'/'G'/'B'/'A' for Channel Toggle";
         if (_selectedAsset?.SourceAsset is AssetStudio.Texture2D)
             await PresentAssetPreviewAsync(_selectedAsset);
     }
@@ -3397,7 +3714,8 @@ public partial class MainPage : ContentPage
         FontSpecimenLarge.FontFamily = fontName;
         FontSpecimenXLarge.FontFamily = fontName;
         FontSpecimenHuge.FontFamily = fontName;
-        FontSpecimenCharacters.FontFamily = fontName;
+        FontSpecimenSize60.FontFamily = fontName;
+        FontSpecimenSize72.FontFamily = fontName;
         PreviewDetails.Text += $"\nRendering embedded font: {fontName}";
     }
 
@@ -3797,7 +4115,10 @@ public partial class MainPage : ContentPage
         StatusLabel.Text = $"Selected scene object: {node.DisplayName} · {meshCount} mesh(es)";
     }
 
-    private void OnClassSearchTextChanged(object sender, TextChangedEventArgs e) => ApplyClassFilter();
+    private void OnClassSearchTextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!_suppressFilterTextChanged) ApplyClassFilter();
+    }
 
     private void ApplyClassFilter()
     {
@@ -3816,6 +4137,7 @@ public partial class MainPage : ContentPage
         var selectedClass = ClassesCollection?.SelectedItem as ClassRow;
         _visibleClasses.Clear();
         foreach (var item in filtered) _visibleClasses.Add(item);
+        RefreshClassGroups();
         if (selectedClass != null && _visibleClasses.Contains(selectedClass))
             ClassesCollection.SelectedItem = selectedClass;
         else if (ClassesCollection != null)
@@ -3825,6 +4147,19 @@ public partial class MainPage : ContentPage
             : "No classes match the current search.";
         if (StatusLabel != null && _browserTab == "Asset Classes")
             StatusLabel.Text = $"{_visibleClasses.Count} / {_classes.Count} classes";
+    }
+
+    // Desktop uses one ListViewGroup per Unity version. MAUI's grouped
+    // CollectionView gets the same headers without WinForms ListViewGroup.
+    private void RefreshClassGroups()
+    {
+        _visibleClassGroups.Clear();
+        foreach (var group in _visibleClasses.GroupBy(
+            item => string.IsNullOrWhiteSpace(item.Version) ? "(unknown version)" : item.Version,
+            StringComparer.OrdinalIgnoreCase))
+        {
+            _visibleClassGroups.Add(new ClassGroup(group.Key, group));
+        }
     }
 
     private static long ParseClassId(string value) => long.TryParse(value, out var id) ? id : long.MaxValue;
@@ -4282,4 +4617,46 @@ public partial class MainPage : ContentPage
         public string Summary { get; init; } = "";
         public string StructureText { get; init; } = "";
     }
+
+    private sealed class MobileLogger : AssetStudio.ILogger
+    {
+        private readonly MainPage _page;
+
+        public MobileLogger(MainPage page) => _page = page;
+
+        public void Log(AssetStudio.LoggerEvent loggerEvent, string message)
+        {
+            if (string.IsNullOrWhiteSpace(message)) return;
+            if (loggerEvent == AssetStudio.LoggerEvent.Error)
+            {
+                if (_page._showErrorMessages)
+                {
+                    MainThread.BeginInvokeOnMainThread(async () =>
+                        await _page.DisplayAlert("AssetStudio", message, "OK"));
+                }
+                return;
+            }
+
+            MainThread.BeginInvokeOnMainThread(() => _page.StatusLabel.Text = message);
+        }
+    }
+
+    // One MAUI CollectionView group per Unity version, matching the desktop
+    // ListViewGroup headers produced by BuildClassStructure().
+    public sealed class ClassGroup : List<ClassRow>
+    {
+        public string Version { get; }
+
+        public ClassGroup(string version, IEnumerable<ClassRow> rows) : base(rows) => Version = version;
+
+        public override string ToString() => Version;
+    }
+
+    public sealed record LoadMetadata(
+        string ProductName,
+        string UnityVersion,
+        string TargetPlatform,
+        int FileCount,
+        int ExportableCount,
+        int FailedReadCount);
 }

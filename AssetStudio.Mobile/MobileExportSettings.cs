@@ -102,6 +102,7 @@ internal sealed class MobileExportSettings
     public MobileImageFormat TextureFormat { get; init; } = MobileImageFormat.Png;
     public bool ConvertTextures { get; init; } = true;
     public bool ConvertAudio { get; init; } = true;
+    public bool ShareAfterExport { get; init; } = true;
     public bool RestoreTextAssetExtension { get; init; } = true;
     public MobileArchiveGrouping ArchiveGrouping { get; init; } = MobileArchiveGrouping.TypeName;
     public MobileFbxExportOptions Fbx { get; init; } = new();
@@ -123,6 +124,7 @@ internal sealed class MobileExportSettings
             TextureFormat = textureFormat,
             ConvertTextures = Preferences.Get("AssetStudio.ConvertTextures", true),
             ConvertAudio = Preferences.Get("AssetStudio.ConvertAudio", true),
+            ShareAfterExport = Preferences.Get("AssetStudio.ShareAfterExport", true),
             RestoreTextAssetExtension = Preferences.Get("AssetStudio.RestoreTextAssetExtension", true),
             ArchiveGrouping = grouping,
             Fbx = MobileFbxExportOptions.Load()
@@ -136,6 +138,7 @@ internal sealed class MobileExportSettings
         Preferences.Set("AssetStudio.TextureExportFormat", settings.TextureFormat.ToString());
         Preferences.Set("AssetStudio.ConvertTextures", settings.ConvertTextures);
         Preferences.Set("AssetStudio.ConvertAudio", settings.ConvertAudio);
+        Preferences.Set("AssetStudio.ShareAfterExport", settings.ShareAfterExport);
         Preferences.Set("AssetStudio.RestoreTextAssetExtension", settings.RestoreTextAssetExtension);
         Preferences.Set("AssetStudio.ArchiveGrouping", settings.ArchiveGrouping.ToString());
         MobileFbxExportOptions.Save(settings.Fbx);

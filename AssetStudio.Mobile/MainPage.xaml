@@ -45,14 +45,14 @@
 
         <Grid x:Name="BrowserToolbarGrid" Grid.Row="1" RowDefinitions="21,Auto,Auto,Auto" Padding="2,0" BackgroundColor="#F0F0F0">
             <Border x:Name="AssetSearchFrame" Stroke="#B7B7B7" StrokeThickness="1" StrokeShape="Rectangle" Padding="5,0" BackgroundColor="#FFFFFF" HeightRequest="21">
-                <Entry x:Name="AssetSearch" Placeholder="Search" PlaceholderColor="#777777" TextColor="#202020" BackgroundColor="Transparent" MinimumHeightRequest="0" FontSize="10" Margin="0" TextChanged="OnAssetSearchTextChanged"/>
+                <Entry x:Name="AssetSearch" Placeholder=" Filter " PlaceholderColor="#777777" TextColor="#202020" BackgroundColor="Transparent" MinimumHeightRequest="0" FontSize="10" Margin="0" TextChanged="OnAssetSearchTextChanged"/>
             </Border>
             <Border x:Name="ClassSearchFrame" Grid.Row="0" IsVisible="False" Stroke="#B7B7B7" StrokeThickness="1" StrokeShape="Rectangle" Padding="5,0" BackgroundColor="#FFFFFF" HeightRequest="21">
                 <Entry x:Name="ClassSearch" Placeholder="Search" PlaceholderColor="#777777" TextColor="#202020" BackgroundColor="Transparent" MinimumHeightRequest="0" FontSize="10" Margin="0" TextChanged="OnClassSearchTextChanged"/>
             </Border>
             <Grid x:Name="HierarchySearchPanel" Grid.Row="0" IsVisible="False" ColumnDefinitions="*,Auto" ColumnSpacing="5">
                 <Border x:Name="HierarchySearchFrame" Stroke="#B7B7B7" StrokeThickness="1" StrokeShape="Rectangle" Padding="5,0" BackgroundColor="#FFFFFF" HeightRequest="21">
-                    <Entry x:Name="HierarchySearch" Placeholder="Search" PlaceholderColor="#777777" TextColor="#202020" BackgroundColor="Transparent" MinimumHeightRequest="0" FontSize="10" Margin="0" ReturnType="Search" Completed="OnHierarchySearchButtonPressed" TextChanged="OnHierarchySearchTextChanged"/>
+                    <Entry x:Name="HierarchySearch" Placeholder=" Search " PlaceholderColor="#777777" TextColor="#202020" BackgroundColor="Transparent" MinimumHeightRequest="0" FontSize="10" Margin="0" ReturnType="Search" Completed="OnHierarchySearchButtonPressed" TextChanged="OnHierarchySearchTextChanged"/>
                 </Border>
                 <Button x:Name="HierarchySearchNextButton" Grid.Column="1" Text="Next" IsVisible="False" Clicked="OnHierarchySearchNextClicked" Style="{StaticResource TabButton}"/>
             </Grid>
@@ -67,10 +67,9 @@
                 <Button Grid.Column="3" Text="PathID" Clicked="OnSortPathId" Style="{StaticResource HeaderButton}"/>
                 <Button Grid.Column="4" Text="Size" Clicked="OnSortSize" Style="{StaticResource HeaderButton}"/>
             </Grid>
-            <Grid x:Name="ClassColumnHeaders" Grid.Row="3" IsVisible="False" ColumnDefinitions="*,Auto,Auto" Padding="3,3" ColumnSpacing="2">
-                <Button Text="Class name" Clicked="OnClassSortNameClicked" Style="{StaticResource HeaderButton}"/>
-                <Button Grid.Column="1" Text="ID" Clicked="OnClassSortIdClicked" Style="{StaticResource HeaderButton}"/>
-                <Button Grid.Column="2" Text="Version" Clicked="OnClassSortVersionClicked" Style="{StaticResource HeaderButton}"/>
+            <Grid x:Name="ClassColumnHeaders" Grid.Row="3" IsVisible="False" ColumnDefinitions="Auto,*" Padding="3,3" ColumnSpacing="2">
+                <Button Text="ID" Clicked="OnClassSortIdClicked" Style="{StaticResource HeaderButton}"/>
+                <Button Grid.Column="1" Text="Name" Clicked="OnClassSortNameClicked" Style="{StaticResource HeaderButton}"/>
             </Grid>
         </Grid>
 
@@ -115,15 +114,18 @@
                     </CollectionView.ItemTemplate>
                 </CollectionView>
                 <CollectionView x:Name="ClassesCollection" IsVisible="False" SelectionMode="Single" SelectionChanged="OnClassSelectionChanged" BackgroundColor="#FFFFFF">
+                    <CollectionView.GroupHeaderTemplate>
+                        <DataTemplate>
+                            <Label Text="{Binding Version}" TextColor="#555555" FontAttributes="Bold" FontSize="10"
+                                   BackgroundColor="#E8E8E8" Padding="6,3"/>
+                        </DataTemplate>
+                    </CollectionView.GroupHeaderTemplate>
                     <CollectionView.EmptyView><Label x:Name="ClassEmptyLabel" Text="No asset classes were loaded." TextColor="#555555" HorizontalTextAlignment="Center" VerticalTextAlignment="Center"/></CollectionView.EmptyView>
                     <CollectionView.ItemTemplate>
                         <DataTemplate>
-                            <Grid ColumnDefinitions="*,Auto" Padding="5,4" ColumnSpacing="8">
-                                <VerticalStackLayout Spacing="2">
-                                    <Label Text="{Binding Name}" TextColor="#202020" FontSize="11"/>
-                                    <Label Text="{Binding Version}" TextColor="#777777" FontSize="9"/>
-                                </VerticalStackLayout>
-                                <Label Grid.Column="1" Text="{Binding Id}" TextColor="#555555" FontSize="10" VerticalTextAlignment="Center"/>
+                            <Grid ColumnDefinitions="Auto,*" Padding="5,4" ColumnSpacing="8">
+                                <Label Text="{Binding Id}" TextColor="#555555" FontSize="10" VerticalTextAlignment="Center"/>
+                                <Label Grid.Column="1" Text="{Binding Name}" TextColor="#202020" FontSize="11" VerticalTextAlignment="Center"/>
                             </Grid>
                         </DataTemplate>
                     </CollectionView.ItemTemplate>
@@ -178,13 +180,14 @@
                         <Border x:Name="FontPreviewFrame" IsVisible="False" BackgroundColor="#F4F4F4" Stroke="#C8C8C8" StrokeThickness="1" Padding="10">
                             <VerticalStackLayout Spacing="7">
                                 <Label Text="Font specimen" TextColor="#333333" FontSize="11"/>
-                                <Label x:Name="FontSpecimenTiny" Text="The quick brown fox jumps over the lazy dog." TextColor="#111111" FontSize="8"/>
-                                <Label x:Name="FontSpecimenSmall" Text="The quick brown fox jumps over the lazy dog." TextColor="#111111" FontSize="12"/>
-                                <Label x:Name="FontSpecimenMedium" Text="The quick brown fox jumps over the lazy dog." TextColor="#111111" FontSize="18"/>
-                                <Label x:Name="FontSpecimenLarge" Text="The quick brown fox jumps over the lazy dog." TextColor="#111111" FontSize="26"/>
-                                <Label x:Name="FontSpecimenXLarge" Text="The quick brown fox jumps over the lazy dog." TextColor="#111111" FontSize="36"/>
-                                <Label x:Name="FontSpecimenHuge" Text="The quick brown fox jumps over the lazy dog." TextColor="#111111" FontSize="48"/>
-                                <Label x:Name="FontSpecimenCharacters" Text="0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz" TextColor="#111111" FontSize="15"/>
+                                <Label x:Name="FontSpecimenTiny" Text="abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWYZ" TextColor="#111111" FontSize="16"/>
+                                <Label x:Name="FontSpecimenSmall" Text="1234567890.:,;'\&quot;(!?)+-*/=" TextColor="#111111" FontSize="12"/>
+                                <Label x:Name="FontSpecimenMedium" Text="The quick brown fox jumps over the lazy dog. 1234567890" TextColor="#111111" FontSize="18"/>
+                                <Label x:Name="FontSpecimenLarge" Text="The quick brown fox jumps over the lazy dog. 1234567890" TextColor="#111111" FontSize="24"/>
+                                <Label x:Name="FontSpecimenXLarge" Text="The quick brown fox jumps over the lazy dog. 1234567890" TextColor="#111111" FontSize="36"/>
+                                <Label x:Name="FontSpecimenHuge" Text="The quick brown fox jumps over the lazy dog. 1234567890" TextColor="#111111" FontSize="48"/>
+                                <Label x:Name="FontSpecimenSize60" Text="The quick brown fox jumps over the lazy dog. 1234567890" TextColor="#111111" FontSize="60"/>
+                                <Label x:Name="FontSpecimenSize72" Text="The quick brown fox jumps over the lazy dog. 1234567890" TextColor="#111111" FontSize="72"/>
                             </VerticalStackLayout>
                         </Border>
                         <Border x:Name="AudioPreviewFrame" IsVisible="False" BackgroundColor="#F7F7F7" Stroke="#C8C8C8" StrokeThickness="1" Padding="8">
@@ -197,14 +200,14 @@
                                 </Grid>
                                 <Slider x:Name="AudioSeekSlider" Minimum="0" Maximum="1" Value="0" ValueChanged="OnAudioSeekChanged"/>
                                 <Grid ColumnDefinitions="*,Auto">
-                                    <Label x:Name="AudioCurrentTime" Text="0:00" TextColor="#444444" FontSize="10"/>
-                                    <Label x:Name="AudioDuration" Grid.Column="1" Text="0:00" TextColor="#444444" FontSize="10"/>
+                                    <Label x:Name="AudioCurrentTime" Text="0:00.0" TextColor="#444444" FontSize="10"/>
+                                    <Label x:Name="AudioDuration" Grid.Column="1" Text="0:00.0" TextColor="#444444" FontSize="10"/>
                                 </Grid>
                                 <Grid ColumnDefinitions="*,*,*,*" ColumnSpacing="6">
-                                    <Button Text="▶ Play" Clicked="OnAudioPlayClicked" Style="{StaticResource TabButton}"/>
-                                    <Button Grid.Column="1" Text="Ⅱ Pause" Clicked="OnAudioPauseClicked" Style="{StaticResource TabButton}"/>
-                                    <Button Grid.Column="2" Text="■ Stop" Clicked="OnAudioStopClicked" Style="{StaticResource TabButton}"/>
-                                    <Button x:Name="AudioLoopButton" Grid.Column="3" Text="Loop: Off" Clicked="OnAudioLoopClicked" Style="{StaticResource TabButton}"/>
+                                    <Button Text="Play" Clicked="OnAudioPlayClicked" Style="{StaticResource TabButton}"/>
+                                    <Button x:Name="AudioPauseButton" Grid.Column="1" Text="Pause" Clicked="OnAudioPauseClicked" Style="{StaticResource TabButton}"/>
+                                    <Button Grid.Column="2" Text="Stop" Clicked="OnAudioStopClicked" Style="{StaticResource TabButton}"/>
+                                    <Button x:Name="AudioLoopButton" Grid.Column="3" Text="Loop" Clicked="OnAudioLoopClicked" Style="{StaticResource TabButton}"/>
                                 </Grid>
                                 <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
                                     <Label Text="Volume" TextColor="#444444" FontSize="11" VerticalTextAlignment="Center"/>
@@ -217,6 +220,9 @@
                             <VerticalStackLayout Spacing="6">
                                 <Label Text="3D model preview" TextColor="#202020" FontAttributes="Bold"/>
                                 <Label x:Name="ModelPreviewInfo" Text="Select a Mesh asset to open its wireframe viewer." TextColor="#444444" FontSize="12"/>
+                                <GraphicsView x:Name="InlineMeshView" HeightRequest="180" IsVisible="False" BackgroundColor="#A7A5A6"
+                                              AutomationProperties.Name="Inline mesh wireframe preview"
+                                              SemanticProperties.Hint="Drag to rotate and pinch to zoom the mesh."/>
                                 <Button x:Name="OpenMeshPreviewButton" Text="Open wireframe preview" Clicked="OnMeshPreviewClicked" IsVisible="False" Style="{StaticResource TabButton}"/>
                                 <Button x:Name="OpenSceneObjectPreviewButton" Text="Preview selected scene object" Clicked="OnSceneObjectPreviewClicked" IsVisible="False" Style="{StaticResource TabButton}"/>
                             </VerticalStackLayout>
@@ -240,11 +246,12 @@
                     <Label x:Name="DumpText" Text="Select an asset to view its dump." TextColor="#202020" FontFamily="monospace" FontSize="11"/>
                 </ScrollView>
             </Grid>
-        </Grid></Grid>        <Grid Grid.Row="3" RowDefinitions="Auto,3" ColumnDefinitions="*,Auto,Auto" Padding="5,2,5,0" ColumnSpacing="6" BackgroundColor="#F0F0F0">
+        </Grid></Grid>        <Grid Grid.Row="3" RowDefinitions="Auto,Auto,3" ColumnDefinitions="*,Auto,Auto" Padding="5,2,5,0" ColumnSpacing="6" BackgroundColor="#F0F0F0">
             <Label x:Name="StatusLabel" Grid.Row="0" Text="Ready to go" TextColor="#444444" FontSize="12" VerticalTextAlignment="Center"/>
+            <Label x:Name="LoadInfoLabel" Grid.Row="1" Text="" TextColor="#666666" FontSize="9" IsVisible="False" LineBreakMode="TailTruncation" VerticalTextAlignment="Center"/>
             <Button x:Name="CancelLoadButton" Grid.Row="0" Grid.Column="1" Text="Cancel load" IsVisible="False" Clicked="OnCancelLoadClicked" Padding="8,3" HeightRequest="26" MinimumHeightRequest="0" MinimumWidthRequest="0" FontSize="10" BackgroundColor="#7B3438" TextColor="White"/>
             <ActivityIndicator x:Name="BusyIndicator" Grid.Row="0" Grid.Column="2" IsRunning="False" IsVisible="False" HeightRequest="20"/>
-            <ProgressBar x:Name="LoadProgressBar" Grid.Row="1" Grid.ColumnSpan="3" Progress="0" IsVisible="False" ProgressColor="#2D7D32" BackgroundColor="#D0D0D0" HeightRequest="3"/>
+            <ProgressBar x:Name="LoadProgressBar" Grid.Row="2" Grid.ColumnSpan="3" Progress="0" IsVisible="False" ProgressColor="#2D7D32" BackgroundColor="#D0D0D0" HeightRequest="3"/>
         </Grid>
         <Grid x:Name="MenuOverlay" Grid.RowSpan="4" IsVisible="False" ZIndex="200">
             <BoxView BackgroundColor="#01000000">

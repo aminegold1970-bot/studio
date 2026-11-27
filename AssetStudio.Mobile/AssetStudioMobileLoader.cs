@@ -135,7 +135,7 @@ public sealed class AssetStudioMobileLoader : IDisposable
                 await MainThread.InvokeOnMainThreadAsync(() =>
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    host(snapshot.Assets, snapshot.Hierarchy, snapshot.Classes);
+                    host(snapshot.Assets, snapshot.Hierarchy, snapshot.Classes, snapshot.Metadata);
                 });
             }
             catch (OperationCanceledException)
@@ -143,8 +143,10 @@ public sealed class AssetStudioMobileLoader : IDisposable
                 await Task.Run(_manager.Clear);
                 throw;
             }
-            progress?.Report(new MainPage.AssetLoadProgress(
-                100, $"Loaded {snapshot.Assets.Count:N0} assets, {snapshot.Hierarchy.Count:N0} scene entries, and {snapshot.Classes.Count:N0} classes"));
+            var loadedMessage = $"Finished loading {snapshot.Metadata.FileCount} files with {snapshot.Metadata.ExportableCount} exportable assets";
+            if (snapshot.Metadata.FailedReadCount > 0)
+                loadedMessage += $" and {snapshot.Metadata.FailedReadCount} assets failed to read";
+            progress?.Report(new MainPage.AssetLoadProgress(100, loadedMessage));
         }
         finally
         {
@@ -153,7 +155,7 @@ public sealed class AssetStudioMobileLoader : IDisposable
     }
 
     public Action<IEnumerable<MainPage.AssetRow>, IEnumerable<MainPage.HierarchyRow>,
-        IEnumerable<MainPage.ClassRow>>? MainPageHost { get; set; }
+        IEnumerable<MainPage.ClassRow>, MainPage.LoadMetadata>? MainPageHost { get; set; }
 
     private static BrowseSnapshot BuildBrowseData(
         AssetsManager manager,
@@ -169,6 +171,7 @@ public sealed class AssetStudioMobileLoader : IDisposable
         var assetRows = new List<MainPage.AssetRow>();
         var objectIndex = 0;
         var processedAssets = 0;
+        var exportableCount = 0;
 
         foreach (var file in manager.assetsFileList)
         {
@@ -176,6 +179,8 @@ public sealed class AssetStudioMobileLoader : IDisposable
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 containerByObject.TryGetValue(asset, out var container);
+                var exportable = IsExportable(asset);
+                if (exportable) exportableCount++;
                 var row = MainPage.CreateAssetRow(
                     asset,
                     ReadAssetName(asset, objectIndex),
@@ -185,7 +190,7 @@ public sealed class AssetStudioMobileLoader : IDisposable
                     GetReportedSize(asset),
                     Convert.ToInt32(asset.type),
                     file.fullName,
-                    IsExportable(asset));
+                    exportable);
                 rowsByObject.Add(asset, row);
                 assetRows.Add(row);
                 objectIndex++;
@@ -197,7 +202,25 @@ public sealed class AssetStudioMobileLoader : IDisposable
             ReportBrowseProgress(reportProgress, 94, 95, completed, total, "Building scene hierarchy"));
         var classRows = BuildClassRows(manager, cancellationToken, (completed, total) =>
             ReportBrowseProgress(reportProgress, 95, 96, completed, total, "Building class browser"));
-        return new BrowseSnapshot(assetRows, hierarchyRows, classRows);
+
+        // Desktop title/load status metadata comes from the first serialized
+        // file, PlayerSettings.productName, and the parsed/exportable counts.
+        var firstFile = manager.assetsFileList[0];
+        var productName = manager.assetsFileList
+            .SelectMany(file => file.Objects)
+            .OfType<PlayerSettings>()
+            .Select(settings => settings.productName)
+            .FirstOrDefault(name => !string.IsNullOrWhiteSpace(name)) ?? string.Empty;
+        var failedReadCount = manager.assetsFileList.Sum(file =>
+            Math.Max(0, file.m_Objects.Count - file.Objects.Count));
+        var metadata = new MainPage.LoadMetadata(
+            productName,
+            firstFile.unityVersion,
+            firstFile.m_TargetPlatform.ToString(),
+            manager.assetsFileList.Count,
+            exportableCount,
+            failedReadCount);
+        return new BrowseSnapshot(assetRows, hierarchyRows, classRows, metadata);
     }
 
     private static Dictionary<AssetStudio.Object, string> BuildContainerMap(
@@ -468,7 +491,8 @@ public sealed class AssetStudioMobileLoader : IDisposable
     private sealed record BrowseSnapshot(
         List<MainPage.AssetRow> Assets,
         List<MainPage.HierarchyRow> Hierarchy,
-        List<MainPage.ClassRow> Classes);
+        List<MainPage.ClassRow> Classes,
+        MainPage.LoadMetadata Metadata);
 
     public void Dispose()
     {
